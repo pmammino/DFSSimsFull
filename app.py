@@ -19,13 +19,14 @@ candidate lineup.
 Launch:
     streamlit run app.py
 """
-import json, os, tempfile, time
+import csv, io, json, os, tempfile, time
+from collections import Counter
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 from stage_d import (load_sims, build_pool, lineups_to_df, score_matrix,
-                     run_contest, COLS)
+                     run_contest, norm as normname, COLS, HITC, SLOT)
 from mlb_lineup_builder import Pool, Builder
 from field_simulator import (normalize_to_slots, adjust_ownership,
                              beta_for_size, tilt_structures)
@@ -78,6 +79,67 @@ def build_many(builder, target, label, hard_cap_mult=60):
                 bar.progress(len(out) / target, text=f"{label}: {len(out)} / {target}")
     bar.progress(1.0, text=f"{label}: {len(out)} / {target}")
     return out, attempts
+
+
+def parse_dk_template(text):
+    """Map norm(player name) -> DraftKings player ID from a DKSalaries CSV.
+    The player table header is the row whose column 11 == 'Position', with
+    Name at col 13 and ID at col 14 (DK's standard export/upload template)."""
+    rows = list(csv.reader(io.StringIO(text)))
+    hdr = next((i for i, r in enumerate(rows)
+                if len(r) >= 20 and r[11] == "Position"), None)
+    if hdr is None:
+        return None
+    dkid = {}
+    for r in rows[hdr + 1:]:
+        if len(r) >= 20 and r[14].strip():
+            dkid[normname(r[13])] = r[14].strip()
+    return dkid
+
+
+def build_dk_upload(res_df, dkid, n_select, sort_by, player_cap=1.0, team_cap=1.0):
+    """Greedily pick n_select lineups from the ranked candidate results under
+    exposure caps, map players to DK IDs, and emit a ready-to-upload CSV
+    (header P,P,C,1B,2B,3B,SS,OF,OF,OF + one ID row per lineup)."""
+    keymap = {"Win%": ["Wins", "Top10", "Top100"],
+              "Top10 Rate": ["Top10", "Top100", "Wins"],
+              "Top100 Rate": ["Top100", "Top10", "Wins"]}[sort_by]
+    rdf = res_df.sort_values(keymap, ascending=False).reset_index(drop=True)
+    N = int(n_select)
+    pcap = max(1, int(round(player_cap * N)))
+    tcap = max(1, int(round(team_cap * N)))
+
+    def names_of(row):
+        return [str(row[c]).rsplit(" (", 1)[0] for c in COLS]
+
+    def prim(row):
+        c = Counter(str(row[x]).rsplit(" (", 1)[1][:-1]
+                    for x in HITC if " (" in str(row[x]))
+        return c.most_common(1)[0][0]
+
+    expo, teamc, chosen, skipped = Counter(), Counter(), [], 0
+    for _, row in rdf.iterrows():
+        nms = names_of(row)
+        if any(normname(n) not in dkid for n in nms):
+            skipped += 1
+            continue
+        if all(expo[n] < pcap for n in nms) and teamc[prim(row)] < tcap:
+            chosen.append(row)
+            for n in nms:
+                expo[n] += 1
+            teamc[prim(row)] += 1
+        if len(chosen) == N:
+            break
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(SLOT)
+    for row in chosen:
+        w.writerow([dkid[normname(n)] for n in names_of(row)])
+    info = {"chosen": len(chosen), "requested": N, "skipped_unmapped": skipped,
+            "max_player": max(expo.values()) if expo else 0,
+            "max_team": max(teamc.values()) if teamc else 0}
+    return out.getvalue(), info
 
 
 # --------------------------------------------------------------------------- #
@@ -148,9 +210,8 @@ if upload is not None:
             st.error("CSV is missing required column(s): " + ", ".join(missing))
         else:
             # how many of the uploaded rows actually overlap the sim universe?
-            from stage_d import norm as _norm
             simset = set(score)
-            covered = dk_df["FullName"].map(lambda n: _norm(n) in simset).sum()
+            covered = dk_df["FullName"].map(lambda n: normname(n) in simset).sum()
             csv_ok = covered > 0
             cc1, cc2 = st.columns(2)
             cc1.metric("Rows in CSV", len(dk_df))
@@ -259,7 +320,15 @@ if submitted:
         nh = pool[pool.Pos != "P"].Name.nunique()
         npi = pool[pool.Pos == "P"].Name.nunique()
         nt = pool.Team.nunique()
-        st.write(f"Pool: **{nh} hitters + {npi} starters** across **{nt} teams**.")
+        st.write(f"Pool: **{nh} hitters + {npi} starters** across **{nt} teams** "
+                 "— drawn only from your uploaded ownership (players with sims). "
+                 "Both the field and the candidate lineups use only these players.")
+        simnames = set(score_k)
+        dropped = len(dk_df) - int(dk_df["FullName"].map(
+            lambda n: normname(n) in simnames).sum())
+        if dropped:
+            st.caption(f"{dropped} player(s) in your CSV had no sim and were "
+                       "excluded (they can't be scored).")
         if npi < 2 or nh < 8:
             status.update(label="Pool too small to build lineups", state="error")
             st.error("Need at least 2 starting pitchers and 8 hitters in the "
@@ -313,9 +382,28 @@ if submitted:
     res = res.sort_values(["Wins", "Top10", "Top100", "AvgPlace"],
                           ascending=[False, False, False, True]).reset_index(drop=True)
 
-    st.success(f"Simulated {len(cands):,} candidate lineups in a "
-               f"{len(field):,}-entry field over {K:,} runs "
-               f"(chalk β = {beta:.2f}).")
+    # persist so the DK-upload controls below can change without re-simulating
+    st.session_state["sim"] = {
+        "res": res, "cands": cands, "field_df": lineups_to_df(field),
+        "K": K, "contest_size": contest_size, "field_n": len(field), "beta": beta,
+        "best_lineup": cands[res.loc[0, "Candidate"] - 1],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Results + DK upload  (rendered from session_state so widget tweaks below
+# don't trigger a re-simulation)
+# --------------------------------------------------------------------------- #
+sim = st.session_state.get("sim")
+if sim is None:
+    st.info("Upload your ownership CSV and make all three selections above, "
+            "then press **Run simulation**.")
+else:
+    res = sim["res"]
+    K = sim["K"]
+    st.success(f"Simulated {len(sim['cands']):,} candidate lineups in a "
+               f"{sim['field_n']:,}-entry field over {K:,} runs "
+               f"(chalk β = {sim['beta']:.2f}).")
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Best Win%", f"{res['Win%'].max():.2f}%")
@@ -325,29 +413,96 @@ if submitted:
 
     st.subheader("Simulated outcomes — candidate lineups")
     st.caption("Sorted best-first by Wins → Top10 → Top100 → AvgPlace.")
-    st.dataframe(res, use_container_width=True, height=480)
+    st.dataframe(res, use_container_width=True, height=420)
 
     d1, d2, d3 = st.columns(3)
     d1.download_button("Download candidate results (CSV)",
                        res.to_csv(index=False).encode(),
-                       file_name=f"candidate_results_{contest_size}.csv",
+                       file_name=f"candidate_results_{sim['contest_size']}.csv",
                        mime="text/csv", use_container_width=True)
     d2.download_button("Download candidate lineups (CSV)",
-                       lineups_to_df(cands).to_csv(index=False).encode(),
-                       file_name=f"candidates_{len(cands)}.csv",
+                       lineups_to_df(sim["cands"]).to_csv(index=False).encode(),
+                       file_name=f"candidates_{len(sim['cands'])}.csv",
                        mime="text/csv", use_container_width=True)
     d3.download_button("Download field (CSV)",
-                       lineups_to_df(field).to_csv(index=False).encode(),
-                       file_name=f"field_{len(field)}.csv",
+                       sim["field_df"].to_csv(index=False).encode(),
+                       file_name=f"field_{sim['field_n']}.csv",
                        mime="text/csv", use_container_width=True)
 
     with st.expander("Top candidate lineup detail"):
-        best = cands[res.loc[0, "Candidate"] - 1]
+        best = sim["best_lineup"]
         rows = [{"Slot": COLS[i], "Player": pl.Name, "Team": pl.Team,
-                 "Pos": pl.Pos, "Salary": pl.Salary} for i, pl in enumerate(best["players"])]
+                 "Pos": pl.Pos, "Salary": pl.Salary}
+                for i, pl in enumerate(best["players"])]
         st.table(pd.DataFrame(rows))
         st.caption(f"Total salary ${best['salary']:,} · stack "
                    f"{'-'.join(map(str, sorted(best['teams'].values(), reverse=True)))}")
-else:
-    st.info("Upload your ownership CSV and make all three selections above, "
-            "then press **Run simulation**.")
+
+    # ----------------------------------------------------------------------- #
+    # Step 3 — filled DraftKings upload file
+    # ----------------------------------------------------------------------- #
+    st.divider()
+    st.subheader("3 · Download a filled DraftKings upload file")
+    st.caption("Upload your DKSalaries template (the DraftKings contest CSV with "
+               "player IDs), choose how many lineups and how to rank them, and "
+               "download a file you can upload straight to DraftKings.")
+
+    tmpl = st.file_uploader("DKSalaries template CSV", type=["csv"],
+                            key="dk_template")
+    uc1, uc2 = st.columns(2)
+    n_up = uc1.number_input("Number of lineups to export", min_value=1,
+                            max_value=int(len(res)),
+                            value=min(20, int(len(res))), step=1)
+    sort_by = uc2.selectbox("Rank lineups by",
+                            ["Win%", "Top10 Rate", "Top100 Rate"], index=0,
+                            help="Win% favors tournament-winning ceiling; the "
+                                 "Top10/Top100 rates favor consistent cashing "
+                                 "near the top.")
+    with st.expander("Exposure caps (optional)"):
+        pc1, pc2 = st.columns(2)
+        player_cap = pc1.slider("Max player exposure", 0.05, 1.0, 1.0, 0.05,
+                                help="Cap the share of exported lineups any one "
+                                     "player can appear in (1.0 = no cap).")
+        team_cap = pc2.slider("Max primary-stack-team exposure", 0.05, 1.0, 1.0,
+                              0.05, help="Cap the share of exported lineups that "
+                                         "share the same primary stack team.")
+
+    if tmpl is None:
+        st.info("Upload the DKSalaries template above to enable the download.")
+    else:
+        dkid = parse_dk_template(tmpl.getvalue().decode("utf-8", "replace"))
+        if not dkid:
+            st.error("Couldn't find the player table in that template — expected "
+                     "a row whose 12th column is 'Position' with Name/ID columns.")
+        else:
+            cand_players = {pl.Name for lu in sim["cands"] for pl in lu["players"]}
+            mapped = sum(1 for nm in cand_players if normname(nm) in dkid)
+            if mapped < len(cand_players):
+                st.caption(f"{mapped} of {len(cand_players)} candidate-pool players "
+                           f"were found in this template ({len(dkid)} players).")
+            csv_text, info = build_dk_upload(res, dkid, n_up, sort_by,
+                                             player_cap, team_cap)
+            if info["chosen"] == 0:
+                st.error(
+                    "No exportable lineups. Your candidate lineups include players "
+                    "that aren't in this template — the ownership CSV and the "
+                    "DKSalaries template must describe the **same contest** (same "
+                    f"games). Only {mapped}/{len(cand_players)} candidate players "
+                    "matched. Re-run with an ownership CSV limited to this "
+                    "contest's players, or use a template for the full slate.")
+            else:
+                msg = (f"Selected **{info['chosen']} of {n_up}** lineups by "
+                       f"**{sort_by}**. Max single-player exposure "
+                       f"{info['max_player']}/{info['chosen']}, max stack-team "
+                       f"{info['max_team']}/{info['chosen']}.")
+                if info["chosen"] < n_up:
+                    msg += (" Fewer than requested — loosen the exposure caps or "
+                            "develop more candidate lineups.")
+                if info["skipped_unmapped"]:
+                    msg += (f" ({info['skipped_unmapped']} candidate lineups "
+                            "skipped: a player wasn't in the template.)")
+                st.success(msg)
+                st.download_button(
+                    "⬇ Download DraftKings upload CSV", csv_text.encode(),
+                    file_name=f"DK_upload_{info['chosen']}.csv",
+                    mime="text/csv", type="primary", use_container_width=True)

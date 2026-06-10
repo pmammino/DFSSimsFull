@@ -36,6 +36,29 @@ Then open the URL it prints (default http://localhost:8501).
 
 Nothing runs until all four are set and you press **Run simulation**.
 
+> **The ownership CSV defines the entire player universe.** Both the field and
+> the candidate lineups are built only from players in your uploaded CSV (that
+> also have sims). Nothing outside your ownership file can appear in either.
+
+## Download a filled DraftKings upload file (step 3)
+
+After a run, you can export a ready-to-upload DK file:
+
+1. Upload your **DKSalaries template** (the DraftKings contest CSV that contains
+   `Position / Name + ID / Name / ID / Salary` columns).
+2. Choose **how many lineups** to export and how to **rank** them —
+   **Win%**, **Top10 Rate**, or **Top100 Rate**.
+3. Optionally set **exposure caps** (max share of exported lineups any one
+   player, or any one primary-stack team, may appear in).
+4. Download `DK_upload_<N>.csv` — header `P,P,C,1B,2B,3B,SS,OF,OF,OF` followed by
+   one row of DraftKings player IDs per lineup.
+
+Tweaking the count / sort / caps re-selects instantly without re-simulating.
+
+> The ownership CSV and the DKSalaries template must describe the **same
+> contest** (same games). A lineup whose players aren't all in the template is
+> skipped; the app reports how many candidate players matched.
+
 ## What it does
 
 1. Joins your CSV with the sim universe → a scorable player pool (multi-position
