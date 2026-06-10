@@ -22,12 +22,19 @@ Then open the URL it prints (default http://localhost:8501).
 
 ## What you provide (the app forces every choice)
 
-1. **Ownership CSV** — a DraftKings salary/ownership export with columns:
-   `FullName, Team, Position, Salary, Ownership`
-   (`Ownership` = projected draft %, 0–100). Only players that match the sim
-   universe are used; the app shows how many matched. A synthetic example you
-   can load to try it out is `sample_ownership.csv` (fabricated salaries/
-   ownership for the current slate — **not** real DK data).
+1. **Slate file** — either of:
+   - a **DraftKings salaries export** (`DKSalaries.csv`, the one with the player
+     table). It already carries salary, position, team **and player IDs**, so the
+     *same* file powers both the simulation and the upload export — no separate
+     template needed. Because it has no ownership, the app then asks for a small
+     ownership CSV (`FullName, Ownership`) to merge in; or
+   - a **clean CSV** with columns `FullName, Team, Position, Salary, Ownership`
+     (add an optional `ID` column to enable the DK upload without a template).
+
+   Only players that match the sim universe are used; the app shows how many
+   matched and how many DK IDs are available. `sample_ownership.csv` is a
+   synthetic clean-CSV example (fabricated salaries/ownership — **not** real DK
+   data).
 2. **Contest size** — number of entries in the simulated field.
 3. **Number of sim runs** — how many of the available correlated sims to score
    the contest over (capped at the number built, currently 10,000). More runs =
@@ -44,8 +51,10 @@ Nothing runs until all four are set and you press **Run simulation**.
 
 After a run, you can export a ready-to-upload DK file:
 
-1. Upload your **DKSalaries template** (the DraftKings contest CSV that contains
-   `Position / Name + ID / Name / ID / Salary` columns).
+1. **Player IDs come from the slate file you already uploaded** — if it was a
+   DraftKings export (or a clean CSV with an `ID` column), no further upload is
+   needed. Only if your slate file had no IDs does the app ask for a DKSalaries
+   template (once).
 2. Choose **how many lineups** to export and how to **rank** them —
    **Win%**, **Top10 Rate**, or **Top100 Rate**.
 3. Optionally set **exposure caps** (max share of exported lineups any one
@@ -55,9 +64,9 @@ After a run, you can export a ready-to-upload DK file:
 
 Tweaking the count / sort / caps re-selects instantly without re-simulating.
 
-> The ownership CSV and the DKSalaries template must describe the **same
-> contest** (same games). A lineup whose players aren't all in the template is
-> skipped; the app reports how many candidate players matched.
+> A lineup is exportable only if every one of its players has a DK ID. The app
+> reports how many candidate players had IDs, so if your ownership and your DK
+> IDs cover different players you'll see it immediately.
 
 ## What it does
 

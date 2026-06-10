@@ -19,7 +19,7 @@ candidate lineup.
 Launch:
     streamlit run app.py
 """
-import csv, io, json, os, tempfile, time
+import csv, io, json, os, re, tempfile, time
 from collections import Counter
 import numpy as np
 import pandas as pd
@@ -95,6 +95,49 @@ def parse_dk_template(text):
         if len(r) >= 20 and r[14].strip():
             dkid[normname(r[13])] = r[14].strip()
     return dkid
+
+
+def parse_dk_export(text):
+    """Parse a raw DKSalaries export into (slate_df, id_map) or None.
+    slate_df has FullName, Team, Position, Salary; id_map is name -> DK ID.
+    Lets the user upload ONE DraftKings slate file that drives both the
+    simulation pool and the upload export (no separate template needed)."""
+    rows = list(csv.reader(io.StringIO(text)))
+    hdr = next((i for i, r in enumerate(rows)
+                if len(r) >= 20 and r[11] == "Position"), None)
+    if hdr is None:
+        return None
+    recs, idmap = [], {}
+    for r in rows[hdr + 1:]:
+        if len(r) >= 20 and r[13].strip() and r[14].strip():
+            nm = r[13].strip()
+            try:
+                sal = int(float(r[16])) if r[16].strip() else 0
+            except ValueError:
+                sal = 0
+            recs.append({"FullName": nm, "Team": r[18].strip(),
+                         "Position": r[11].strip(), "Salary": sal})
+            idmap[normname(nm)] = r[14].strip()
+    if not recs:
+        return None
+    return pd.DataFrame(recs), idmap
+
+
+def ids_from_clean(df):
+    """Pull a name -> DK ID map from a clean CSV if it carries IDs, via either
+    an 'ID' column or a DK-style 'Name + ID' column ('Player Name (1234567)')."""
+    idmap = {}
+    if "ID" in df.columns:
+        for _, r in df.iterrows():
+            v = str(r["ID"]).strip()
+            if v and v.lower() != "nan":
+                idmap[normname(r["FullName"])] = v.split(".")[0]
+    elif "Name + ID" in df.columns:
+        for _, r in df.iterrows():
+            m = re.search(r"\((\d+)\)\s*$", str(r["Name + ID"]))
+            if m:
+                idmap[normname(r["FullName"])] = m.group(1)
+    return idmap
 
 
 def build_dk_upload(res_df, dkid, n_select, sort_by, player_cap=1.0, team_cap=1.0):
@@ -192,37 +235,78 @@ with st.expander("Which players are in the sim universe? (your CSV must cover th
 st.divider()
 
 # --------------------------------------------------------------------------- #
-# Step 1 — ownership CSV upload (outside the form so we can validate/preview)
+# Step 1 — slate upload (outside the form so we can validate/preview)
 # --------------------------------------------------------------------------- #
-st.subheader("1 · Upload your DraftKings salary / ownership CSV")
-st.caption("Required columns: " + ", ".join(f"`{c}`" for c in REQ_COLS) +
-           ". Ownership is the projected draft % (0–100).")
-upload = st.file_uploader("Ownership CSV", type=["csv"], label_visibility="collapsed")
+st.subheader("1 · Upload your slate file")
+st.caption(
+    "Upload either a **DraftKings salaries export** (the `DKSalaries.csv` with "
+    "the player table — it already carries salary, position, team **and player "
+    "IDs**, so it powers both the simulation and the upload export), or a "
+    "**clean CSV** with columns " + ", ".join(f"`{c}`" for c in REQ_COLS) +
+    " (add an `ID` column to enable the DK upload without a separate template). "
+    "Ownership is the projected draft % (0–100).")
+upload = st.file_uploader("Slate file", type=["csv"], label_visibility="collapsed")
 
 dk_df = None
 csv_ok = False
+id_map = {}
 if upload is not None:
     try:
-        dk_df = pd.read_csv(upload, encoding="latin-1")
-        dk_df.columns = [c.strip() for c in dk_df.columns]
-        missing = [c for c in REQ_COLS if c not in dk_df.columns]
-        if missing:
-            st.error("CSV is missing required column(s): " + ", ".join(missing))
+        raw = upload.getvalue().decode("latin-1", "replace")
+        export = parse_dk_export(raw)
+        if export is not None:
+            # raw DKSalaries export: has salary/pos/team/ID but no ownership
+            base_df, id_map = export
+            st.info(f"Detected a DraftKings salaries export — "
+                    f"{len(base_df)} players, {len(id_map)} IDs captured for the "
+                    "upload export. Now add ownership for these players.")
+            own_up = st.file_uploader(
+                "Ownership CSV (columns: FullName, Ownership)", type=["csv"],
+                key="ownership_for_export")
+            if own_up is None:
+                st.warning("Upload an ownership CSV to continue.")
+            else:
+                own = pd.read_csv(own_up, encoding="latin-1")
+                own.columns = [c.strip() for c in own.columns]
+                if "FullName" not in own.columns or "Ownership" not in own.columns:
+                    st.error("Ownership CSV needs `FullName` and `Ownership` columns.")
+                else:
+                    omap = {normname(r.FullName): float(r.Ownership)
+                            for r in own.itertuples()
+                            if str(r.Ownership).strip() not in ("", "nan")}
+                    base_df["Ownership"] = base_df["FullName"].map(
+                        lambda n: omap.get(normname(n)))
+                    dk_df = base_df.dropna(subset=["Ownership"]).copy()
         else:
-            # how many of the uploaded rows actually overlap the sim universe?
+            # clean CSV
+            dk_df = pd.read_csv(io.StringIO(raw))
+            dk_df.columns = [c.strip() for c in dk_df.columns]
+            missing = [c for c in REQ_COLS if c not in dk_df.columns]
+            if missing:
+                st.error("CSV is missing required column(s): " + ", ".join(missing))
+                dk_df = None
+            else:
+                id_map = ids_from_clean(dk_df)
+
+        if dk_df is not None:
             simset = set(score)
-            covered = dk_df["FullName"].map(lambda n: normname(n) in simset).sum()
+            covered = int(dk_df["FullName"].map(lambda n: normname(n) in simset).sum())
             csv_ok = covered > 0
-            cc1, cc2 = st.columns(2)
-            cc1.metric("Rows in CSV", len(dk_df))
-            cc2.metric("Rows matched to sims", int(covered))
+            cc1, cc2, cc3 = st.columns(3)
+            cc1.metric("Players in slate", len(dk_df))
+            cc2.metric("Matched to sims", covered)
+            cc3.metric("DK IDs available", len(id_map) if id_map else 0)
             if covered == 0:
-                st.error("None of the players in this CSV matched the sim "
+                st.error("None of the players in this slate matched the sim "
                          "universe — check names/teams. Nothing to simulate.")
             else:
                 st.dataframe(dk_df.head(15), use_container_width=True)
+                if not id_map:
+                    st.caption("No player IDs in this file — you'll be able to "
+                               "supply a DKSalaries template at export time, or "
+                               "add an `ID` column here.")
     except Exception as e:
-        st.error(f"Could not read CSV: {e}")
+        st.error(f"Could not read slate file: {e}")
 
 # --------------------------------------------------------------------------- #
 # Step 2 — forced decisions, gated behind a Run button
@@ -283,7 +367,7 @@ if submitted:
     # ---- hard-gate on every decision ----
     errs = []
     if not csv_ok:
-        errs.append("Upload a valid ownership CSV that matches the sim universe (step 1).")
+        errs.append("Upload a valid slate file that matches the sim universe (step 1).")
     if contest_size is None:
         errs.append("Choose a contest size.")
     if sim_runs is None:
@@ -387,6 +471,7 @@ if submitted:
         "res": res, "cands": cands, "field_df": lineups_to_df(field),
         "K": K, "contest_size": contest_size, "field_n": len(field), "beta": beta,
         "best_lineup": cands[res.loc[0, "Candidate"] - 1],
+        "id_map": id_map,  # IDs captured from the uploaded slate file (may be empty)
     }
 
 
@@ -396,7 +481,7 @@ if submitted:
 # --------------------------------------------------------------------------- #
 sim = st.session_state.get("sim")
 if sim is None:
-    st.info("Upload your ownership CSV and make all three selections above, "
+    st.info("Upload your slate file and make all three selections above, "
             "then press **Run simulation**.")
 else:
     res = sim["res"]
@@ -443,12 +528,29 @@ else:
     # ----------------------------------------------------------------------- #
     st.divider()
     st.subheader("3 · Download a filled DraftKings upload file")
-    st.caption("Upload your DKSalaries template (the DraftKings contest CSV with "
-               "player IDs), choose how many lineups and how to rank them, and "
-               "download a file you can upload straight to DraftKings.")
 
-    tmpl = st.file_uploader("DKSalaries template CSV", type=["csv"],
-                            key="dk_template")
+    # IDs come from the slate file you already uploaded; a template is only
+    # needed as a fallback if that file carried no player IDs.
+    dkid = dict(sim.get("id_map") or {})
+    if dkid:
+        st.caption(f"Using the {len(dkid)} player IDs from the slate file you "
+                   "uploaded — no extra template needed. Choose how many lineups "
+                   "and how to rank them, then download.")
+    else:
+        st.caption("Your slate file had no player IDs, so upload a DKSalaries "
+                   "template once to supply them (or re-upload a slate file that "
+                   "includes IDs).")
+        tmpl = st.file_uploader("DKSalaries template CSV", type=["csv"],
+                                key="dk_template")
+        if tmpl is not None:
+            parsed = parse_dk_template(tmpl.getvalue().decode("utf-8", "replace"))
+            if not parsed:
+                st.error("Couldn't find the player table in that template — "
+                         "expected a row whose 12th column is 'Position' with "
+                         "Name/ID columns.")
+            else:
+                dkid = parsed
+
     uc1, uc2 = st.columns(2)
     n_up = uc1.number_input("Number of lineups to export", min_value=1,
                             max_value=int(len(res)),
@@ -467,42 +569,36 @@ else:
                               0.05, help="Cap the share of exported lineups that "
                                          "share the same primary stack team.")
 
-    if tmpl is None:
-        st.info("Upload the DKSalaries template above to enable the download.")
+    if not dkid:
+        st.info("Player IDs are needed to build the upload file (see above).")
     else:
-        dkid = parse_dk_template(tmpl.getvalue().decode("utf-8", "replace"))
-        if not dkid:
-            st.error("Couldn't find the player table in that template — expected "
-                     "a row whose 12th column is 'Position' with Name/ID columns.")
+        cand_players = {pl.Name for lu in sim["cands"] for pl in lu["players"]}
+        mapped = sum(1 for nm in cand_players if normname(nm) in dkid)
+        if mapped < len(cand_players):
+            st.caption(f"{mapped} of {len(cand_players)} candidate-pool players "
+                       f"have a DK ID ({len(dkid)} IDs available).")
+        csv_text, info = build_dk_upload(res, dkid, n_up, sort_by,
+                                         player_cap, team_cap)
+        if info["chosen"] == 0:
+            st.error(
+                "No exportable lineups — none of the candidate lineups had a DK "
+                f"ID for every player (only {mapped}/{len(cand_players)} candidate "
+                "players matched), or the exposure caps are too strict. Make sure "
+                "the slate file's player IDs cover the same players as your "
+                "ownership.")
         else:
-            cand_players = {pl.Name for lu in sim["cands"] for pl in lu["players"]}
-            mapped = sum(1 for nm in cand_players if normname(nm) in dkid)
-            if mapped < len(cand_players):
-                st.caption(f"{mapped} of {len(cand_players)} candidate-pool players "
-                           f"were found in this template ({len(dkid)} players).")
-            csv_text, info = build_dk_upload(res, dkid, n_up, sort_by,
-                                             player_cap, team_cap)
-            if info["chosen"] == 0:
-                st.error(
-                    "No exportable lineups. Your candidate lineups include players "
-                    "that aren't in this template — the ownership CSV and the "
-                    "DKSalaries template must describe the **same contest** (same "
-                    f"games). Only {mapped}/{len(cand_players)} candidate players "
-                    "matched. Re-run with an ownership CSV limited to this "
-                    "contest's players, or use a template for the full slate.")
-            else:
-                msg = (f"Selected **{info['chosen']} of {n_up}** lineups by "
-                       f"**{sort_by}**. Max single-player exposure "
-                       f"{info['max_player']}/{info['chosen']}, max stack-team "
-                       f"{info['max_team']}/{info['chosen']}.")
-                if info["chosen"] < n_up:
-                    msg += (" Fewer than requested — loosen the exposure caps or "
-                            "develop more candidate lineups.")
-                if info["skipped_unmapped"]:
-                    msg += (f" ({info['skipped_unmapped']} candidate lineups "
-                            "skipped: a player wasn't in the template.)")
-                st.success(msg)
-                st.download_button(
-                    "⬇ Download DraftKings upload CSV", csv_text.encode(),
-                    file_name=f"DK_upload_{info['chosen']}.csv",
-                    mime="text/csv", type="primary", use_container_width=True)
+            msg = (f"Selected **{info['chosen']} of {n_up}** lineups by "
+                   f"**{sort_by}**. Max single-player exposure "
+                   f"{info['max_player']}/{info['chosen']}, max stack-team "
+                   f"{info['max_team']}/{info['chosen']}.")
+            if info["chosen"] < n_up:
+                msg += (" Fewer than requested — loosen the exposure caps or "
+                        "develop more candidate lineups.")
+            if info["skipped_unmapped"]:
+                msg += (f" ({info['skipped_unmapped']} candidate lineups skipped: "
+                        "a player had no DK ID.)")
+            st.success(msg)
+            st.download_button(
+                "⬇ Download DraftKings upload CSV", csv_text.encode(),
+                file_name=f"DK_upload_{info['chosen']}.csv",
+                mime="text/csv", type="primary", use_container_width=True)
