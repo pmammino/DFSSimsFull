@@ -1,0 +1,675 @@
+{
+  "date": "2026-06-10",
+  "games": {
+    "75829": {
+      "away": "MIL",
+      "home": "ATH",
+      "datetime": "2026-06-10T21:05:00-04:00",
+      "pitchers": {
+        "away": {
+          "starter": "Brandon Sproat",
+          "opener": null,
+          "primary": null
+        },
+        "home": {
+          "starter": "Jack Perkins",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [],
+        "home": []
+      },
+      "lineup_source": {
+        "away": "none",
+        "home": "none"
+      },
+      "implied": {
+        "away": 5.1,
+        "home": 4.8,
+        "total": 9.9
+      }
+    },
+    "75824": {
+      "away": "PHI",
+      "home": "TOR",
+      "datetime": "2026-06-10T19:07:00-04:00",
+      "pitchers": {
+        "home": {
+          "starter": "Max Scherzer",
+          "opener": null,
+          "primary": null
+        },
+        "away": {
+          "starter": "Jesus Luzardo",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [],
+        "home": []
+      },
+      "lineup_source": {
+        "away": "none",
+        "home": "none"
+      },
+      "implied": {
+        "away": 4.6,
+        "home": 4.1,
+        "total": 8.7
+      }
+    },
+    "75820": {
+      "away": "SEA",
+      "home": "BAL",
+      "datetime": "2026-06-10T18:35:00-04:00",
+      "pitchers": {
+        "home": {
+          "starter": "Brandon Young",
+          "opener": null,
+          "primary": null
+        },
+        "away": {
+          "starter": "George Kirby",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [],
+        "home": []
+      },
+      "lineup_source": {
+        "away": "none",
+        "home": "none"
+      },
+      "implied": {
+        "away": 4.0,
+        "home": 4.4,
+        "total": 8.4
+      }
+    },
+    "75821": {
+      "away": "MIN",
+      "home": "DET",
+      "datetime": "2026-06-10T18:40:00-04:00",
+      "pitchers": {
+        "away": {
+          "starter": "Mike Paredes",
+          "opener": null,
+          "primary": null
+        },
+        "home": {
+          "starter": "Framber Valdez",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [],
+        "home": []
+      },
+      "lineup_source": {
+        "away": "none",
+        "home": "none"
+      },
+      "implied": {
+        "away": 3.9,
+        "home": 4.2,
+        "total": 8.1
+      }
+    },
+    "75817": {
+      "away": "BOS",
+      "home": "TB",
+      "datetime": "2026-06-10T13:10:00-04:00",
+      "pitchers": {
+        "away": {
+          "starter": "Jake Bennett",
+          "opener": null,
+          "primary": null
+        },
+        "home": {
+          "starter": "Drew Rasmussen",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [
+          {
+            "name": "Jarren Duran",
+            "slot": 1,
+            "pos": "LF",
+            "pid": "15692"
+          },
+          {
+            "name": "Ceddanne Rafaela",
+            "slot": 2,
+            "pos": "CF",
+            "pid": "16595"
+          },
+          {
+            "name": "Wilyer Abreu",
+            "slot": 3,
+            "pos": "RF",
+            "pid": "17794"
+          },
+          {
+            "name": "Willson Contreras",
+            "slot": 4,
+            "pos": "1B",
+            "pid": "14047"
+          },
+          {
+            "name": "Mickey Gasper",
+            "slot": 5,
+            "pos": "C",
+            "pid": "19755"
+          },
+          {
+            "name": "Masataka Yoshida",
+            "slot": 6,
+            "pos": "DH",
+            "pid": "18258"
+          },
+          {
+            "name": "Caleb Durbin",
+            "slot": 7,
+            "pos": "3B",
+            "pid": "19300"
+          },
+          {
+            "name": "Isiah Kiner-Falefa",
+            "slot": 8,
+            "pos": "SS",
+            "pid": "15245"
+          },
+          {
+            "name": "Andruw Monasterio",
+            "slot": 9,
+            "pos": "2B",
+            "pid": "15710"
+          }
+        ],
+        "home": [
+          {
+            "name": "Yandy Diaz",
+            "slot": 1,
+            "pos": "DH",
+            "pid": "14205"
+          },
+          {
+            "name": "Austin Slater",
+            "slot": 2,
+            "pos": "RF",
+            "pid": "13506"
+          },
+          {
+            "name": "Junior Caminero",
+            "slot": 3,
+            "pos": "3B",
+            "pid": "17704"
+          },
+          {
+            "name": "Ryan Vilade",
+            "slot": 4,
+            "pos": "LF",
+            "pid": "14811"
+          },
+          {
+            "name": "Jonathan Aranda",
+            "slot": 5,
+            "pos": "1B",
+            "pid": "17580"
+          },
+          {
+            "name": "Ben Williamson",
+            "slot": 6,
+            "pos": "2B",
+            "pid": "19028"
+          },
+          {
+            "name": "Nick Fortes",
+            "slot": 7,
+            "pos": "C",
+            "pid": "15534"
+          },
+          {
+            "name": "Cedric Mullins",
+            "slot": 8,
+            "pos": "CF",
+            "pid": "14740"
+          },
+          {
+            "name": "Taylor Walls",
+            "slot": 9,
+            "pos": "SS",
+            "pid": "14947"
+          }
+        ]
+      },
+      "lineup_source": {
+        "away": "confirmed",
+        "home": "confirmed"
+      },
+      "implied": {
+        "away": 4.3,
+        "home": 4.0,
+        "total": 8.3
+      }
+    },
+    "75826": {
+      "away": "ATL",
+      "home": "CHI-A",
+      "datetime": "2026-06-10T19:40:00-04:00",
+      "pitchers": {
+        "home": {
+          "starter": "Davis Martin",
+          "opener": null,
+          "primary": null
+        },
+        "away": {
+          "starter": "Chris Sale",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [],
+        "home": []
+      },
+      "lineup_source": {
+        "away": "none",
+        "home": "none"
+      },
+      "implied": {
+        "away": 4.7,
+        "home": 3.8,
+        "total": 8.5
+      }
+    },
+    "75816": {
+      "away": "NY-A",
+      "home": "CLE",
+      "datetime": "2026-06-10T13:10:00-04:00",
+      "pitchers": {
+        "home": {
+          "starter": "Parker Messick",
+          "opener": null,
+          "primary": null
+        },
+        "away": {
+          "starter": "Carlos Rodon",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [
+          {
+            "name": "Paul Goldschmidt",
+            "slot": 1,
+            "pos": "DH",
+            "pid": "11724"
+          },
+          {
+            "name": "Ben Rice",
+            "slot": 2,
+            "pos": "1B",
+            "pid": "18769"
+          },
+          {
+            "name": "Cody Bellinger",
+            "slot": 3,
+            "pos": "LF",
+            "pid": "13791"
+          },
+          {
+            "name": "Amed Rosario",
+            "slot": 4,
+            "pos": "3B",
+            "pid": "12598"
+          },
+          {
+            "name": "Trent Grisham",
+            "slot": 5,
+            "pos": "CF",
+            "pid": "13816"
+          },
+          {
+            "name": "Jose Caballero",
+            "slot": 6,
+            "pos": "RF",
+            "pid": "15202"
+          },
+          {
+            "name": "Jazz Chisholm",
+            "slot": 7,
+            "pos": "2B",
+            "pid": "14550"
+          },
+          {
+            "name": "Anthony Volpe",
+            "slot": 8,
+            "pos": "SS",
+            "pid": "16103"
+          },
+          {
+            "name": "Ali Sanchez",
+            "slot": 9,
+            "pos": "C",
+            "pid": "13993"
+          }
+        ],
+        "home": [
+          {
+            "name": "Angel Martinez",
+            "slot": 1,
+            "pos": "RF",
+            "pid": "16272"
+          },
+          {
+            "name": "Jose Ramirez",
+            "slot": 2,
+            "pos": "DH",
+            "pid": "12840"
+          },
+          {
+            "name": "Rhys Hoskins",
+            "slot": 3,
+            "pos": "1B",
+            "pid": "13782"
+          },
+          {
+            "name": "David Fry",
+            "slot": 4,
+            "pos": "LF",
+            "pid": "15991"
+          },
+          {
+            "name": "Travis Bazzana",
+            "slot": 5,
+            "pos": "2B",
+            "pid": "19498"
+          },
+          {
+            "name": "Stuart Fairchild",
+            "slot": 6,
+            "pos": "CF",
+            "pid": "14803"
+          },
+          {
+            "name": "Daniel Schneemann",
+            "slot": 7,
+            "pos": "3B",
+            "pid": "19284"
+          },
+          {
+            "name": "Austin Hedges",
+            "slot": 8,
+            "pos": "C",
+            "pid": "12148"
+          },
+          {
+            "name": "Brayan Rocchio",
+            "slot": 9,
+            "pos": "SS",
+            "pid": "15644"
+          }
+        ]
+      },
+      "lineup_source": {
+        "away": "confirmed",
+        "home": "confirmed"
+      },
+      "implied": {
+        "away": 4.5,
+        "home": 3.9,
+        "total": 8.4
+      }
+    },
+    "75823": {
+      "away": "AZ",
+      "home": "MIA",
+      "datetime": "2026-06-10T18:40:00-04:00",
+      "pitchers": {
+        "away": {
+          "starter": "Ryne Nelson",
+          "opener": null,
+          "primary": null
+        },
+        "home": {
+          "starter": "Ryan Gusto",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [],
+        "home": []
+      },
+      "lineup_source": {
+        "away": "none",
+        "home": "none"
+      },
+      "implied": {
+        "away": 4.4,
+        "home": 3.9,
+        "total": 8.3
+      }
+    },
+    "75828": {
+      "away": "CHI-N",
+      "home": "COL",
+      "datetime": "2026-06-10T20:40:00-04:00",
+      "pitchers": {
+        "away": {
+          "starter": "Shota Imanaga",
+          "opener": null,
+          "primary": null
+        },
+        "home": {
+          "starter": "Michael Lorenzen",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [],
+        "home": []
+      },
+      "lineup_source": {
+        "away": "none",
+        "home": "none"
+      },
+      "implied": {
+        "away": 5.6,
+        "home": 6.4,
+        "total": 12.0
+      }
+    },
+    "75827": {
+      "away": "TEX",
+      "home": "KC",
+      "datetime": "2026-06-10T19:40:00-04:00",
+      "pitchers": {
+        "home": {
+          "starter": "Seth Lugo",
+          "opener": null,
+          "primary": null
+        },
+        "away": {
+          "starter": "MacKenzie Gore",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [],
+        "home": []
+      },
+      "lineup_source": {
+        "away": "none",
+        "home": "none"
+      },
+      "implied": {
+        "away": 4.2,
+        "home": 4.0,
+        "total": 8.2
+      }
+    },
+    "75822": {
+      "away": "LA",
+      "home": "PIT",
+      "datetime": "2026-06-10T18:40:00-04:00",
+      "pitchers": {
+        "home": {
+          "starter": "Jared Jones",
+          "opener": null,
+          "primary": null
+        },
+        "away": {
+          "starter": "Shohei Ohtani",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [],
+        "home": []
+      },
+      "lineup_source": {
+        "away": "none",
+        "home": "none"
+      },
+      "implied": {
+        "away": 4.9,
+        "home": 3.7,
+        "total": 8.6
+      }
+    },
+    "75830": {
+      "away": "HOU",
+      "home": "ANA",
+      "datetime": "2026-06-10T21:38:00-04:00",
+      "pitchers": {
+        "home": {
+          "starter": "Reid Detmers",
+          "opener": null,
+          "primary": null
+        },
+        "away": {
+          "starter": "Peter Lambert",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [],
+        "home": []
+      },
+      "lineup_source": {
+        "away": "none",
+        "home": "none"
+      },
+      "implied": {
+        "away": 4.3,
+        "home": 4.1,
+        "total": 8.4
+      }
+    },
+    "75819": {
+      "away": "CIN",
+      "home": "SD",
+      "datetime": "2026-06-10T16:10:00-04:00",
+      "pitchers": {
+        "away": {
+          "starter": "Brady Singer",
+          "opener": null,
+          "primary": null
+        },
+        "home": {
+          "starter": "Michael King",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [],
+        "home": []
+      },
+      "lineup_source": {
+        "away": "none",
+        "home": "none"
+      },
+      "implied": {
+        "away": 3.8,
+        "home": 4.0,
+        "total": 7.8
+      }
+    },
+    "75818": {
+      "away": "WSH",
+      "home": "SF",
+      "datetime": "2026-06-10T15:45:00-04:00",
+      "pitchers": {
+        "home": {
+          "starter": "Robbie Ray",
+          "opener": null,
+          "primary": null
+        },
+        "away": {
+          "starter": "Foster Griffin",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [],
+        "home": []
+      },
+      "lineup_source": {
+        "away": "none",
+        "home": "none"
+      },
+      "implied": {
+        "away": 3.9,
+        "home": 4.0,
+        "total": 7.9
+      }
+    },
+    "75825": {
+      "away": "STL",
+      "home": "NY-N",
+      "datetime": "2026-06-10T19:10:00-04:00",
+      "pitchers": {
+        "home": {
+          "starter": "Austin Warren",
+          "opener": "Austin Warren",
+          "primary": "David Peterson"
+        },
+        "away": {
+          "starter": "Andre Pallante",
+          "opener": null,
+          "primary": null
+        }
+      },
+      "lineups": {
+        "away": [],
+        "home": []
+      },
+      "lineup_source": {
+        "away": "none",
+        "home": "none"
+      },
+      "implied": {
+        "away": 3.9,
+        "home": 4.3,
+        "total": 8.2
+      }
+    }
+  }
+}
