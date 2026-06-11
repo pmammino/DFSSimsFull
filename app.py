@@ -191,6 +191,26 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, player_cap=1.0, team_cap=1.
     return out.getvalue(), info
 
 
+def rows_to_upload_csv(rows_df, dkid):
+    """Emit a DK upload CSV for an explicit, already-ordered set of lineup rows
+    (used by the 'export my marked selections' path). Lineups whose players
+    aren't all mapped to a DK ID are skipped."""
+    def names_of(row):
+        return [str(row[c]).rsplit(" (", 1)[0] for c in COLS]
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(SLOT)
+    chosen = skipped = 0
+    for _, row in rows_df.iterrows():
+        nms = names_of(row)
+        if any(normname(n) not in dkid for n in nms):
+            skipped += 1
+            continue
+        w.writerow([dkid[normname(n)] for n in nms])
+        chosen += 1
+    return out.getvalue(), {"chosen": chosen, "skipped_unmapped": skipped}
+
+
 # --------------------------------------------------------------------------- #
 # Freshness: rebuild projections / sims before a run when they're stale
 # --------------------------------------------------------------------------- #
@@ -617,6 +637,19 @@ if submitted:
             field_mat, cand_mat, K, len(field))
         status.update(label=f"Done in {time.time()-t0:.1f}s", state="complete")
 
+    # ---- per-lineup attributes for filtering/search ----
+    own_map = {normname(rr.FullName): float(rr.Ownership) for rr in dk_df.itertuples()}
+    cand_players = [frozenset(pl.Name for pl in lu["players"]) for lu in cands]
+    prim_team, prim_size, own_sum = [], [], []
+    for lu in cands:
+        if lu["teams"]:
+            pt, ps_ = max(lu["teams"].items(), key=lambda kv: kv[1])
+        else:
+            pt, ps_ = "", 0
+        prim_team.append(pt); prim_size.append(int(ps_))
+        own_sum.append(round(sum(own_map.get(normname(pl.Name), 0.0)
+                                 for pl in lu["players"]), 1))
+
     # ---- results for the developed (candidate) lineups ----
     res = lineups_to_df(cands)
     res.insert(0, "Candidate", np.arange(1, len(cands) + 1))
@@ -629,16 +662,23 @@ if submitted:
     res["AvgPlace"] = np.round(avg, 1)
     res["BestPlace"] = dist["best"]
     res["WorstPlace"] = dist["worst"]
+    res["OwnSum"] = own_sum
+    res["PrimaryTeam"] = prim_team
+    res["PrimaryStack"] = prim_size
     res = res.sort_values(["Wins", "Top10", "Top100", "AvgPlace"],
                           ascending=[False, False, False, True]).reset_index(drop=True)
 
-    # persist so the DK-upload controls below can change without re-simulating
+    # persist so the filter/export controls below can change without re-simulating
     st.session_state["sim"] = {
         "res": res, "cands": cands, "field_df": lineups_to_df(field),
         "K": K, "contest_size": contest_size, "field_n": len(field), "beta": beta,
-        "best_lineup": cands[res.loc[0, "Candidate"] - 1], "dist": dist,
-        "id_map": id_map,  # IDs captured from the uploaded slate file (may be empty)
+        "dist": dist, "id_map": id_map,
+        "cand_to_players": {i + 1: cand_players[i] for i in range(len(cands))},
+        "pool_players": sorted({pl.Name for lu in cands for pl in lu["players"]}),
     }
+    # fresh run -> clear prior marks / inspection state
+    st.session_state["picked"] = set()
+    st.session_state.pop("show_dist_for", None)
 
 
 # --------------------------------------------------------------------------- #
@@ -662,100 +702,179 @@ else:
     m3.metric("Best Top100%", f"{res['Top100%'].max():.1f}%")
     m4.metric("Best AvgPlace", f"{res['AvgPlace'].min():,.0f}")
 
+    res = res.copy()
+    res["Rank"] = np.arange(1, len(res) + 1)
+
     st.subheader("Candidate lineups")
-    st.caption("Ranked best-first (Wins → Top10 → Top100 → AvgPlace). "
-               "**Select a row** to inspect its players and finishing-place "
-               "distribution.")
 
-    summary = pd.DataFrame({
-        "Rank": np.arange(1, len(res) + 1),
-        "Win%": res["Win%"], "Top10%": res["Top10%"], "Top100%": res["Top100%"],
-        "Avg place": res["AvgPlace"], "Best": res["BestPlace"],
-        "Worst": res["WorstPlace"], "Salary": res["Salary"], "Stack": res["Stack"],
-    })
-    event = st.dataframe(
-        summary, use_container_width=True, height=380, hide_index=True,
-        on_select="rerun", selection_mode="single-row",
-        column_config={
-            "Win%": st.column_config.NumberColumn(format="%.2f%%"),
-            "Top10%": st.column_config.NumberColumn(format="%.1f%%"),
-            "Top100%": st.column_config.NumberColumn(format="%.1f%%"),
-            "Avg place": st.column_config.NumberColumn(format="%.0f"),
-            "Salary": st.column_config.NumberColumn(format="$%d")})
+    # ---------------------- filter & search -------------------------------- #
+    with st.expander("🔎 Filter & search lineups", expanded=False):
+        f1, f2 = st.columns(2)
+        players_sel = f1.multiselect("Must include player(s)", sim["pool_players"])
+        match_mode = f1.radio("Player match", ["all", "any"], horizontal=True,
+                              help="'all' = lineup contains every selected player; "
+                                   "'any' = at least one.")
+        shapes_sel = f2.multiselect("Stack shape (build style)",
+                                    sorted(res["Stack"].unique()))
+        teams_sel = f2.multiselect("Primary stack team",
+                                   sorted(t for t in res["PrimaryTeam"].unique() if t))
+        g1, g2, g3 = st.columns(3)
+        psize_sel = g1.multiselect("Primary stack size",
+                                   sorted(res["PrimaryStack"].unique(), reverse=True))
 
-    d1, d2, d3 = st.columns(3)
-    d1.download_button("Download candidate results (CSV)",
-                       res.to_csv(index=False).encode(),
-                       file_name=f"candidate_results_{sim['contest_size']}.csv",
-                       mime="text/csv", use_container_width=True)
-    d2.download_button("Download candidate lineups (CSV)",
-                       lineups_to_df(sim["cands"]).to_csv(index=False).encode(),
-                       file_name=f"candidates_{len(sim['cands'])}.csv",
-                       mime="text/csv", use_container_width=True)
-    d3.download_button("Download field (CSV)",
-                       sim["field_df"].to_csv(index=False).encode(),
-                       file_name=f"field_{sim['field_n']}.csv",
-                       mime="text/csv", use_container_width=True)
+        def rng_slider(col, label, step, fmt):
+            lo, hi = float(res[col].min()), float(res[col].max())
+            if hi <= lo:
+                return (lo, hi)
+            return col_obj.slider(label, lo, hi, (lo, hi), step=step, format=fmt)
 
-    # ---- selected-lineup detail: players are the focus ----
-    try:
-        sel = list(event.selection["rows"])
-    except Exception:
-        sel = list(getattr(getattr(event, "selection", None), "rows", []) or [])
-    row_pos = sel[0] if sel else 0
-    r = res.loc[row_pos]
-    cand_idx = int(r["Candidate"]) - 1
-    lu = sim["cands"][cand_idx]
+        col_obj = g2
+        own_rng = rng_slider("OwnSum", "Combined ownership %", 0.5, "%.0f")
+        col_obj = g3
+        sal_rng = rng_slider("Salary", "Salary", 100.0, "$%d")
+        h1, h2, h3 = st.columns(3)
+        min_win = h1.number_input("Min Win%", 0.0, 100.0, 0.0, 0.1, format="%.2f")
+        min_t10 = h2.number_input("Min Top10%", 0.0, 100.0, 0.0, 0.5)
+        min_t100 = h3.number_input("Min Top100%", 0.0, 100.0, 0.0, 1.0)
 
-    st.markdown(f"#### Lineup #{row_pos + 1} &nbsp;·&nbsp; {r['Stack']} stack "
-                f"&nbsp;·&nbsp; ${int(r['Salary']):,} / $50,000")
-    pc, ic = st.columns([3, 2])
-    with pc:
-        players_df = pd.DataFrame([
-            {"Slot": SLOT[i], "Player": pl.Name, "Team": pl.Team,
-             "Pos": pl.Pos, "Salary": pl.Salary}
-            for i, pl in enumerate(lu["players"])])
-        st.dataframe(
-            players_df, use_container_width=True, hide_index=True, height=388,
-            column_config={
-                "Slot": st.column_config.TextColumn(width="small"),
-                "Team": st.column_config.TextColumn(width="small"),
-                "Pos": st.column_config.TextColumn(width="small"),
-                "Salary": st.column_config.NumberColumn(format="$%d")})
-    with ic:
-        st.metric("Win %", f"{r['Win%']:.2f}%")
-        mm1, mm2 = st.columns(2)
-        mm1.metric("Top-10 %", f"{r['Top10%']:.1f}%")
-        mm2.metric("Top-100 %", f"{r['Top100%']:.1f}%")
-        mm3, mm4, mm5 = st.columns(3)
-        mm3.metric("Best", f"{int(r['BestPlace']):,}")
-        mm4.metric("Avg", f"{r['AvgPlace']:,.0f}")
-        mm5.metric("Worst", f"{int(r['WorstPlace']):,}")
+    mask = pd.Series(True, index=res.index)
+    if players_sel:
+        want = set(players_sel)
+        c2p = sim["cand_to_players"]
+        mask &= res["Candidate"].map(
+            lambda c: (want.issubset(c2p[int(c)]) if match_mode == "all"
+                       else bool(want & c2p[int(c)])))
+    if shapes_sel:
+        mask &= res["Stack"].isin(shapes_sel)
+    if teams_sel:
+        mask &= res["PrimaryTeam"].isin(teams_sel)
+    if psize_sel:
+        mask &= res["PrimaryStack"].isin(psize_sel)
+    mask &= res["OwnSum"].between(*own_rng)
+    mask &= res["Salary"].between(*sal_rng)
+    mask &= res["Win%"] >= min_win
+    mask &= res["Top10%"] >= min_t10
+    mask &= res["Top100%"] >= min_t100
+    fres = res[mask].reset_index(drop=True)
 
-    if st.button("📊 Show finishing-position distribution", key="dist_btn",
+    picked = st.session_state.setdefault("picked", set())
+    c1, c2, c3 = st.columns([1.2, 1, 3])
+    c1.caption(f"**{len(fres):,}** of {len(res):,} lineups match.")
+    if c2.button("Mark all", help="Mark every lineup currently shown",
                  use_container_width=True):
-        st.session_state["show_dist_for"] = row_pos
-    if st.session_state.get("show_dist_for") == row_pos:
-        st.altair_chart(
-            place_distribution_chart(sim["dist"], cand_idx, sim["field_n"], K),
-            use_container_width=True)
-        st.caption(f"Finishing place of lineup #{row_pos + 1} across all {K:,} "
-                   f"sim runs in the {sim['field_n']:,}-entry field. Dashed lines "
-                   "mark 1st, Top-10, Top-100, and this lineup's mean place.")
+        picked |= {int(x) for x in fres["Candidate"]}
+    if c3.button("Clear marks", use_container_width=False):
+        picked.clear()
+
+    if len(fres) == 0:
+        st.info("No lineups match these filters — loosen them.")
+    else:
+        # ---- mark-off table (checkbox per lineup) ----
+        disp = pd.DataFrame({
+            "✓": [int(x) in picked for x in fres["Candidate"]],
+            "Rank": fres["Rank"], "Win%": fres["Win%"], "Top10%": fres["Top10%"],
+            "Top100%": fres["Top100%"], "Avg place": fres["AvgPlace"],
+            "Own%": fres["OwnSum"], "Salary": fres["Salary"],
+            "Stack": fres["Stack"], "Team": fres["PrimaryTeam"]})
+        edited = st.data_editor(
+            disp, hide_index=True, height=380, use_container_width=True,
+            disabled=[c for c in disp.columns if c != "✓"],
+            column_config={
+                "✓": st.column_config.CheckboxColumn("✓", help="Mark for export",
+                                                     width="small"),
+                "Win%": st.column_config.NumberColumn(format="%.2f%%"),
+                "Top10%": st.column_config.NumberColumn(format="%.1f%%"),
+                "Top100%": st.column_config.NumberColumn(format="%.1f%%"),
+                "Avg place": st.column_config.NumberColumn(format="%.0f"),
+                "Own%": st.column_config.NumberColumn(format="%.0f"),
+                "Salary": st.column_config.NumberColumn(format="$%d")})
+        for cand_id, on in zip(fres["Candidate"], edited["✓"]):
+            (picked.add if on else picked.discard)(int(cand_id))
+        st.caption(f"☑️ **{len(picked):,}** lineup(s) marked for export.")
+
+        d1, d2, d3 = st.columns(3)
+        d1.download_button("Download filtered results (CSV)",
+                           fres.to_csv(index=False).encode(),
+                           file_name=f"candidate_results_{sim['contest_size']}.csv",
+                           mime="text/csv", use_container_width=True)
+        d2.download_button("Download all candidate lineups (CSV)",
+                           lineups_to_df(sim["cands"]).to_csv(index=False).encode(),
+                           file_name=f"candidates_{len(sim['cands'])}.csv",
+                           mime="text/csv", use_container_width=True)
+        d3.download_button("Download field (CSV)",
+                           sim["field_df"].to_csv(index=False).encode(),
+                           file_name=f"field_{sim['field_n']}.csv",
+                           mime="text/csv", use_container_width=True)
+
+        # ---- inspect one lineup (players are the focus) ----
+        st.markdown("##### Inspect a lineup")
+        labels = {int(c): f"Rank {int(rk)} · {stk} · {tm} · Win {w:.2f}%"
+                  for c, rk, stk, tm, w in zip(
+                      fres["Candidate"], fres["Rank"], fres["Stack"],
+                      fres["PrimaryTeam"], fres["Win%"])}
+        chosen_cand = st.selectbox(
+            "Lineup", list(fres["Candidate"]),
+            format_func=lambda c: labels[int(c)], label_visibility="collapsed")
+        cand_idx = int(chosen_cand) - 1
+        r = res[res["Candidate"] == chosen_cand].iloc[0]
+        lu = sim["cands"][cand_idx]
+
+        st.markdown(f"**Rank #{int(r['Rank'])}** &nbsp;·&nbsp; {r['Stack']} stack "
+                    f"&nbsp;·&nbsp; ${int(r['Salary']):,}/$50,000 "
+                    f"&nbsp;·&nbsp; {r['OwnSum']:.0f}% combined own")
+        pcl, icl = st.columns([3, 2])
+        with pcl:
+            players_df = pd.DataFrame([
+                {"Slot": SLOT[i], "Player": pl.Name, "Team": pl.Team,
+                 "Pos": pl.Pos, "Salary": pl.Salary}
+                for i, pl in enumerate(lu["players"])])
+            st.dataframe(
+                players_df, use_container_width=True, hide_index=True, height=388,
+                column_config={
+                    "Slot": st.column_config.TextColumn(width="small"),
+                    "Team": st.column_config.TextColumn(width="small"),
+                    "Pos": st.column_config.TextColumn(width="small"),
+                    "Salary": st.column_config.NumberColumn(format="$%d")})
+        with icl:
+            st.metric("Win %", f"{r['Win%']:.2f}%")
+            mm1, mm2 = st.columns(2)
+            mm1.metric("Top-10 %", f"{r['Top10%']:.1f}%")
+            mm2.metric("Top-100 %", f"{r['Top100%']:.1f}%")
+            mm3, mm4, mm5 = st.columns(3)
+            mm3.metric("Best", f"{int(r['BestPlace']):,}")
+            mm4.metric("Avg", f"{r['AvgPlace']:,.0f}")
+            mm5.metric("Worst", f"{int(r['WorstPlace']):,}")
+            in_marks = int(chosen_cand) in picked
+            if st.button(("☑️ Marked — click to unmark" if in_marks
+                          else "⬜ Mark this lineup for export"),
+                         use_container_width=True):
+                (picked.discard if in_marks else picked.add)(int(chosen_cand))
+                st.rerun()
+
+        if st.button("📊 Show finishing-position distribution", key="dist_btn",
+                     use_container_width=True):
+            st.session_state["show_dist_for"] = int(chosen_cand)
+        if st.session_state.get("show_dist_for") == int(chosen_cand):
+            st.altair_chart(
+                place_distribution_chart(sim["dist"], cand_idx, sim["field_n"], K),
+                use_container_width=True)
+            st.caption(f"Finishing place of rank #{int(r['Rank'])} across all "
+                       f"{K:,} sim runs in the {sim['field_n']:,}-entry field. "
+                       "Dashed lines mark 1st, Top-10, Top-100, and this lineup's "
+                       "mean place.")
 
     # ----------------------------------------------------------------------- #
     # Step 3 — filled DraftKings upload file
     # ----------------------------------------------------------------------- #
     st.divider()
-    st.subheader("3 · Download a filled DraftKings upload file")
+    st.subheader("3 · Build a DraftKings upload file")
 
-    # IDs come from the slate file you already uploaded; a template is only
-    # needed as a fallback if that file carried no player IDs.
+    # IDs come from the slate file you already uploaded; a template is only a
+    # fallback if that file carried no player IDs.
     dkid = dict(sim.get("id_map") or {})
     if dkid:
         st.caption(f"Using the {len(dkid)} player IDs from the slate file you "
-                   "uploaded — no extra template needed. Choose how many lineups "
-                   "and how to rank them, then download.")
+                   "uploaded — no extra template needed.")
     else:
         st.caption("Your slate file had no player IDs, so upload a DKSalaries "
                    "template once to supply them (or re-upload a slate file that "
@@ -771,52 +890,63 @@ else:
             else:
                 dkid = parsed
 
-    uc1, uc2 = st.columns(2)
-    n_up = uc1.number_input("Number of lineups to export", min_value=1,
-                            max_value=int(len(res)),
-                            value=min(20, int(len(res))), step=1)
-    sort_by = uc2.selectbox("Rank lineups by",
-                            ["Win%", "Top10 Rate", "Top100 Rate"], index=0,
-                            help="Win% favors tournament-winning ceiling; the "
-                                 "Top10/Top100 rates favor consistent cashing "
-                                 "near the top.")
-    with st.expander("Exposure caps (optional)"):
-        pc1, pc2 = st.columns(2)
-        player_cap = pc1.slider("Max player exposure", 0.05, 1.0, 1.0, 0.05,
-                                help="Cap the share of exported lineups any one "
-                                     "player can appear in (1.0 = no cap).")
-        team_cap = pc2.slider("Max primary-stack-team exposure", 0.05, 1.0, 1.0,
-                              0.05, help="Cap the share of exported lineups that "
-                                         "share the same primary stack team.")
+    mode = st.radio(
+        "Which lineups to export?",
+        [f"My marked selections ({len(picked)})", "Top N by ranking"],
+        index=0 if picked else 1, horizontal=True)
 
     if not dkid:
         st.info("Player IDs are needed to build the upload file (see above).")
+    elif mode.startswith("My marked"):
+        if not picked:
+            st.info("Mark some lineups above (tick the ✓ column), then export them here.")
+        else:
+            sel_df = res[res["Candidate"].isin(picked)]   # already in rank order
+            csv_text, info = rows_to_upload_csv(sel_df, dkid)
+            if info["chosen"] == 0:
+                st.error("None of your marked lineups had a DK ID for every "
+                         "player — check that the slate file's IDs cover these "
+                         "players.")
+            else:
+                msg = f"Exporting **{info['chosen']}** marked lineup(s)."
+                if info["skipped_unmapped"]:
+                    msg += (f" ({info['skipped_unmapped']} skipped — a player had "
+                            "no DK ID.)")
+                st.success(msg)
+                st.download_button(
+                    "⬇ Download DraftKings upload CSV", csv_text.encode(),
+                    file_name=f"DK_upload_marked_{info['chosen']}.csv",
+                    mime="text/csv", type="primary", use_container_width=True)
     else:
-        cand_players = {pl.Name for lu in sim["cands"] for pl in lu["players"]}
-        mapped = sum(1 for nm in cand_players if normname(nm) in dkid)
-        if mapped < len(cand_players):
-            st.caption(f"{mapped} of {len(cand_players)} candidate-pool players "
-                       f"have a DK ID ({len(dkid)} IDs available).")
+        uc1, uc2 = st.columns(2)
+        n_up = uc1.number_input("Number of lineups to export", min_value=1,
+                                max_value=int(len(res)),
+                                value=min(20, int(len(res))), step=1)
+        sort_by = uc2.selectbox("Rank lineups by",
+                                ["Win%", "Top10 Rate", "Top100 Rate"], index=0,
+                                help="Win% favors tournament-winning ceiling; the "
+                                     "Top10/Top100 rates favor consistent cashing.")
+        with st.expander("Exposure caps (optional)"):
+            pc1, pc2 = st.columns(2)
+            player_cap = pc1.slider("Max player exposure", 0.05, 1.0, 1.0, 0.05,
+                                    help="Cap the share of exported lineups any "
+                                         "one player can appear in (1.0 = no cap).")
+            team_cap = pc2.slider("Max primary-stack-team exposure", 0.05, 1.0,
+                                  1.0, 0.05, help="Cap the share sharing the same "
+                                                  "primary stack team.")
         csv_text, info = build_dk_upload(res, dkid, n_up, sort_by,
                                          player_cap, team_cap)
         if info["chosen"] == 0:
-            st.error(
-                "No exportable lineups — none of the candidate lineups had a DK "
-                f"ID for every player (only {mapped}/{len(cand_players)} candidate "
-                "players matched), or the exposure caps are too strict. Make sure "
-                "the slate file's player IDs cover the same players as your "
-                "ownership.")
+            st.error("No exportable lineups — players had no DK ID, or the caps "
+                     "are too strict.")
         else:
             msg = (f"Selected **{info['chosen']} of {n_up}** lineups by "
                    f"**{sort_by}**. Max single-player exposure "
                    f"{info['max_player']}/{info['chosen']}, max stack-team "
                    f"{info['max_team']}/{info['chosen']}.")
-            if info["chosen"] < n_up:
-                msg += (" Fewer than requested — loosen the exposure caps or "
-                        "develop more candidate lineups.")
             if info["skipped_unmapped"]:
-                msg += (f" ({info['skipped_unmapped']} candidate lineups skipped: "
-                        "a player had no DK ID.)")
+                msg += (f" ({info['skipped_unmapped']} skipped: a player had no "
+                        "DK ID.)")
             st.success(msg)
             st.download_button(
                 "⬇ Download DraftKings upload CSV", csv_text.encode(),

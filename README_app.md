@@ -73,14 +73,17 @@ After a run, you can export a ready-to-upload DK file:
    DraftKings export (or a clean CSV with an `ID` column), no further upload is
    needed. Only if your slate file had no IDs does the app ask for a DKSalaries
    template (once).
-2. Choose **how many lineups** to export and how to **rank** them —
-   **Win%**, **Top10 Rate**, or **Top100 Rate**.
-3. Optionally set **exposure caps** (max share of exported lineups any one
-   player, or any one primary-stack team, may appear in).
-4. Download `DK_upload_<N>.csv` — header `P,P,C,1B,2B,3B,SS,OF,OF,OF` followed by
+2. Choose **which lineups to export**:
+   - **My marked selections** — exactly the lineups you ticked above, in rank
+     order; or
+   - **Top N by ranking** — choose how many and rank by **Win%**, **Top10
+     Rate**, or **Top100 Rate**, with optional per-player / stack-team exposure
+     caps.
+3. Download `DK_upload_<N>.csv` — header `P,P,C,1B,2B,3B,SS,OF,OF,OF` followed by
    one row of DraftKings player IDs per lineup.
 
-Tweaking the count / sort / caps re-selects instantly without re-simulating.
+Tweaking the selection / count / sort / caps re-selects instantly without
+re-simulating.
 
 > A lineup is exportable only if every one of its players has a DK ID. The app
 > reports how many candidate players had IDs, so if your ownership and your DK
@@ -97,17 +100,21 @@ Tweaking the count / sort / caps re-selects instantly without re-simulating.
 4. Inserts each candidate into the field per sim and ranks it →
    **Win% / Top10% / Top100% / AvgPlace** for every candidate.
 
-## Output & inspecting lineups
+## Output, filtering & inspecting lineups
 
-- Headline metrics + a ranked **candidate-lineups** table (Win% / Top10% /
-  Top100% / Avg-Best-Worst place / salary / stack).
-- **Select any row** to inspect that lineup: a clean, player-focused table
-  (slot, player, team, position, salary) with its key rates and best/avg/worst
-  finishing place.
+- Headline metrics + a **candidate-lineups** table you can mark up and filter.
+- **🔎 Filter & search** by: player(s) the lineup must include (all/any), stack
+  shape (build style), primary stack team, primary stack size, combined
+  ownership %, salary range, and minimum Win% / Top10% / Top100%.
+- **Mark off lineups** — tick the ✓ column on any rows (or **Mark all** the
+  filtered set); marks persist across filtering and feed the export below.
+- **Inspect a lineup** — pick one to see a clean, player-focused table (slot,
+  player, team, position, salary) plus its rates and best/avg/worst place, and a
+  one-click mark/unmark.
 - **📊 Show finishing-position distribution** — a histogram of where that lineup
   finished across *all* sim runs, with dashed markers at 1st, Top-10, Top-100
   and the lineup's mean place.
-- Downloads: candidate results, candidate lineups, and the field — each as CSV.
+- Downloads: filtered results, all candidate lineups, and the field — each CSV.
 
 ## Advanced (optional)
 
