@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 64" width="240" height="64" role="img" aria-label="DFS Sim">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#A020FE"/>
+  <!-- baseball + spark mark -->
+  <circle cx="32" cy="32" r="17" fill="#FFFFFF"/>
+  <path d="M24 20c5 6 5 18 0 24M40 20c-5 6-5 18 0 24" stroke="#A020FE" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+  <path d="M33 14l-7 13h6l-3 11 12-16h-7l4-8z" fill="#A020FE"/>
+  <text x="74" y="30" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="22" font-weight="800" fill="#000000">DFS</text>
+  <text x="74" y="50" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#A020FE">CONTEST&#160;SIM</text>
+</svg>

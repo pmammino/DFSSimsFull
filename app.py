@@ -40,11 +40,65 @@ import shared_store
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DELIV = os.path.join(HERE, "deliverables")
+ASSETS = os.path.join(HERE, "assets")
 PARAMS_PATH = os.path.join(HERE, "field_params.json")
 REQ_COLS = ["FullName", "Team", "Position", "Salary", "Ownership"]
 SIZE_PRESETS = [150, 1000, 6000, 20000, 50000, 150000]
 
-st.set_page_config(page_title="DFS Contest Simulator", page_icon="⚾", layout="wide")
+# Brand palette
+BRAND = "#A020FE"
+INK = "#000000"
+PAPER = "#FFFFFF"
+
+
+def _find_logo():
+    # a user-provided raster logo wins over the bundled svg placeholder
+    for ext in ("png", "jpg", "jpeg", "webp", "svg"):
+        p = os.path.join(ASSETS, f"logo.{ext}")
+        if os.path.exists(p):
+            return p
+    return None
+
+
+LOGO = _find_logo()
+# Browser favicons need a raster image; an SVG logo falls back to an emoji icon.
+_PAGE_ICON = LOGO if (LOGO and not LOGO.endswith(".svg")) else "⚾"
+
+
+def render_logo(width=72):
+    """Render the brand logo, handling SVG (inline) and raster (st.image)."""
+    if not LOGO:
+        return
+    if LOGO.endswith(".svg"):
+        try:
+            svg = open(LOGO, encoding="utf-8").read()
+            st.markdown(f'<div style="max-width:{width*3}px">{svg}</div>',
+                        unsafe_allow_html=True)
+        except Exception:
+            pass
+    else:
+        st.image(LOGO, width=width)
+
+
+st.set_page_config(page_title="DFS Contest Simulator",
+                   page_icon=_PAGE_ICON, layout="wide")
+
+# Persistent top-left brand logo (Streamlit ≥1.35) + brand accents.
+if LOGO:
+    try:
+        st.logo(LOGO)
+    except Exception:
+        pass
+st.markdown(f"""
+<style>
+  h1, h2, h3 {{ color: {BRAND}; }}
+  [data-testid="stMetricValue"] {{ color: {BRAND}; }}
+  .stProgress > div > div > div > div {{ background-color: {BRAND}; }}
+  div[data-baseweb="tab-highlight"] {{ background-color: {BRAND}; }}
+  a, a:visited {{ color: {BRAND}; }}
+  hr {{ border-top: 2px solid {BRAND}33; }}
+</style>
+""", unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -175,47 +229,52 @@ def alias_columns(df):
 
 
 def ids_from_clean(df):
-    """Pull a name -> DK ID map from a clean CSV however the IDs are carried:
-    an ID-like column (ID, Id, Player ID, DK ID, player_id, …) or a DK-style
-    'Name + ID' column ('Player Name (1234567)'). Returns (idmap, source_col)."""
+    """Pull a name -> DK upload ID map from a clean CSV. Prefers a CONTEST /
+    draftable ID (e.g. PlayerContestID, Contest ID) over a generic player ID,
+    because the DraftKings upload needs the slate-specific contest ID. Falls
+    back to a generic ID column or a DK 'Name + ID' column. Returns
+    (idmap, source_col)."""
     if "FullName" not in df.columns:
         return {}, None
     cols = {_norm_col(c): c for c in df.columns}
 
-    # 1) an explicit ID column (by common names)
+    def harvest(orig):
+        m = {}
+        for _, r in df.iterrows():
+            cid = _clean_id(r[orig])
+            if cid:
+                m[normname(r["FullName"])] = cid
+        return m
+
+    # priority 1 — a contest / draftable ID column (what DK uploads require)
+    for token in ("contest", "draftable"):
+        for key, orig in cols.items():
+            if token in key and "id" in key:
+                m = harvest(orig)
+                if m:
+                    return m, orig
+
+    # priority 2 — an explicit generic ID column (ID, Id, Player ID, DK ID, …)
     for key, orig in cols.items():
         nospace = key.replace(" ", "")
         if key in ID_NAMES or nospace in {k.replace(" ", "") for k in ID_NAMES}:
-            m = {}
-            for _, r in df.iterrows():
-                cid = _clean_id(r[orig])
-                if cid:
-                    m[normname(r["FullName"])] = cid
+            m = harvest(orig)
             if m:
                 return m, orig
 
-    # 2) a "Name + ID" style column ("Player Name (1234567)")
+    # priority 3 — a DK-style "Name + ID" column ("Player Name (1234567)")
     for key, orig in cols.items():
         if "name" in key and "id" in key:
-            m = {}
-            for _, r in df.iterrows():
-                cid = _clean_id(r[orig])
-                if cid:
-                    m[normname(r["FullName"])] = cid
+            m = harvest(orig)
             if m:
                 return m, orig
 
-    # 3) last resort: a column literally containing the token 'id' whose values
-    #    are mostly long integers (e.g. a stray 'Player Id #')
+    # priority 4 — any 'id'-token column whose values are mostly long integers
     for key, orig in cols.items():
         if "id" in key.split() or key.endswith(" id") or key == "id":
             vals = [_clean_id(v) for v in df[orig].head(50)]
             if sum(v is not None for v in vals) >= max(3, 0.5 * len(vals)):
-                m = {}
-                for _, r in df.iterrows():
-                    cid = _clean_id(r[orig])
-                    if cid:
-                        m[normname(r["FullName"])] = cid
+                m = harvest(orig)
                 if m:
                     return m, orig
     return {}, None
@@ -629,37 +688,49 @@ def run_contest_dist(field_mat, cand_mat, n_sim, n_field, nbins=60):
 
 
 def place_distribution_chart(dist, i, n_field, n_sim):
-    """Altair histogram of candidate i's finishing place with threshold markers."""
-    edges = dist["edges"]; counts = dist["counts"][i]
+    """Clean area chart of candidate i's finishing-place distribution. The x-axis
+    is clamped to valid places (1 … field size) so it never shows values below
+    1, and the curve is shown as a share of sims for readability."""
+    edges = dist["edges"].astype(float)
+    counts = dist["counts"][i].astype(float)
     centers = (edges[:-1] + edges[1:]) / 2
-    width = np.diff(edges)
-    bars = pd.DataFrame({"place": centers, "sims": counts,
-                         "pct": 100 * counts / n_sim, "w": width})
-    chart = alt.Chart(bars).mark_bar(opacity=0.85).encode(
-        x=alt.X("place:Q", title="Finishing place (1 = win)",
-                scale=alt.Scale(domain=[1, max(2, n_field)])),
-        y=alt.Y("sims:Q", title=f"Sims (of {n_sim:,})"),
-        tooltip=[alt.Tooltip("place:Q", title="≈place", format=".0f"),
-                 alt.Tooltip("sims:Q", title="sims"),
+    pct = 100 * counts / max(1, n_sim)
+    df = pd.DataFrame({"place": centers, "pct": pct})
+    xmax = max(2, int(n_field))
+    xscale = alt.Scale(domain=[1, xmax], nice=False, zero=False, clamp=True)
+
+    area = alt.Chart(df).mark_area(
+        interpolate="monotone", color=BRAND, opacity=0.30,
+        line={"color": BRAND, "strokeWidth": 2}).encode(
+        x=alt.X("place:Q", title="Finishing place  (1 = win)", scale=xscale,
+                axis=alt.Axis(format="~s")),
+        y=alt.Y("pct:Q", title="% of sims",
+                axis=alt.Axis(format=".1f")),
+        tooltip=[alt.Tooltip("place:Q", title="place", format=",.0f"),
                  alt.Tooltip("pct:Q", title="% of sims", format=".2f")])
-    marks = [(1, "1st", "#d62728"), (10, "Top-10", "#ff7f0e"),
-             (100, "Top-100", "#2ca02c"),
-             (float(dist["mean"][i]), "Mean", "#1f77b4")]
-    layers = [chart]
-    for x, label, color in marks:
-        if x <= n_field:
-            rule_df = pd.DataFrame({"x": [x], "label": [label]})
-            layers.append(alt.Chart(rule_df).mark_rule(
-                color=color, strokeDash=[4, 3], size=2).encode(
-                x="x:Q", tooltip=[alt.Tooltip("label:N", title="marker"),
-                                  alt.Tooltip("x:Q", title="place", format=".0f")]))
-    return alt.layer(*layers).properties(height=300)
+
+    rules = []
+    for x, label, color in [(1, "1st", "#000000"), (10, "Top-10", "#7a13c4"),
+                            (100, "Top-100", "#c08bff"),
+                            (float(dist["mean"][i]), "Mean", BRAND)]:
+        if 1 <= x <= xmax:
+            rdf = pd.DataFrame({"x": [x], "label": [label]})
+            rules.append(alt.Chart(rdf).mark_rule(
+                color=color, strokeDash=[4, 3], size=1.5, opacity=0.8).encode(
+                x=alt.X("x:Q", scale=xscale),
+                tooltip=[alt.Tooltip("label:N", title="marker"),
+                         alt.Tooltip("x:Q", title="place", format=",.0f")]))
+    return alt.layer(area, *rules).properties(height=200).configure_view(
+        strokeOpacity=0)
 
 
 # --------------------------------------------------------------------------- #
 # Header
 # --------------------------------------------------------------------------- #
-st.title("⚾ DFS Contest Simulator")
+_t1, _t2 = st.columns([1, 9], vertical_alignment="center")
+with _t1:
+    render_logo(72)
+_t2.title("DFS Contest Simulator")
 st.caption(
     "Simulate DraftKings MLB contest outcomes for machine-developed candidate "
     "lineups, against an ownership-weighted field, using the day's correlated "
@@ -1135,25 +1206,45 @@ else:
     if len(fres) == 0:
         st.info("No lineups match these filters — loosen them.")
     else:
-        # ---- mark-off table (checkbox per lineup) ----
-        disp = pd.DataFrame({
-            "✓": [int(x) in picked for x in fres["Candidate"]],
-            "Rank": fres["Rank"], "Win%": fres["Win%"], "Top10%": fres["Top10%"],
-            "Top100%": fres["Top100%"], "Avg place": fres["AvgPlace"],
-            "Own%": fres["OwnSum"], "Salary": fres["Salary"],
-            "Stack": fres["Stack"], "Team": fres["PrimaryTeam"]})
+        # ---- player-focused lineups table (✓ to mark; metrics compact) ----
+        slot_label = {"P1": "P", "P2": "P", "C": "C", "1B": "1B", "2B": "2B",
+                      "3B": "3B", "SS": "SS", "OF1": "OF", "OF2": "OF", "OF3": "OF"}
+
+        def _nm(v):
+            return str(v).rsplit(" (", 1)[0]
+
+        disp = pd.DataFrame({"✓": [int(x) in picked for x in fres["Candidate"]],
+                             "Rank": fres["Rank"]})
+        for c in COLS:
+            disp[c] = fres[c].map(_nm)
+        disp["Win%"] = fres["Win%"]
+        disp["Top10%"] = fres["Top10%"]
+        disp["Top100%"] = fres["Top100%"]
+        disp["Salary"] = fres["Salary"]
+        disp["Own%"] = fres["OwnSum"]
+        disp["Stack"] = fres["Stack"]
+
+        colcfg = {
+            "✓": st.column_config.CheckboxColumn("✓", help="Mark for export",
+                                                 width="small"),
+            "Rank": st.column_config.NumberColumn(width="small"),
+            "Win%": st.column_config.NumberColumn(format="%.2f%%", width="small"),
+            "Top10%": st.column_config.NumberColumn(format="%.1f%%", width="small"),
+            "Top100%": st.column_config.NumberColumn(format="%.1f%%", width="small"),
+            "Salary": st.column_config.NumberColumn(format="$%d", width="small"),
+            "Own%": st.column_config.NumberColumn(format="%.0f%%", width="small"),
+            "Stack": st.column_config.TextColumn(width="small")}
+        for c in COLS:
+            colcfg[c] = st.column_config.TextColumn(slot_label[c])
+
+        st.caption("Players are the focus — tick **✓** to mark lineups for "
+                   "export. Win/Top-10/Top-100/own are compact on the right; "
+                   "finishing-position detail is in the panel below.")
         edited = st.data_editor(
-            disp, hide_index=True, height=380, use_container_width=True,
-            disabled=[c for c in disp.columns if c != "✓"],
-            column_config={
-                "✓": st.column_config.CheckboxColumn("✓", help="Mark for export",
-                                                     width="small"),
-                "Win%": st.column_config.NumberColumn(format="%.2f%%"),
-                "Top10%": st.column_config.NumberColumn(format="%.1f%%"),
-                "Top100%": st.column_config.NumberColumn(format="%.1f%%"),
-                "Avg place": st.column_config.NumberColumn(format="%.0f"),
-                "Own%": st.column_config.NumberColumn(format="%.0f"),
-                "Salary": st.column_config.NumberColumn(format="$%d")})
+            disp, hide_index=True, height=460, use_container_width=True,
+            disabled=[c for c in disp.columns if c != "✓"], column_config=colcfg,
+            column_order=["✓", "Rank"] + COLS +
+                         ["Win%", "Top10%", "Top100%", "Salary", "Own%", "Stack"])
         for cand_id, on in zip(fres["Candidate"], edited["✓"]):
             (picked.add if on else picked.discard)(int(cand_id))
         st.caption(f"☑️ **{len(picked):,}** lineup(s) marked for export.")
@@ -1172,62 +1263,37 @@ else:
                            file_name=f"field_{sim['field_n']}.csv",
                            mime="text/csv", use_container_width=True)
 
-        # ---- inspect one lineup (players are the focus) ----
-        st.markdown("##### Inspect a lineup")
-        labels = {int(c): f"Rank {int(rk)} · {stk} · {tm} · Win {w:.2f}%"
-                  for c, rk, stk, tm, w in zip(
-                      fres["Candidate"], fres["Rank"], fres["Stack"],
-                      fres["PrimaryTeam"], fres["Win%"])}
-        chosen_cand = st.selectbox(
-            "Lineup", list(fres["Candidate"]),
-            format_func=lambda c: labels[int(c)], label_visibility="collapsed")
-        cand_idx = int(chosen_cand) - 1
-        r = res[res["Candidate"] == chosen_cand].iloc[0]
-        lu = sim["cands"][cand_idx]
-
-        st.markdown(f"**Rank #{int(r['Rank'])}** &nbsp;·&nbsp; {r['Stack']} stack "
-                    f"&nbsp;·&nbsp; ${int(r['Salary']):,}/$50,000 "
-                    f"&nbsp;·&nbsp; {r['OwnSum']:.0f}% combined own")
-        pcl, icl = st.columns([3, 2])
-        with pcl:
-            players_df = pd.DataFrame([
-                {"Slot": SLOT[i], "Player": pl.Name, "Team": pl.Team,
-                 "Pos": pl.Pos, "Salary": pl.Salary}
-                for i, pl in enumerate(lu["players"])])
-            st.dataframe(
-                players_df, use_container_width=True, hide_index=True, height=388,
-                column_config={
-                    "Slot": st.column_config.TextColumn(width="small"),
-                    "Team": st.column_config.TextColumn(width="small"),
-                    "Pos": st.column_config.TextColumn(width="small"),
-                    "Salary": st.column_config.NumberColumn(format="$%d")})
-        with icl:
-            st.metric("Win %", f"{r['Win%']:.2f}%")
-            mm1, mm2 = st.columns(2)
-            mm1.metric("Top-10 %", f"{r['Top10%']:.1f}%")
-            mm2.metric("Top-100 %", f"{r['Top100%']:.1f}%")
-            mm3, mm4, mm5 = st.columns(3)
-            mm3.metric("Best", f"{int(r['BestPlace']):,}")
-            mm4.metric("Avg", f"{r['AvgPlace']:,.0f}")
-            mm5.metric("Worst", f"{int(r['WorstPlace']):,}")
-            in_marks = int(chosen_cand) in picked
-            if st.button(("☑️ Marked — click to unmark" if in_marks
-                          else "⬜ Mark this lineup for export"),
-                         use_container_width=True):
-                (picked.discard if in_marks else picked.add)(int(chosen_cand))
-                st.rerun()
-
-        if st.button("📊 Show finishing-position distribution", key="dist_btn",
-                     use_container_width=True):
-            st.session_state["show_dist_for"] = int(chosen_cand)
-        if st.session_state.get("show_dist_for") == int(chosen_cand):
-            st.altair_chart(
-                place_distribution_chart(sim["dist"], cand_idx, sim["field_n"], K),
-                use_container_width=True)
-            st.caption(f"Finishing place of rank #{int(r['Rank'])} across all "
-                       f"{K:,} sim runs in the {sim['field_n']:,}-entry field. "
-                       "Dashed lines mark 1st, Top-10, Top-100, and this lineup's "
-                       "mean place.")
+        # ---- secondary: finishing-position detail (de-emphasized) ----
+        with st.expander("📊 Finishing-position detail — pick a lineup",
+                         expanded=False):
+            labels = {int(c): f"Rank {int(rk)} · {stk} · Win {w:.2f}%"
+                      for c, rk, stk, w in zip(fres["Candidate"], fres["Rank"],
+                                               fres["Stack"], fres["Win%"])}
+            chosen_cand = st.selectbox("Lineup", list(fres["Candidate"]),
+                                       format_func=lambda c: labels[int(c)],
+                                       label_visibility="collapsed")
+            cand_idx = int(chosen_cand) - 1
+            r = res[res["Candidate"] == chosen_cand].iloc[0]
+            cc1, cc2 = st.columns([3, 2])
+            with cc1:
+                st.altair_chart(
+                    place_distribution_chart(sim["dist"], cand_idx,
+                                             sim["field_n"], K),
+                    use_container_width=True)
+            with cc2:
+                st.caption(f"Rank #{int(r['Rank'])} · {r['Stack']} · "
+                           f"${int(r['Salary']):,}")
+                q1, q2, q3 = st.columns(3)
+                q1.metric("Best", f"{int(r['BestPlace']):,}")
+                q2.metric("Avg", f"{r['AvgPlace']:,.0f}")
+                q3.metric("Worst", f"{int(r['WorstPlace']):,}")
+                in_marks = int(chosen_cand) in picked
+                if st.button(("☑️ Unmark" if in_marks else "⬜ Mark for export"),
+                             use_container_width=True):
+                    (picked.discard if in_marks else picked.add)(int(chosen_cand))
+                    st.rerun()
+            st.caption("Dashed lines mark 1st, Top-10, Top-100, and the lineup's "
+                       "mean place. The x-axis covers valid places (1 … field).")
 
     # ----------------------------------------------------------------------- #
     # Step 3 — filled DraftKings upload file

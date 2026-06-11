@@ -1,0 +1,7 @@
+# Brand theme: #A020FE primary, black/white neutrals.
+[theme]
+primaryColor = "#A020FE"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F3E9FF"
+textColor = "#000000"
+font = "sans serif"
