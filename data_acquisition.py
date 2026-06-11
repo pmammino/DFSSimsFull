@@ -31,6 +31,12 @@ from pipeline_config import (
     RATE_HIST_START,
 )
 
+# statsapi.mlb.com and baseballsavant return 403 to the default python-requests
+# User-Agent on some networks; present a browser-like UA for every request.
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/124.0 Safari/537.36"}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # statsapi.mlb.com — counting stats for K%/BB%/HBP%/SF%
@@ -51,7 +57,7 @@ def _fetch_statsapi_one(year: int, group: str) -> pd.DataFrame:
         "sportId":    1,
         "limit":      5000,
     }
-    r = requests.get(url, params=params, timeout=STATSAPI_TIMEOUT)
+    r = requests.get(url, params=params, timeout=STATSAPI_TIMEOUT, headers=HEADERS)
     r.raise_for_status()
     data = r.json()
     if not data.get("stats"):
@@ -148,6 +154,15 @@ def fetch_rate_data(target_year: int, start_year: int = RATE_HIST_START,
     hit_df = pd.concat(hit_rows, ignore_index=True) if hit_rows else pd.DataFrame()
     pit_df = pd.concat(pit_rows, ignore_index=True) if pit_rows else pd.DataFrame()
 
+    # Fail loudly (and don't poison the cache with empty tables) if statsapi gave
+    # us nothing — otherwise this surfaces later as a cryptic KeyError('PlayerId').
+    if hit_df.empty or pit_df.empty or "PlayerId" not in hit_df.columns:
+        raise RuntimeError(
+            f"statsapi returned no rate data for {start_year}-{target_year - 1}: "
+            "every request failed (statsapi.mlb.com is likely blocked / returning "
+            "403, or this machine is offline). Stage B cannot build projections "
+            "without it. Verify statsapi.mlb.com is reachable from this machine.")
+
     # Derive rates. Guard against PA=0 to avoid div-by-zero.
     for df, denom_col in [(hit_df, "PA"), (pit_df, "TBF")]:
         if df.empty:
@@ -192,7 +207,7 @@ def fetch_team_rpg(seasons: list[int], force: bool = False) -> pd.DataFrame:
         )
         print(f"  team_rpg {year}...", end="", flush=True)
         try:
-            r = requests.get(url, timeout=STATSAPI_TIMEOUT)
+            r = requests.get(url, timeout=STATSAPI_TIMEOUT, headers=HEADERS)
             if r.status_code != 200:
                 print(f" FAILED ({r.status_code})")
                 continue
@@ -244,7 +259,7 @@ def _fetch_statsapi_splits_one(year: int, group: str, sit_code: str) -> pd.DataF
         "sportId":    1,
         "limit":      5000,
     }
-    r = requests.get(url, params=params, timeout=STATSAPI_TIMEOUT)
+    r = requests.get(url, params=params, timeout=STATSAPI_TIMEOUT, headers=HEADERS)
     r.raise_for_status()
     data = r.json()
     if not data.get("stats"):
@@ -369,7 +384,7 @@ def _fetch_handedness_batch(player_ids: list[int]) -> pd.DataFrame:
         url = "https://statsapi.mlb.com/api/v1/people"
         params = {"personIds": ids_str}
         try:
-            r = requests.get(url, params=params, timeout=STATSAPI_TIMEOUT)
+            r = requests.get(url, params=params, timeout=STATSAPI_TIMEOUT, headers=HEADERS)
             data = r.json()
         except Exception:
             continue
@@ -516,7 +531,7 @@ def fetch_sprint_speeds(years: list[int], force: bool = False) -> pd.DataFrame:
         )
         print(f"  sprint_speed {y}...", end="", flush=True)
         try:
-            r = requests.get(url, timeout=SAVANT_TIMEOUT)
+            r = requests.get(url, timeout=SAVANT_TIMEOUT, headers=HEADERS)
             if r.status_code != 200 or len(r.content) < 200:
                 print(f" FAILED ({r.status_code})")
                 continue
