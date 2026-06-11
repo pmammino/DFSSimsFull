@@ -55,25 +55,28 @@ Nothing runs until all four are set and you press **Run simulation**.
 When you press **Run**, the app reads the **live** lineup/matchup feed and
 compares it against a build stamp (`out/.build_stamp.json`) that records the
 game day, every team's batting order, and every team's starting pitcher as of
-the last build. It refreshes only what's actually stale:
+the last build. The projection rebuild and the sim rebuild are **decoupled**:
 
-1. **New game day** (or projections not built today) → rebuild projections **and**
-   correlated sims (Stage A–C via `refresh_and_run.py`).
-2. **Lineups or matchups changed** — a confirmed batting order moved, or a
-   starting pitcher changed — → rerun the correlated sims (Stage C via
-   `run_slate.py`, which pulls the lineups live from the API).
+1. **Projections (Stage B, best-effort).** If projections aren't from today it
+   tries to rebuild them (`run_pipeline.py`). If that fails, it **keeps going**
+   on the existing projections (they change little day to day) and shows the
+   error; it won't re-attempt the same day.
+2. **Correlated sims (Stage C, the daily essential).** It rebuilds the sims from
+   **today's live slate** — lineups, starting-pitcher matchups, and Vegas game
+   totals (`run_slate.py`, using the existing projections) — whenever the slate
+   moved, a new game day started, projections were rebuilt, or no sims exist.
+   This is what pulls the new lineups/matchups/totals into the sims.
 3. **Nothing changed** → no rebuild; it uses the sims already on disk.
 
-The progress panel shows the live slate it read and exactly what changed (e.g.
-`ATL SP Sale→Lopez`, `NYM lineup`, `game day …→…`). Because the comparison is
-against the live API and the stamp is written on every successful build, the
-state **persists across sessions/restarts** on the same machine: re-opening the
-app the same day with unchanged lineups does **not** rebuild.
+Because Stage B and Stage C run independently, a projection-build failure no
+longer blocks the sim rebuild. The progress panel shows the live slate it read
+and exactly what changed (e.g. `ATL SP Sale→Lopez`, `NYM lineup`, `game day …`),
+and surfaces the real error if a stage fails. State is written to the stamp on
+every successful build, so it **persists across sessions/restarts**.
 
 It needs network access (Statcast/statsapi and the lineup feed). If the feed
 can't be reached, the app says so and falls back to the existing sims rather
-than silently using stale data. A full projection rebuild can take several
-minutes.
+than silently using stale data.
 
 **Starter guard.** Independently of the sims, the pool is filtered to only the
 pitchers confirmed as today's **starters on the live slate**. So a pitcher who
