@@ -66,14 +66,17 @@ _PAGE_ICON = LOGO if (LOGO and not LOGO.endswith(".svg")) else "⚾"
 
 
 def render_logo(width=72):
-    """Render the brand logo, handling SVG (inline) and raster (st.image)."""
+    """Render the brand logo, handling SVG (inline, scaled to `width`) and
+    raster (st.image)."""
     if not LOGO:
         return
     if LOGO.endswith(".svg"):
         try:
             svg = open(LOGO, encoding="utf-8").read()
-            st.markdown(f'<div style="max-width:{width*3}px">{svg}</div>',
-                        unsafe_allow_html=True)
+            st.markdown(
+                f'<style>.brandlogo svg{{width:100%;height:auto;display:block}}</style>'
+                f'<div class="brandlogo" style="width:{width}px">{svg}</div>',
+                unsafe_allow_html=True)
         except Exception:
             pass
     else:
