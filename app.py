@@ -38,6 +38,12 @@ from field_simulator import (normalize_to_slots, adjust_ownership,
 import slate_ingest
 import shared_store
 
+# per-position place charts can exceed Altair's default 5000-row cap
+try:
+    alt.data_transformers.disable_max_rows()
+except Exception:
+    pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 DELIV = os.path.join(HERE, "deliverables")
 ASSETS = os.path.join(HERE, "assets")
@@ -670,47 +676,66 @@ def ensure_fresh(status, force=False):
 # Contest scoring that also captures each candidate's finishing-place
 # distribution (compact per-candidate histogram + exact best/mean/worst)
 # --------------------------------------------------------------------------- #
-def run_contest_dist(field_mat, cand_mat, n_sim, n_field, nbins=60):
+def run_contest_dist(field_mat, cand_mat, n_sim, n_field, max_cells=40_000_000):
+    """Score each candidate against the field per sim and capture its
+    finishing-place distribution at PER-POSITION resolution (one bin per place)
+    when feasible. To bound memory the bin count adapts so N_candidates × bins
+    stays under `max_cells`; for typical runs that still means one bin per place.
+    Returns (wins, t10, t100, avg, dist)."""
     N = cand_mat.shape[1]
     wins = np.zeros(N, np.int64); t10 = np.zeros(N, np.int64)
     t100 = np.zeros(N, np.int64); ps = np.zeros(N, np.int64)
     best = np.full(N, n_field + 1, np.int64); worst = np.zeros(N, np.int64)
-    edges = np.unique(np.linspace(1, n_field + 1, nbins + 1).astype(np.int64))
-    counts = np.zeros((N, len(edges) - 1), np.int64)
+
+    # one bin per finishing place when feasible; cap at 6000 so the chart stays
+    # renderable (and N×bins memory stays bounded) on very large fields
+    bins = min(int(n_field), max(120, min(6000, max_cells // max(1, N))))
+    if bins >= n_field:                      # one bin per finishing place
+        edges = np.arange(1, n_field + 2, dtype=np.int64)
+    else:
+        edges = np.unique(np.linspace(1, n_field + 1, bins + 1).astype(np.int64))
+    nb = len(edges) - 1
+    cdt = np.int16 if n_sim < 32767 else np.int32
+    counts = np.zeros((N, nb), cdt)
     idx = np.arange(N)
     for s in range(n_sim):
         fs = np.sort(field_mat[s]); cv = cand_mat[s]
         pl = (n_field - np.searchsorted(fs, cv, side="right")) + 1
         wins += (pl == 1); t10 += (pl <= 10); t100 += (pl <= 100); ps += pl
         best = np.minimum(best, pl); worst = np.maximum(worst, pl)
-        b = np.clip(np.searchsorted(edges, pl, side="right") - 1, 0, len(edges) - 2)
+        b = np.clip(np.searchsorted(edges, pl, side="right") - 1, 0, nb - 1)
         np.add.at(counts, (idx, b), 1)
     dist = {"edges": edges, "counts": counts, "best": best, "worst": worst,
-            "mean": ps / n_sim}
+            "mean": ps / n_sim, "per_place": bool(bins >= n_field)}
     return wins, t10, t100, ps / n_sim, dist
 
 
 def place_distribution_chart(dist, i, n_field, n_sim):
-    """Clean area chart of candidate i's finishing-place distribution. The x-axis
-    is clamped to valid places (1 … field size) so it never shows values below
-    1, and the curve is shown as a share of sims for readability."""
-    edges = dist["edges"].astype(float)
+    """Per-finishing-position distribution for candidate i. Each x value is an
+    actual finishing place (1 = win); the y value is the share of sims that
+    finished at that place. Rendered as a faithful step so no detail is hidden
+    by smoothing, and the x-axis is clamped to valid places (never below 1)."""
+    edges = dist["edges"].astype(np.int64)
     counts = dist["counts"][i].astype(float)
-    centers = (edges[:-1] + edges[1:]) / 2
-    pct = 100 * counts / max(1, n_sim)
-    df = pd.DataFrame({"place": centers, "pct": pct})
+    place = edges[:-1]                     # the (left) finishing place of each bin
+    width = np.maximum(1, np.diff(edges))  # places covered by each bin (1 when per-place)
+    pct = 100 * counts / max(1, n_sim) / width   # density: % of sims per place
+    df = pd.DataFrame({"place": place, "pct": pct,
+                       "sims": counts.astype(np.int64)})
     xmax = max(2, int(n_field))
     xscale = alt.Scale(domain=[1, xmax], nice=False, zero=False, clamp=True)
+    per_place = dist.get("per_place", False)
 
     area = alt.Chart(df).mark_area(
-        interpolate="monotone", color=BRAND, opacity=0.30,
-        line={"color": BRAND, "strokeWidth": 2}).encode(
+        interpolate="step-after", color=BRAND, opacity=0.35,
+        line={"color": BRAND, "strokeWidth": 1}).encode(
         x=alt.X("place:Q", title="Finishing place  (1 = win)", scale=xscale,
                 axis=alt.Axis(format="~s")),
-        y=alt.Y("pct:Q", title="% of sims",
-                axis=alt.Axis(format=".1f")),
+        y=alt.Y("pct:Q", title=("% of sims at each place" if per_place
+                                else "% of sims (per place)")),
         tooltip=[alt.Tooltip("place:Q", title="place", format=",.0f"),
-                 alt.Tooltip("pct:Q", title="% of sims", format=".2f")])
+                 alt.Tooltip("sims:Q", title="sims here", format=","),
+                 alt.Tooltip("pct:Q", title="% per place", format=".3f")])
 
     rules = []
     for x, label, color in [(1, "1st", "#000000"), (10, "Top-10", "#7a13c4"),
@@ -719,11 +744,11 @@ def place_distribution_chart(dist, i, n_field, n_sim):
         if 1 <= x <= xmax:
             rdf = pd.DataFrame({"x": [x], "label": [label]})
             rules.append(alt.Chart(rdf).mark_rule(
-                color=color, strokeDash=[4, 3], size=1.5, opacity=0.8).encode(
+                color=color, strokeDash=[4, 3], size=1.5, opacity=0.85).encode(
                 x=alt.X("x:Q", scale=xscale),
                 tooltip=[alt.Tooltip("label:N", title="marker"),
                          alt.Tooltip("x:Q", title="place", format=",.0f")]))
-    return alt.layer(area, *rules).properties(height=200).configure_view(
+    return alt.layer(area, *rules).properties(height=220).configure_view(
         strokeOpacity=0)
 
 
