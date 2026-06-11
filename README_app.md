@@ -29,7 +29,10 @@ Then open the URL it prints (default http://localhost:8501).
      template needed. Because it has no ownership, the app then asks for a small
      ownership CSV (`FullName, Ownership`) to merge in; or
    - a **clean CSV** with columns `FullName, Team, Position, Salary, Ownership`
-     (add an optional `ID` column to enable the DK upload without a template).
+     (column-name variants like `Name`, `TeamAbbrev`, `Pos`, `Own` are accepted).
+     Include a player-ID column — named `ID`, `Id`, `Player ID`, `DK ID`,
+     `player_id`, or a DK `Name + ID` column — to enable the DK upload without a
+     separate template. The app shows which column it read IDs from.
 
    Only players that match the sim universe are used; the app shows how many
    matched and how many DK IDs are available. `sample_ownership.csv` is a

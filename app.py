@@ -129,21 +129,95 @@ def parse_dk_export(text):
     return pd.DataFrame(recs), idmap
 
 
+def _norm_col(c):
+    return re.sub(r"\s+", " ", str(c).strip().lower())
+
+
+# canonical column -> accepted aliases (matched case/space-insensitively)
+COL_ALIASES = {
+    "FullName": ["fullname", "name", "player", "player name", "playername"],
+    "Team": ["team", "teamabbrev", "team abbrev", "tm"],
+    "Position": ["position", "pos", "roster position"],
+    "Salary": ["salary", "sal"],
+    "Ownership": ["ownership", "own", "own%", "owned", "pown", "proj own",
+                  "projected ownership", "projown", "%drafted", "drafted%",
+                  "ownership%", "proj. own", "ros own"],
+}
+# column-name tokens that denote a DraftKings player ID
+ID_NAMES = {"id", "playerid", "player id", "dk id", "dkid", "player_id",
+            "playerid#", "contest id", "contestid", "draftkings id",
+            "draftkingsid", "dkplayerid", "player id #"}
+
+
+def _clean_id(v):
+    v = str(v).strip()
+    if not v or v.lower() == "nan":
+        return None
+    m = re.search(r"(\d{4,})", v)          # handles 12345, 12345.0, "Name (12345)"
+    return m.group(1) if m else None
+
+
+def alias_columns(df):
+    """Rename a slate dataframe's columns to canonical names where a known alias
+    is found (case/whitespace-insensitive). Returns a new dataframe; original
+    columns without a known alias are left as-is."""
+    lut = {_norm_col(c): c for c in df.columns}
+    rename = {}
+    for canon, aliases in COL_ALIASES.items():
+        if canon in df.columns:
+            continue
+        for a in aliases:
+            if a in lut:
+                rename[lut[a]] = canon
+                break
+    return df.rename(columns=rename) if rename else df
+
+
 def ids_from_clean(df):
-    """Pull a name -> DK ID map from a clean CSV if it carries IDs, via either
-    an 'ID' column or a DK-style 'Name + ID' column ('Player Name (1234567)')."""
-    idmap = {}
-    if "ID" in df.columns:
-        for _, r in df.iterrows():
-            v = str(r["ID"]).strip()
-            if v and v.lower() != "nan":
-                idmap[normname(r["FullName"])] = v.split(".")[0]
-    elif "Name + ID" in df.columns:
-        for _, r in df.iterrows():
-            m = re.search(r"\((\d+)\)\s*$", str(r["Name + ID"]))
+    """Pull a name -> DK ID map from a clean CSV however the IDs are carried:
+    an ID-like column (ID, Id, Player ID, DK ID, player_id, …) or a DK-style
+    'Name + ID' column ('Player Name (1234567)'). Returns (idmap, source_col)."""
+    if "FullName" not in df.columns:
+        return {}, None
+    cols = {_norm_col(c): c for c in df.columns}
+
+    # 1) an explicit ID column (by common names)
+    for key, orig in cols.items():
+        nospace = key.replace(" ", "")
+        if key in ID_NAMES or nospace in {k.replace(" ", "") for k in ID_NAMES}:
+            m = {}
+            for _, r in df.iterrows():
+                cid = _clean_id(r[orig])
+                if cid:
+                    m[normname(r["FullName"])] = cid
             if m:
-                idmap[normname(r["FullName"])] = m.group(1)
-    return idmap
+                return m, orig
+
+    # 2) a "Name + ID" style column ("Player Name (1234567)")
+    for key, orig in cols.items():
+        if "name" in key and "id" in key:
+            m = {}
+            for _, r in df.iterrows():
+                cid = _clean_id(r[orig])
+                if cid:
+                    m[normname(r["FullName"])] = cid
+            if m:
+                return m, orig
+
+    # 3) last resort: a column literally containing the token 'id' whose values
+    #    are mostly long integers (e.g. a stray 'Player Id #')
+    for key, orig in cols.items():
+        if "id" in key.split() or key.endswith(" id") or key == "id":
+            vals = [_clean_id(v) for v in df[orig].head(50)]
+            if sum(v is not None for v in vals) >= max(3, 0.5 * len(vals)):
+                m = {}
+                for _, r in df.iterrows():
+                    cid = _clean_id(r[orig])
+                    if cid:
+                        m[normname(r["FullName"])] = cid
+                if m:
+                    return m, orig
+    return {}, None
 
 
 def build_dk_upload(res_df, dkid, n_select, sort_by, player_cap=1.0, team_cap=1.0):
@@ -417,6 +491,7 @@ upload = st.file_uploader("Slate file", type=["csv"], label_visibility="collapse
 dk_df = None
 csv_ok = False
 id_map = {}
+id_col = None
 if upload is not None:
     try:
         raw = upload.getvalue().decode("latin-1", "replace")
@@ -445,15 +520,40 @@ if upload is not None:
                         lambda n: omap.get(normname(n)))
                     dk_df = base_df.dropna(subset=["Ownership"]).copy()
         else:
-            # clean CSV
-            dk_df = pd.read_csv(io.StringIO(raw))
-            dk_df.columns = [c.strip() for c in dk_df.columns]
+            # clean CSV — accept DK/own column-name variants via aliasing
+            raw_df = pd.read_csv(io.StringIO(raw))
+            raw_df.columns = [str(c).strip() for c in raw_df.columns]
+            dk_df = alias_columns(raw_df)
+            id_map, id_col = ids_from_clean(dk_df)
             missing = [c for c in REQ_COLS if c not in dk_df.columns]
-            if missing:
-                st.error("CSV is missing required column(s): " + ", ".join(missing))
+            if "Ownership" in missing and len([m for m in missing if m != "Ownership"]) == 0:
+                # everything but ownership is present (e.g. a DK salaries export)
+                st.info("This looks like a salaries/slate file without ownership. "
+                        "Add ownership for these players below.")
+                own_up = st.file_uploader(
+                    "Ownership CSV (columns: FullName, Ownership)", type=["csv"],
+                    key="ownership_for_clean")
+                if own_up is None:
+                    st.warning("Upload an ownership CSV to continue.")
+                    dk_df = None
+                else:
+                    own = alias_columns(pd.read_csv(own_up, encoding="latin-1"))
+                    own.columns = [str(c).strip() for c in own.columns]
+                    own = alias_columns(own)
+                    if "FullName" not in own.columns or "Ownership" not in own.columns:
+                        st.error("Ownership CSV needs `FullName` and `Ownership` columns.")
+                        dk_df = None
+                    else:
+                        omap = {normname(r.FullName): float(r.Ownership)
+                                for r in own.itertuples()
+                                if str(r.Ownership).strip() not in ("", "nan")}
+                        dk_df["Ownership"] = dk_df["FullName"].map(
+                            lambda n: omap.get(normname(n)))
+                        dk_df = dk_df.dropna(subset=["Ownership"]).copy()
+            elif missing:
+                st.error("CSV is missing required column(s): " + ", ".join(missing)
+                         + f". Columns found: {', '.join(map(str, raw_df.columns))}")
                 dk_df = None
-            else:
-                id_map = ids_from_clean(dk_df)
 
         if dk_df is not None:
             simset = set(score)
@@ -468,10 +568,17 @@ if upload is not None:
                          "universe — check names/teams. Nothing to simulate.")
             else:
                 st.dataframe(dk_df.head(15), use_container_width=True)
-                if not id_map:
-                    st.caption("No player IDs in this file — you'll be able to "
-                               "supply a DKSalaries template at export time, or "
-                               "add an `ID` column here.")
+                if id_map:
+                    src = f"column **{id_col}**" if id_col else "the slate file"
+                    st.caption(f"✓ Player IDs detected (from {src}) — "
+                               "the DK upload export will use them automatically.")
+                else:
+                    st.caption("No player IDs detected in this file. Columns found: "
+                               f"`{', '.join(map(str, dk_df.columns))}`. To enable "
+                               "the one-file DK export, include a player-ID column "
+                               "(named e.g. `ID`, `Player ID`, `DK ID`, or a DK "
+                               "`Name + ID` column); otherwise you can supply a "
+                               "DKSalaries template at export time.")
     except Exception as e:
         st.error(f"Could not read slate file: {e}")
 
