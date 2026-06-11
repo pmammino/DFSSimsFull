@@ -405,6 +405,22 @@ def run_script(args, label, status):
 # Stage B (projections) — run directly so a failure here never blocks Stage C.
 PROJ_CMD = ["run_pipeline.py", "--target-year", "2027", "--bip-dir", "bip_inputs",
             "--skip-2026-scrape", "--output-dir", "out", "--force"]
+# Heavy packages Stage B needs that the app itself doesn't import.
+STAGE_B_DEPS = ["sklearn", "xgboost", "pybaseball", "pyarrow"]
+
+
+def stage_b_missing_deps():
+    """Names of Stage-B packages not installed for this interpreter (the common
+    Python-3.14 failure: no scikit-learn/xgboost wheels yet)."""
+    import importlib.util
+    missing = []
+    for mod in STAGE_B_DEPS:
+        try:
+            if importlib.util.find_spec(mod) is None:
+                missing.append(mod)
+        except Exception:
+            missing.append(mod)
+    return missing
 
 
 def _stamp_after_sims(today, live_sig):
@@ -460,7 +476,18 @@ def ensure_fresh(status):
 
     # --- 1) projections: ensure present; refresh best-effort when stale --------
     projections_rebuilt = False
+    missing_deps = stage_b_missing_deps()
+    dep_msg = (f"Stage B can't run under this Python ({sys.version.split()[0]} at "
+               f"{sys.executable}) — these packages aren't importable: "
+               f"{', '.join(missing_deps)}. Install them with "
+               "`python -m pip install -r requirements.txt`. Note: on Python 3.14 "
+               "scikit-learn/xgboost may not have wheels yet — running the app on "
+               "Python 3.11–3.12 is the most reliable fix.")
     if proj_date is None:
+        if missing_deps:
+            st.error("No projections exist and " + dep_msg)
+            notes.append("Projection deps missing; cannot build projections.")
+            return notes, False, live_starters
         ok, out = run_script(PROJ_CMD, "Projection build (Stage B)", status)
         if ok:
             proj_date = today; projections_rebuilt = True
@@ -472,7 +499,16 @@ def ensure_fresh(status):
             notes.append("Projection build failed.")
             return notes, False, live_starters
     elif proj_date != today:
-        if stamp.get("proj_attempt_date") == today:
+        if missing_deps:
+            if stamp.get("proj_warn_date") != today:
+                st.warning("Skipping the projection refresh — " + dep_msg +
+                           f"\n\nContinuing with the existing projections from "
+                           f"{proj_date}; the sims below are still rebuilt from "
+                           "today's lineups.")
+                write_build_stamp(proj_warn_date=today)
+            notes.append(f"⚠️ Stage B deps not importable ({', '.join(missing_deps)}); "
+                         f"using existing projections from {proj_date}.")
+        elif stamp.get("proj_attempt_date") == today:
             notes.append(f"Using existing projections from {proj_date} "
                          "(today's projection rebuild was already attempted).")
         else:

@@ -78,6 +78,17 @@ It needs network access (Statcast/statsapi and the lineup feed). If the feed
 can't be reached, the app says so and falls back to the existing sims rather
 than silently using stale data.
 
+**Stage B (projections) requirements.** The projection rebuild additionally
+needs `scikit-learn`, `xgboost`, `pybaseball`, `pyarrow` and reachable
+`statsapi.mlb.com`. Before attempting it the app preflights those packages and,
+if any aren't importable, skips the rebuild with a precise message instead of a
+long failure (a common case on **Python 3.14**, where `scikit-learn`/`xgboost`
+may not have wheels yet — run the app on Python 3.11–3.12 for the full
+projection rebuild). If statsapi is unreachable, the pipeline now fails with a
+clear "statsapi returned no rate data" message rather than a cryptic error. In
+all these cases the **sims still rebuild** from today's slate on the existing
+projections.
+
 **Starter guard.** Independently of the sims, the pool is filtered to only the
 pitchers confirmed as today's **starters on the live slate**. So a pitcher who
 isn't starting (e.g. threw yesterday) can never appear in a lineup even if the

@@ -148,6 +148,15 @@ def fetch_rate_data(target_year: int, start_year: int = RATE_HIST_START,
     hit_df = pd.concat(hit_rows, ignore_index=True) if hit_rows else pd.DataFrame()
     pit_df = pd.concat(pit_rows, ignore_index=True) if pit_rows else pd.DataFrame()
 
+    # Fail loudly (and don't poison the cache with empty tables) if statsapi gave
+    # us nothing — otherwise this surfaces later as a cryptic KeyError('PlayerId').
+    if hit_df.empty or pit_df.empty or "PlayerId" not in hit_df.columns:
+        raise RuntimeError(
+            f"statsapi returned no rate data for {start_year}-{target_year - 1}: "
+            "every request failed (statsapi.mlb.com is likely blocked / returning "
+            "403, or this machine is offline). Stage B cannot build projections "
+            "without it. Verify statsapi.mlb.com is reachable from this machine.")
+
     # Derive rates. Guard against PA=0 to avoid div-by-zero.
     for df, denom_col in [(hit_df, "PA"), (pit_df, "TBF")]:
         if df.empty:
