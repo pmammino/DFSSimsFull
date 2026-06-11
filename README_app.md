@@ -47,6 +47,24 @@ Nothing runs until all four are set and you press **Run simulation**.
 > the candidate lineups are built only from players in your uploaded CSV (that
 > also have sims). Nothing outside your ownership file can appear in either.
 
+## Freshness check on every Run (auto-refresh)
+
+When you press **Run**, before anything else the app makes sure the underlying
+data is current:
+
+1. **Projections** — if the projection outputs in `out/` weren't built *today*,
+   it rebuilds projections **and** the correlated sims (Stage A–C via
+   `refresh_and_run.py`).
+2. **Confirmed lineups** — if projections are already current, it fetches the
+   live lineup feed and compares it to the slate the sims were built from; if a
+   confirmed lineup changed, it reruns the correlated sims (Stage C via
+   `run_slate.py`).
+
+This runs in a live progress panel and then continues straight into the contest
+sim. It needs network access (Statcast/statsapi and the lineup feed); if a
+refresh can't run or fails, the app warns and falls back to the existing sims
+rather than stopping. A full projection rebuild can take several minutes.
+
 ## Download a filled DraftKings upload file (step 3)
 
 After a run, you can export a ready-to-upload DK file:
@@ -79,11 +97,17 @@ Tweaking the count / sort / caps re-selects instantly without re-simulating.
 4. Inserts each candidate into the field per sim and ranks it →
    **Win% / Top10% / Top100% / AvgPlace** for every candidate.
 
-## Output
+## Output & inspecting lineups
 
-- On-page sortable results table (best-first) plus headline metrics.
+- Headline metrics + a ranked **candidate-lineups** table (Win% / Top10% /
+  Top100% / Avg-Best-Worst place / salary / stack).
+- **Select any row** to inspect that lineup: a clean, player-focused table
+  (slot, player, team, position, salary) with its key rates and best/avg/worst
+  finishing place.
+- **📊 Show finishing-position distribution** — a histogram of where that lineup
+  finished across *all* sim runs, with dashed markers at 1st, Top-10, Top-100
+  and the lineup's mean place.
 - Downloads: candidate results, candidate lineups, and the field — each as CSV.
-- The top candidate lineup is broken out player-by-player.
 
 ## Advanced (optional)
 

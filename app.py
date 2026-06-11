@@ -11,25 +11,31 @@ things that aren't fixed by the pipeline:
   * the number of sim runs to score against
   * the number of candidate lineups to develop
 
-Nothing runs until ALL four decisions are made and the user clicks Run, then the
-app builds an ownership-weighted field + a uniform candidate pool and reports the
-simulated contest outcomes (Win% / Top10% / Top100% / AvgPlace) for every
-candidate lineup.
+Nothing runs until ALL four decisions are made and the user clicks Run. On Run
+the app first ensures the underlying data is current — if the projections aren't
+from today it rebuilds projections + correlated sims (Stage A–C); otherwise if
+the confirmed lineups have changed it reruns the correlated sims (Stage C) —
+then builds an ownership-weighted field + a uniform candidate pool and reports
+the simulated contest outcomes (Win% / Top10% / Top100% / AvgPlace) for every
+candidate lineup. Each lineup can be inspected (clean player table) and its
+finishing-place distribution across all sim runs shown.
 
 Launch:
     streamlit run app.py
 """
-import csv, io, json, os, re, tempfile, time
+import csv, datetime, glob, io, json, os, re, subprocess, sys, tempfile, time
 from collections import Counter
+import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 from stage_d import (load_sims, build_pool, lineups_to_df, score_matrix,
-                     run_contest, norm as normname, COLS, HITC, SLOT)
+                     norm as normname, COLS, HITC, SLOT)
 from mlb_lineup_builder import Pool, Builder
 from field_simulator import (normalize_to_slots, adjust_ownership,
                              beta_for_size, tilt_structures)
+import slate_ingest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DELIV = os.path.join(HERE, "deliverables")
@@ -183,6 +189,147 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, player_cap=1.0, team_cap=1.
             "max_player": max(expo.values()) if expo else 0,
             "max_team": max(teamc.values()) if teamc else 0}
     return out.getvalue(), info
+
+
+# --------------------------------------------------------------------------- #
+# Freshness: rebuild projections / sims before a run when they're stale
+# --------------------------------------------------------------------------- #
+def projections_built_date():
+    """Date (YYYY-MM-DD) the projection outputs in out/ were last written, or
+    None if they don't exist."""
+    fs = glob.glob(os.path.join(HERE, "out", "*pa_projections*.csv"))
+    if not fs:
+        return None
+    newest = max(os.path.getmtime(f) for f in fs)
+    return datetime.date.fromtimestamp(newest).isoformat()
+
+
+def slate_signature(slate):
+    """A comparable fingerprint of a slate's confirmed/expected batting orders:
+    {team_code: [player names in batting order]} for every team posted."""
+    sig = {}
+    for g in (slate or {}).get("games", {}).values():
+        for side in ("away", "home"):
+            sig[g.get(side)] = [p.get("name") for p in g.get("lineups", {}).get(side, [])]
+    return sig
+
+
+def load_stored_slate():
+    p = os.path.join(HERE, "data", "slate.json")
+    if os.path.exists(p):
+        try:
+            return json.load(open(p))
+        except Exception:
+            return None
+    return None
+
+
+def run_stage(script, label, status):
+    """Run a pipeline script as a subprocess, surfacing a short status. Returns
+    True on success, False (with a warning) on failure — never raises, so the
+    app can fall back to existing sims."""
+    status.write(f"⏳ {label} …")
+    try:
+        p = subprocess.run([sys.executable, os.path.join(HERE, script)],
+                           cwd=HERE, capture_output=True, text=True)
+    except Exception as e:
+        st.warning(f"{label} could not start ({e}). Using existing data.")
+        return False
+    if p.returncode != 0:
+        tail = "\n".join((p.stderr or p.stdout or "").strip().splitlines()[-8:])
+        st.warning(f"{label} failed — using existing data.\n\n```\n{tail}\n```")
+        return False
+    status.write(f"✓ {label} complete.")
+    return True
+
+
+def ensure_fresh(status):
+    """Before a run: (1) if projections aren't from today, rebuild projections +
+    sims (Stage A–C); (2) else if confirmed lineups changed, rerun the
+    correlated sims (Stage C). Returns (notes, sims_changed)."""
+    notes, sims_changed = [], False
+    today = datetime.date.today().isoformat()
+
+    built = projections_built_date()
+    if built != today:
+        was = built or "never"
+        status.write(f"Projections last built **{was}** (today is {today}). "
+                     "Rebuilding projections and correlated sims…")
+        if run_stage("refresh_and_run.py", "Projection + sim refresh (Stage A–C)", status):
+            notes.append(f"Rebuilt projections + sims (were from {was}).")
+            sims_changed = True
+        return notes, sims_changed  # refresh_and_run also rebuilt the sims
+
+    # projections are current — check whether confirmed lineups have moved
+    status.write("Projections are current — checking for confirmed-lineup changes…")
+    try:
+        live = slate_ingest.build_slate(write=False)  # live fetch
+    except Exception as e:
+        notes.append(f"Couldn't check live lineups ({type(e).__name__}); "
+                     "using existing sims.")
+        return notes, False
+
+    stored = load_stored_slate()
+    if stored is None or slate_signature(live) != slate_signature(stored):
+        status.write("Confirmed lineups changed — rerunning correlated sims (Stage C)…")
+        if run_stage("run_slate.py", "Correlated sim rerun (Stage C)", status):
+            notes.append("Reran correlated sims for updated lineups.")
+            sims_changed = True
+    else:
+        notes.append("Projections current and confirmed lineups unchanged.")
+    return notes, sims_changed
+
+
+# --------------------------------------------------------------------------- #
+# Contest scoring that also captures each candidate's finishing-place
+# distribution (compact per-candidate histogram + exact best/mean/worst)
+# --------------------------------------------------------------------------- #
+def run_contest_dist(field_mat, cand_mat, n_sim, n_field, nbins=60):
+    N = cand_mat.shape[1]
+    wins = np.zeros(N, np.int64); t10 = np.zeros(N, np.int64)
+    t100 = np.zeros(N, np.int64); ps = np.zeros(N, np.int64)
+    best = np.full(N, n_field + 1, np.int64); worst = np.zeros(N, np.int64)
+    edges = np.unique(np.linspace(1, n_field + 1, nbins + 1).astype(np.int64))
+    counts = np.zeros((N, len(edges) - 1), np.int64)
+    idx = np.arange(N)
+    for s in range(n_sim):
+        fs = np.sort(field_mat[s]); cv = cand_mat[s]
+        pl = (n_field - np.searchsorted(fs, cv, side="right")) + 1
+        wins += (pl == 1); t10 += (pl <= 10); t100 += (pl <= 100); ps += pl
+        best = np.minimum(best, pl); worst = np.maximum(worst, pl)
+        b = np.clip(np.searchsorted(edges, pl, side="right") - 1, 0, len(edges) - 2)
+        np.add.at(counts, (idx, b), 1)
+    dist = {"edges": edges, "counts": counts, "best": best, "worst": worst,
+            "mean": ps / n_sim}
+    return wins, t10, t100, ps / n_sim, dist
+
+
+def place_distribution_chart(dist, i, n_field, n_sim):
+    """Altair histogram of candidate i's finishing place with threshold markers."""
+    edges = dist["edges"]; counts = dist["counts"][i]
+    centers = (edges[:-1] + edges[1:]) / 2
+    width = np.diff(edges)
+    bars = pd.DataFrame({"place": centers, "sims": counts,
+                         "pct": 100 * counts / n_sim, "w": width})
+    chart = alt.Chart(bars).mark_bar(opacity=0.85).encode(
+        x=alt.X("place:Q", title="Finishing place (1 = win)",
+                scale=alt.Scale(domain=[1, max(2, n_field)])),
+        y=alt.Y("sims:Q", title=f"Sims (of {n_sim:,})"),
+        tooltip=[alt.Tooltip("place:Q", title="≈place", format=".0f"),
+                 alt.Tooltip("sims:Q", title="sims"),
+                 alt.Tooltip("pct:Q", title="% of sims", format=".2f")])
+    marks = [(1, "1st", "#d62728"), (10, "Top-10", "#ff7f0e"),
+             (100, "Top-100", "#2ca02c"),
+             (float(dist["mean"][i]), "Mean", "#1f77b4")]
+    layers = [chart]
+    for x, label, color in marks:
+        if x <= n_field:
+            rule_df = pd.DataFrame({"x": [x], "label": [label]})
+            layers.append(alt.Chart(rule_df).mark_rule(
+                color=color, strokeDash=[4, 3], size=2).encode(
+                x="x:Q", tooltip=[alt.Tooltip("label:N", title="marker"),
+                                  alt.Tooltip("x:Q", title="place", format=".0f")]))
+    return alt.layer(*layers).properties(height=300)
 
 
 # --------------------------------------------------------------------------- #
@@ -379,25 +526,42 @@ if submitted:
             st.warning(e)
         st.stop()
 
-    K = int(sim_runs)
     if contest_size > 100_000 or num_candidates > 50_000:
         st.info("Large request — field/candidate construction and scoring may "
                 "take a while and use significant memory.")
 
     t0 = time.time()
-    # subsample the sims to the requested number of runs (sim index is aligned
-    # across all players, so a prefix slice preserves the correlation structure)
-    score_k = {k: v[:K] for k, v in score.items()}
-
-    # ---- build the pool (write CSV to a temp path for build_pool) ----
     with st.status("Running contest simulation…", expanded=True) as status:
-        st.write("Building player pool from your CSV + sims…")
+        # ---- 0) freshness: rebuild projections / sims when stale ----
+        notes, sims_changed = ensure_fresh(status)
+        for n in notes:
+            st.write("• " + n)
+        H_, P_, score_, n_sim_ = H, P, score, n_sim
+        if sims_changed:
+            hp_, pp_ = find_sims()
+            if hp_ and pp_:
+                H_, P_, score_, n_sim_ = cached_sims(
+                    hp_, os.path.getmtime(hp_), pp_, os.path.getmtime(pp_))
+
+        K = min(int(sim_runs), int(n_sim_))
+        # sim index is aligned across players, so a prefix slice preserves the
+        # correlation structure
+        score_k = {k: v[:K] for k, v in score_.items()}
+        simnames = set(score_k)
+        if int(dk_df["FullName"].map(lambda n: normname(n) in simnames).sum()) == 0:
+            status.update(label="No players match the sims", state="error")
+            st.error("After the freshness check, none of your slate players "
+                     "matched the sim universe. Check the slate file.")
+            st.stop()
+
+        # ---- build the pool (write CSV to a temp path for build_pool) ----
+        st.write("Building player pool from your slate + sims…")
         with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False,
                                          newline="") as tf:
             dk_df.to_csv(tf.name, index=False)
             tmp_csv = tf.name
         try:
-            pool = build_pool(tmp_csv, H, P, score_k)
+            pool = build_pool(tmp_csv, H_, P_, score_k)
         finally:
             os.unlink(tmp_csv)
 
@@ -405,18 +569,17 @@ if submitted:
         npi = pool[pool.Pos == "P"].Name.nunique()
         nt = pool.Team.nunique()
         st.write(f"Pool: **{nh} hitters + {npi} starters** across **{nt} teams** "
-                 "— drawn only from your uploaded ownership (players with sims). "
+                 "— drawn only from your uploaded slate (players with sims). "
                  "Both the field and the candidate lineups use only these players.")
-        simnames = set(score_k)
         dropped = len(dk_df) - int(dk_df["FullName"].map(
             lambda n: normname(n) in simnames).sum())
         if dropped:
-            st.caption(f"{dropped} player(s) in your CSV had no sim and were "
+            st.caption(f"{dropped} player(s) in your slate had no sim and were "
                        "excluded (they can't be scored).")
         if npi < 2 or nh < 8:
             status.update(label="Pool too small to build lineups", state="error")
             st.error("Need at least 2 starting pitchers and 8 hitters in the "
-                     "matched pool to fill a roster. Check your CSV.")
+                     "matched pool to fill a roster. Check your slate file.")
             st.stop()
 
         # ---- candidate lineups (uniform, ownership-blind, starters only) ----
@@ -448,9 +611,10 @@ if submitted:
                        "that could be built.")
         field_mat = score_matrix(field, score_k, K)
 
-        # ---- the contest ----
+        # ---- the contest (captures each candidate's finishing-place distro) ----
         st.write(f"Simulating the contest over {K:,} runs…")
-        wins, t10, t100, avg = run_contest(field_mat, cand_mat, K, len(field))
+        wins, t10, t100, avg, dist = run_contest_dist(
+            field_mat, cand_mat, K, len(field))
         status.update(label=f"Done in {time.time()-t0:.1f}s", state="complete")
 
     # ---- results for the developed (candidate) lineups ----
@@ -463,6 +627,8 @@ if submitted:
     res["Top100"] = t100
     res["Top100%"] = np.round(100 * t100 / K, 2)
     res["AvgPlace"] = np.round(avg, 1)
+    res["BestPlace"] = dist["best"]
+    res["WorstPlace"] = dist["worst"]
     res = res.sort_values(["Wins", "Top10", "Top100", "AvgPlace"],
                           ascending=[False, False, False, True]).reset_index(drop=True)
 
@@ -470,7 +636,7 @@ if submitted:
     st.session_state["sim"] = {
         "res": res, "cands": cands, "field_df": lineups_to_df(field),
         "K": K, "contest_size": contest_size, "field_n": len(field), "beta": beta,
-        "best_lineup": cands[res.loc[0, "Candidate"] - 1],
+        "best_lineup": cands[res.loc[0, "Candidate"] - 1], "dist": dist,
         "id_map": id_map,  # IDs captured from the uploaded slate file (may be empty)
     }
 
@@ -496,9 +662,26 @@ else:
     m3.metric("Best Top100%", f"{res['Top100%'].max():.1f}%")
     m4.metric("Best AvgPlace", f"{res['AvgPlace'].min():,.0f}")
 
-    st.subheader("Simulated outcomes — candidate lineups")
-    st.caption("Sorted best-first by Wins → Top10 → Top100 → AvgPlace.")
-    st.dataframe(res, use_container_width=True, height=420)
+    st.subheader("Candidate lineups")
+    st.caption("Ranked best-first (Wins → Top10 → Top100 → AvgPlace). "
+               "**Select a row** to inspect its players and finishing-place "
+               "distribution.")
+
+    summary = pd.DataFrame({
+        "Rank": np.arange(1, len(res) + 1),
+        "Win%": res["Win%"], "Top10%": res["Top10%"], "Top100%": res["Top100%"],
+        "Avg place": res["AvgPlace"], "Best": res["BestPlace"],
+        "Worst": res["WorstPlace"], "Salary": res["Salary"], "Stack": res["Stack"],
+    })
+    event = st.dataframe(
+        summary, use_container_width=True, height=380, hide_index=True,
+        on_select="rerun", selection_mode="single-row",
+        column_config={
+            "Win%": st.column_config.NumberColumn(format="%.2f%%"),
+            "Top10%": st.column_config.NumberColumn(format="%.1f%%"),
+            "Top100%": st.column_config.NumberColumn(format="%.1f%%"),
+            "Avg place": st.column_config.NumberColumn(format="%.0f"),
+            "Salary": st.column_config.NumberColumn(format="$%d")})
 
     d1, d2, d3 = st.columns(3)
     d1.download_button("Download candidate results (CSV)",
@@ -514,14 +697,51 @@ else:
                        file_name=f"field_{sim['field_n']}.csv",
                        mime="text/csv", use_container_width=True)
 
-    with st.expander("Top candidate lineup detail"):
-        best = sim["best_lineup"]
-        rows = [{"Slot": COLS[i], "Player": pl.Name, "Team": pl.Team,
-                 "Pos": pl.Pos, "Salary": pl.Salary}
-                for i, pl in enumerate(best["players"])]
-        st.table(pd.DataFrame(rows))
-        st.caption(f"Total salary ${best['salary']:,} · stack "
-                   f"{'-'.join(map(str, sorted(best['teams'].values(), reverse=True)))}")
+    # ---- selected-lineup detail: players are the focus ----
+    try:
+        sel = list(event.selection["rows"])
+    except Exception:
+        sel = list(getattr(getattr(event, "selection", None), "rows", []) or [])
+    row_pos = sel[0] if sel else 0
+    r = res.loc[row_pos]
+    cand_idx = int(r["Candidate"]) - 1
+    lu = sim["cands"][cand_idx]
+
+    st.markdown(f"#### Lineup #{row_pos + 1} &nbsp;·&nbsp; {r['Stack']} stack "
+                f"&nbsp;·&nbsp; ${int(r['Salary']):,} / $50,000")
+    pc, ic = st.columns([3, 2])
+    with pc:
+        players_df = pd.DataFrame([
+            {"Slot": SLOT[i], "Player": pl.Name, "Team": pl.Team,
+             "Pos": pl.Pos, "Salary": pl.Salary}
+            for i, pl in enumerate(lu["players"])])
+        st.dataframe(
+            players_df, use_container_width=True, hide_index=True, height=388,
+            column_config={
+                "Slot": st.column_config.TextColumn(width="small"),
+                "Team": st.column_config.TextColumn(width="small"),
+                "Pos": st.column_config.TextColumn(width="small"),
+                "Salary": st.column_config.NumberColumn(format="$%d")})
+    with ic:
+        st.metric("Win %", f"{r['Win%']:.2f}%")
+        mm1, mm2 = st.columns(2)
+        mm1.metric("Top-10 %", f"{r['Top10%']:.1f}%")
+        mm2.metric("Top-100 %", f"{r['Top100%']:.1f}%")
+        mm3, mm4, mm5 = st.columns(3)
+        mm3.metric("Best", f"{int(r['BestPlace']):,}")
+        mm4.metric("Avg", f"{r['AvgPlace']:,.0f}")
+        mm5.metric("Worst", f"{int(r['WorstPlace']):,}")
+
+    if st.button("📊 Show finishing-position distribution", key="dist_btn",
+                 use_container_width=True):
+        st.session_state["show_dist_for"] = row_pos
+    if st.session_state.get("show_dist_for") == row_pos:
+        st.altair_chart(
+            place_distribution_chart(sim["dist"], cand_idx, sim["field_n"], K),
+            use_container_width=True)
+        st.caption(f"Finishing place of lineup #{row_pos + 1} across all {K:,} "
+                   f"sim runs in the {sim['field_n']:,}-entry field. Dashed lines "
+                   "mark 1st, Top-10, Top-100, and this lineup's mean place.")
 
     # ----------------------------------------------------------------------- #
     # Step 3 — filled DraftKings upload file
