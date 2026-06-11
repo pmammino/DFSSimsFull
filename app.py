@@ -36,6 +36,7 @@ from mlb_lineup_builder import Pool, Builder
 from field_simulator import (normalize_to_slots, adjust_ownership,
                              beta_for_size, tilt_structures)
 import slate_ingest
+import shared_store
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DELIV = os.path.join(HERE, "deliverables")
@@ -448,6 +449,12 @@ def ensure_fresh(status, force=False):
     Returns (notes, sims_changed, live_starters)."""
     notes, sims_changed = [], False
     today = datetime.date.today().isoformat()
+    # sync down the latest shared build before deciding anything
+    if shared_store.enabled():
+        try:
+            shared_store.pull()
+        except Exception:
+            pass
     stamp = read_build_stamp()
     proj_date = projections_built_date()
 
@@ -475,100 +482,126 @@ def ensure_fresh(status, force=False):
             stored_sig = slate_change_signature(base)
             write_build_stamp(slate_sig=stored_sig, slate_date=base.get("date"))
 
-    # --- 1) projections: ensure present; refresh best-effort when stale --------
-    projections_rebuilt = False
-    missing_deps = stage_b_missing_deps()
-    dep_msg = (f"Stage B can't run under this Python ({sys.version.split()[0]} at "
-               f"{sys.executable}) — these packages aren't importable: "
-               f"{', '.join(missing_deps)}. Install them with "
-               "`python -m pip install -r requirements.txt`. Note: on Python 3.14 "
-               "scikit-learn/xgboost may not have wheels yet — running the app on "
-               "Python 3.11–3.12 is the most reliable fix.")
-    want_proj = force or proj_date is None or proj_date != today
-    if want_proj:
-        if missing_deps:
-            if proj_date is None:
-                st.error("No projections exist and " + dep_msg)
-                notes.append("Projection deps missing; cannot build projections.")
-                return notes, False, live_starters
-            if stamp.get("proj_warn_date") != today:
-                st.warning("Skipping the projection refresh — " + dep_msg +
-                           f"\n\nContinuing with the existing projections from "
-                           f"{proj_date}; the sims below are still rebuilt from "
-                           "today's lineups.")
-                write_build_stamp(proj_warn_date=today)
-            notes.append(f"⚠️ Stage B deps not importable ({', '.join(missing_deps)}); "
-                         f"using existing projections from {proj_date}.")
-        elif (not force and proj_date is not None and proj_date != today
-              and stamp.get("proj_attempt_date") == today):
-            notes.append(f"Using existing projections from {proj_date} "
-                         "(today's projection rebuild was already attempted — "
-                         "tick “Force full refresh” to retry).")
-        else:
-            write_build_stamp(proj_attempt_date=today)
-            label = "Projection build (Stage B)"
-            status.write(f"{'Forcing a ' if force else ''}projection "
-                         f"{'build' if proj_date is None else 'refresh'} (Stage B)…")
-            ok, out = run_script(PROJ_CMD, label, status)
-            if ok:
-                proj_date = today; projections_rebuilt = True
-                write_build_stamp(projections_date=today)
-                notes.append("Rebuilt projections.")
-            elif proj_date is None:
-                st.error("No projections exist and the projection build failed — "
-                         f"cannot continue.\n\n```\n{_tail(out)}\n```")
-                notes.append("Projection build failed.")
-                return notes, False, live_starters
-            else:
-                st.warning("Projection rebuild (Stage B) failed — continuing with "
-                           f"the existing projections from {proj_date}. The sims "
-                           "below are still rebuilt from today's lineups.\n\n"
-                           f"```\n{_tail(out)}\n```")
-                notes.append(f"⚠️ Projection rebuild failed; using existing "
-                             f"projections from {proj_date}.")
-    elif stamp.get("projections_date") != today:
-        write_build_stamp(projections_date=today)
+    # serialize the heavy rebuild so concurrent users/instances don't all run it
+    _lock = shared_store.RefreshLock()
+    _lock.acquire()
+    if not _lock.acquired:
+        if shared_store.enabled():
+            try:
+                shared_store.pull()
+            except Exception:
+                pass
+        notes.append("A refresh is already running (another user/session) — "
+                     "using the latest shared sims.")
+        return notes, True, live_starters
 
-    # --- 2) sims: rebuild from today's live slate whenever it moved ------------
-    new_game_day = bool(slate_day and stamp.get("slate_date")
-                        and slate_day != stamp.get("slate_date"))
-    lineups_changed = live_sig is not None and (stored_sig is None
-                                                or live_sig != stored_sig)
-    need_sims = (force or not sims_present() or projections_rebuilt
-                 or new_game_day or lineups_changed)
-    if need_sims:
-        if not sims_present() and live_sig is None:
-            st.error("No sims on disk and the live feed is unreachable — can't "
-                     "build sims. Check your network and re-run.")
-            return notes, False, live_starters
-        if not sims_present():
-            why = "no sims on disk"
-        elif new_game_day:
-            why = f"new game day ({stamp.get('slate_date')}→{slate_day})"
-        elif lineups_changed and stored_sig is not None:
-            why = "lineup/matchup change: " + ", ".join(diff_slate(stored_sig, live_sig)[:8])
-        elif projections_rebuilt:
-            why = "rebuilt projections"
-        elif force:
-            why = "forced refresh"
+    try:
+        # --- 1) projections: ensure present; refresh best-effort when stale ----
+        projections_rebuilt = False
+        missing_deps = stage_b_missing_deps()
+        dep_msg = (f"Stage B can't run under this Python ({sys.version.split()[0]} at "
+                   f"{sys.executable}) — these packages aren't importable: "
+                   f"{', '.join(missing_deps)}. Install them with "
+                   "`python -m pip install -r requirements.txt`. Note: on Python 3.14 "
+                   "scikit-learn/xgboost may not have wheels yet — running the app on "
+                   "Python 3.11–3.12 is the most reliable fix.")
+        want_proj = force or proj_date is None or proj_date != today
+        if want_proj:
+            if missing_deps:
+                if proj_date is None:
+                    st.error("No projections exist and " + dep_msg)
+                    notes.append("Projection deps missing; cannot build projections.")
+                    return notes, False, live_starters
+                if stamp.get("proj_warn_date") != today:
+                    st.warning("Skipping the projection refresh — " + dep_msg +
+                               f"\n\nContinuing with the existing projections from "
+                               f"{proj_date}; the sims below are still rebuilt from "
+                               "today's lineups.")
+                    write_build_stamp(proj_warn_date=today)
+                notes.append(f"⚠️ Stage B deps not importable ({', '.join(missing_deps)}); "
+                             f"using existing projections from {proj_date}.")
+            elif (not force and proj_date is not None and proj_date != today
+                  and stamp.get("proj_attempt_date") == today):
+                notes.append(f"Using existing projections from {proj_date} "
+                             "(today's projection rebuild was already attempted — "
+                             "tick “Force full refresh” to retry).")
+            else:
+                write_build_stamp(proj_attempt_date=today)
+                label = "Projection build (Stage B)"
+                status.write(f"{'Forcing a ' if force else ''}projection "
+                             f"{'build' if proj_date is None else 'refresh'} (Stage B)…")
+                ok, out = run_script(PROJ_CMD, label, status)
+                if ok:
+                    proj_date = today; projections_rebuilt = True
+                    write_build_stamp(projections_date=today)
+                    notes.append("Rebuilt projections.")
+                elif proj_date is None:
+                    st.error("No projections exist and the projection build failed — "
+                             f"cannot continue.\n\n```\n{_tail(out)}\n```")
+                    notes.append("Projection build failed.")
+                    return notes, False, live_starters
+                else:
+                    st.warning("Projection rebuild (Stage B) failed — continuing with "
+                               f"the existing projections from {proj_date}. The sims "
+                               "below are still rebuilt from today's lineups.\n\n"
+                               f"```\n{_tail(out)}\n```")
+                    notes.append(f"⚠️ Projection rebuild failed; using existing "
+                                 f"projections from {proj_date}.")
+        elif stamp.get("projections_date") != today:
+            write_build_stamp(projections_date=today)
+
+        # --- 2) sims: rebuild from today's live slate whenever it moved --------
+        new_game_day = bool(slate_day and stamp.get("slate_date")
+                            and slate_day != stamp.get("slate_date"))
+        lineups_changed = live_sig is not None and (stored_sig is None
+                                                    or live_sig != stored_sig)
+        need_sims = (force or not sims_present() or projections_rebuilt
+                     or new_game_day or lineups_changed)
+        if need_sims:
+            if not sims_present() and live_sig is None:
+                st.error("No sims on disk and the live feed is unreachable — can't "
+                         "build sims. Check your network and re-run.")
+                return notes, False, live_starters
+            if not sims_present():
+                why = "no sims on disk"
+            elif new_game_day:
+                why = f"new game day ({stamp.get('slate_date')}→{slate_day})"
+            elif lineups_changed and stored_sig is not None:
+                why = "lineup/matchup change: " + ", ".join(diff_slate(stored_sig, live_sig)[:8])
+            elif projections_rebuilt:
+                why = "rebuilt projections"
+            elif force:
+                why = "forced refresh"
+            else:
+                why = "first run"
+            status.write("Rebuilding correlated sims from today's live slate "
+                         f"(lineups + matchups + Vegas totals) — {why}…")
+            ok, out = run_script(["run_slate.py"], "Correlated sims (Stage C)", status)
+            if ok:
+                _stamp_after_sims(today, live_sig)
+                notes.append(f"Rebuilt correlated sims from today's slate — {why}.")
+                sims_changed = True
+            else:
+                st.error("Sim rebuild (Stage C) failed — using existing sims.\n\n"
+                         f"```\n{_tail(out)}\n```")
+                notes.append("⚠️ Sim rebuild failed; using existing sims.")
         else:
-            why = "first run"
-        status.write("Rebuilding correlated sims from today's live slate "
-                     f"(lineups + matchups + Vegas totals) — {why}…")
-        ok, out = run_script(["run_slate.py"], "Correlated sims (Stage C)", status)
-        if ok:
-            _stamp_after_sims(today, live_sig)
-            notes.append(f"Rebuilt correlated sims from today's slate — {why}.")
-            sims_changed = True
-        else:
-            st.error("Sim rebuild (Stage C) failed — using existing sims.\n\n"
-                     f"```\n{_tail(out)}\n```")
-            notes.append("⚠️ Sim rebuild failed; using existing sims.")
-    else:
-        notes.append(f"No lineup/matchup changes since the last build "
-                     f"(slate {stamp.get('slate_date') or slate_day}); "
-                     "using the existing sims.")
-    return notes, sims_changed, live_starters
+            notes.append(f"No lineup/matchup changes since the last build "
+                         f"(slate {stamp.get('slate_date') or slate_day}); "
+                         "using the existing sims.")
+
+        # publish the refreshed build so every user/instance shares it
+        if shared_store.enabled() and (projections_rebuilt or sims_changed):
+            try:
+                with st.spinner("Publishing the refreshed build to the shared store…"):
+                    shared_store.push()
+                notes.append("Published the refreshed build to the shared store.")
+            except Exception as e:
+                notes.append(f"⚠️ Could not publish to the shared store "
+                             f"({type(e).__name__}); it stays local to this instance.")
+        return notes, sims_changed, live_starters
+    finally:
+        _lock.release()
 
 
 # --------------------------------------------------------------------------- #
@@ -633,6 +666,15 @@ st.caption(
     "player sims. You provide the expected ownership; you choose the contest "
     "size, the number of sim runs, and how many candidate lineups to develop."
 )
+
+# ---- shared store: pull the latest shared sims/projections once per session ----
+if shared_store.enabled() and not st.session_state.get("_shared_pulled"):
+    try:
+        with st.spinner("Syncing shared sims from the team store…"):
+            shared_store.pull()
+    except Exception as e:
+        st.caption(f"(shared-store sync skipped: {type(e).__name__})")
+    st.session_state["_shared_pulled"] = True
 
 # ---- sim universe (from deliverables/) ----
 hpath, ppath = find_sims()

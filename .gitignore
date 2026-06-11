@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 data/
 out/.build_stamp.json
+.streamlit/secrets.toml
 
 # per-stat sims exceed GitHub 100MB at full slates; regenerable via run_slate.py
 deliverables/hitter_stat_sims.npy

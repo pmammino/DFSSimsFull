@@ -8,3 +8,5 @@ pybaseball
 requests
 pyyaml
 streamlit
+altair
+boto3
