@@ -432,9 +432,10 @@ def _stamp_after_sims(today, live_sig):
                       slate_date=(fresh or {}).get("date") or (live_sig or {}).get("date"))
 
 
-def ensure_fresh(status):
+def ensure_fresh(status, force=False):
     """Refresh only what's stale, with the daily SIM rebuild decoupled from the
-    heavier projection rebuild:
+    heavier projection rebuild. When `force` is set, rebuild both projections
+    (bypassing the once-a-day attempt guard) and sims regardless of staleness.
 
       * Projections are rebuilt best-effort when stale — if that fails, the run
         continues on the existing projections (they change little day to day),
@@ -483,23 +484,13 @@ def ensure_fresh(status):
                "`python -m pip install -r requirements.txt`. Note: on Python 3.14 "
                "scikit-learn/xgboost may not have wheels yet — running the app on "
                "Python 3.11–3.12 is the most reliable fix.")
-    if proj_date is None:
+    want_proj = force or proj_date is None or proj_date != today
+    if want_proj:
         if missing_deps:
-            st.error("No projections exist and " + dep_msg)
-            notes.append("Projection deps missing; cannot build projections.")
-            return notes, False, live_starters
-        ok, out = run_script(PROJ_CMD, "Projection build (Stage B)", status)
-        if ok:
-            proj_date = today; projections_rebuilt = True
-            write_build_stamp(projections_date=today)
-            notes.append("Built projections.")
-        else:
-            st.error("No projections exist and the projection build failed — "
-                     f"cannot continue.\n\n```\n{_tail(out)}\n```")
-            notes.append("Projection build failed.")
-            return notes, False, live_starters
-    elif proj_date != today:
-        if missing_deps:
+            if proj_date is None:
+                st.error("No projections exist and " + dep_msg)
+                notes.append("Projection deps missing; cannot build projections.")
+                return notes, False, live_starters
             if stamp.get("proj_warn_date") != today:
                 st.warning("Skipping the projection refresh — " + dep_msg +
                            f"\n\nContinuing with the existing projections from "
@@ -508,24 +499,32 @@ def ensure_fresh(status):
                 write_build_stamp(proj_warn_date=today)
             notes.append(f"⚠️ Stage B deps not importable ({', '.join(missing_deps)}); "
                          f"using existing projections from {proj_date}.")
-        elif stamp.get("proj_attempt_date") == today:
+        elif (not force and proj_date is not None and proj_date != today
+              and stamp.get("proj_attempt_date") == today):
             notes.append(f"Using existing projections from {proj_date} "
-                         "(today's projection rebuild was already attempted).")
+                         "(today's projection rebuild was already attempted — "
+                         "tick “Force full refresh” to retry).")
         else:
             write_build_stamp(proj_attempt_date=today)
-            status.write(f"Projections are from {proj_date}; attempting a "
-                         "refresh (Stage B)…")
-            ok, out = run_script(PROJ_CMD, "Projection refresh (Stage B)", status)
+            label = "Projection build (Stage B)"
+            status.write(f"{'Forcing a ' if force else ''}projection "
+                         f"{'build' if proj_date is None else 'refresh'} (Stage B)…")
+            ok, out = run_script(PROJ_CMD, label, status)
             if ok:
                 proj_date = today; projections_rebuilt = True
                 write_build_stamp(projections_date=today)
                 notes.append("Rebuilt projections.")
+            elif proj_date is None:
+                st.error("No projections exist and the projection build failed — "
+                         f"cannot continue.\n\n```\n{_tail(out)}\n```")
+                notes.append("Projection build failed.")
+                return notes, False, live_starters
             else:
-                st.warning("Projection refresh (Stage B) failed — continuing with "
+                st.warning("Projection rebuild (Stage B) failed — continuing with "
                            f"the existing projections from {proj_date}. The sims "
                            "below are still rebuilt from today's lineups.\n\n"
                            f"```\n{_tail(out)}\n```")
-                notes.append(f"⚠️ Projection refresh failed; using existing "
+                notes.append(f"⚠️ Projection rebuild failed; using existing "
                              f"projections from {proj_date}.")
     elif stamp.get("projections_date") != today:
         write_build_stamp(projections_date=today)
@@ -535,8 +534,8 @@ def ensure_fresh(status):
                         and slate_day != stamp.get("slate_date"))
     lineups_changed = live_sig is not None and (stored_sig is None
                                                 or live_sig != stored_sig)
-    need_sims = (not sims_present() or projections_rebuilt or new_game_day
-                 or lineups_changed)
+    need_sims = (force or not sims_present() or projections_rebuilt
+                 or new_game_day or lineups_changed)
     if need_sims:
         if not sims_present() and live_sig is None:
             st.error("No sims on disk and the live feed is unreachable — can't "
@@ -550,6 +549,8 @@ def ensure_fresh(status):
             why = "lineup/matchup change: " + ", ".join(diff_slate(stored_sig, live_sig)[:8])
         elif projections_rebuilt:
             why = "rebuilt projections"
+        elif force:
+            why = "forced refresh"
         else:
             why = "first run"
         status.write("Rebuilding correlated sims from today's live slate "
@@ -825,6 +826,11 @@ with st.form("contest_form", clear_on_submit=False):
         seed_field = s1.number_input("Field seed", value=101, step=1)
         seed_cand = s2.number_input("Candidate seed", value=2025, step=1)
 
+    force_refresh = st.checkbox(
+        "Force full refresh (rebuild projections + sims now)", value=False,
+        help="Rebuild projections (Stage B) and correlated sims (Stage C) "
+             "regardless of staleness — bypasses the once-a-day retry guard. "
+             "Use after fixing a data/connection issue.")
     submitted = st.form_submit_button("▶ Run simulation", type="primary",
                                       use_container_width=True)
 
@@ -856,7 +862,7 @@ if submitted:
     t0 = time.time()
     with st.status("Running contest simulation…", expanded=True) as status:
         # ---- 0) freshness: rebuild projections / sims when stale ----
-        notes, sims_changed, live_starters = ensure_fresh(status)
+        notes, sims_changed, live_starters = ensure_fresh(status, force=force_refresh)
         for n in notes:
             st.write("• " + n)
         H_, P_, score_, n_sim_ = H, P, score, n_sim

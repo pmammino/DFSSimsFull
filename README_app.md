@@ -68,6 +68,10 @@ the last build. The projection rebuild and the sim rebuild are **decoupled**:
    This is what pulls the new lineups/matchups/totals into the sims.
 3. **Nothing changed** → no rebuild; it uses the sims already on disk.
 
+A **Force full refresh** checkbox (in step 2) rebuilds both projections and
+sims regardless of staleness and bypasses the once-a-day projection-retry guard
+— use it right after fixing a data/connection issue.
+
 Because Stage B and Stage C run independently, a projection-build failure no
 longer blocks the sim rebuild. The progress panel shows the live slate it read
 and exactly what changed (e.g. `ATL SP Sale→Lopez`, `NYM lineup`, `game day …`),
