@@ -329,14 +329,48 @@ def projections_built_date():
     return max(dates) if dates else None
 
 
-def slate_signature(slate):
-    """A comparable fingerprint of a slate's confirmed/expected batting orders:
-    {team_code: [player names in batting order]} for every team posted."""
-    sig = {}
-    for g in (slate or {}).get("games", {}).values():
+def slate_change_signature(slate):
+    """A comparable fingerprint of the slate that captures everything a refresh
+    cares about: the game date, each team's batting order (lineups/players), and
+    each team's starting pitcher (matchups). A change in any of these means the
+    correlated sims are stale."""
+    if not slate:
+        return None
+    teams = {}
+    for g in slate.get("games", {}).values():
         for side in ("away", "home"):
-            sig[g.get(side)] = [p.get("name") for p in g.get("lineups", {}).get(side, [])]
-    return sig
+            tcode = g.get(side)
+            if not tcode:
+                continue
+            order = [p.get("name") for p in g.get("lineups", {}).get(side, [])]
+            pit = g.get("pitchers", {}).get(side, {}) or {}
+            sp = pit.get("starter") or pit.get("primary") or pit.get("opener")
+            teams[tcode] = {"order": order, "sp": sp}
+    return {"date": slate.get("date"), "teams": teams}
+
+
+def diff_slate(stored_sig, live_sig):
+    """Human-readable list of what changed between two slate signatures."""
+    if not stored_sig:
+        return ["no prior build recorded"]
+    out = []
+    if stored_sig.get("date") != live_sig.get("date"):
+        out.append(f"game day {stored_sig.get('date')}→{live_sig.get('date')}")
+    a, b = stored_sig.get("teams", {}), live_sig.get("teams", {})
+    for t in sorted(set(a) | set(b)):
+        ta, tb = a.get(t), b.get(t)
+        if ta == tb:
+            continue
+        if ta and tb and ta.get("sp") != tb.get("sp"):
+            out.append(f"{t} SP {ta.get('sp')}→{tb.get('sp')}")
+        else:
+            out.append(f"{t} lineup")
+    return out
+
+
+def sims_present():
+    h, p = find_sims()
+    return bool(h and p)
 
 
 def load_stored_slate():
@@ -368,49 +402,95 @@ def run_stage(script, label, status):
     return True
 
 
+def _stamp_after_build(today, live_sig, full):
+    """Record the build: read the freshly written slate so the stored signature
+    reflects exactly what the sims were built from."""
+    fresh = load_stored_slate()
+    fsig = slate_change_signature(fresh) or live_sig
+    kw = {"sims_date": today, "slate_sig": fsig,
+          "slate_date": (fresh or {}).get("date") or (live_sig or {}).get("date")}
+    if full:
+        kw["projections_date"] = today
+    write_build_stamp(**kw)
+
+
 def ensure_fresh(status):
-    """Before a run: (1) if projections aren't from today, rebuild projections +
-    sims (Stage A–C); (2) else if confirmed lineups changed, rerun the
-    correlated sims (Stage C). Returns (notes, sims_changed)."""
+    """Before a run, refresh only what's stale. A refresh is needed when the
+    game day changes, or the confirmed lineups / starting-pitcher matchups move
+    versus what the current sims were built from. The decision always compares
+    the LIVE API feed against the signature persisted in the build stamp, so it
+    works across sessions and never relies on a stale saved slate.json.
+
+    Returns (notes, sims_changed)."""
     notes, sims_changed = [], False
     today = datetime.date.today().isoformat()
+    stamp = read_build_stamp()
+    proj_date = projections_built_date()
 
-    built = projections_built_date()
-    if built != today:
-        was = built or "never"
-        status.write(f"Projections last built **{was}** (today is {today}). "
-                     "Rebuilding projections and correlated sims…")
+    # Always read the live feed so we compare against the API, not a saved file.
+    live = live_sig = None
+    try:
+        status.write("Reading the live lineup/matchup feed…")
+        live = slate_ingest.build_slate(write=False)
+        live_sig = slate_change_signature(live)
+        n_lu = sum(1 for tg in live_sig["teams"].values() if tg["order"])
+        status.write(f"Live feed: slate {live_sig.get('date')}, "
+                     f"{len(live_sig['teams'])} teams, {n_lu} lineups posted.")
+    except Exception as e:
+        notes.append(f"⚠️ Couldn't reach the live lineup feed ({type(e).__name__}). "
+                     "Can't check for lineup/matchup changes — using the last "
+                     "built sims. Check your network and re-run.")
+
+    slate_day = live.get("date") if live else None
+    stored_sig = stamp.get("slate_sig")
+    # adopt the existing slate.json as the baseline if we've never stamped one
+    if stored_sig is None and sims_present():
+        base = load_stored_slate()
+        if base:
+            stored_sig = slate_change_signature(base)
+            write_build_stamp(slate_sig=stored_sig, slate_date=base.get("date"))
+
+    # ---- (1) game day changed, or projections not built today -> full rebuild
+    new_game_day = bool(slate_day and stamp.get("slate_date")
+                        and slate_day != stamp.get("slate_date"))
+    if proj_date != today or new_game_day:
+        why = ("new game day "
+               f"({stamp.get('slate_date')}→{slate_day})" if new_game_day
+               else f"projections last built {proj_date or 'never'} (today {today})")
+        status.write(f"Full refresh needed — {why}. Rebuilding projections + sims…")
         if run_stage("refresh_and_run.py", "Projection + sim refresh (Stage A–C)", status):
-            write_build_stamp(projections_date=today, sims_date=today)
-            notes.append(f"Rebuilt projections + sims (were from {was}); "
-                         "recorded today's build.")
+            _stamp_after_build(today, live_sig, full=True)
+            notes.append(f"Rebuilt projections + sims — {why}.")
             sims_changed = True
-        return notes, sims_changed  # refresh_and_run also rebuilt the sims
+        return notes, sims_changed
 
-    # projections current — make sure today's build is recorded so the next
-    # same-day run is a no-op even if it was an external/earlier rebuild
-    if read_build_stamp().get("projections_date") != today:
+    if stamp.get("projections_date") != today:
         write_build_stamp(projections_date=today)
 
-    # check whether confirmed lineups have moved
-    status.write("Projections are current — checking for confirmed-lineup changes…")
-    try:
-        live = slate_ingest.build_slate(write=False)  # live fetch
-    except Exception as e:
-        notes.append(f"Projections current (built {built}). Couldn't check live "
-                     f"lineups ({type(e).__name__}); using existing sims.")
-        return notes, False
+    # ---- (2) no sims on disk yet -> build them
+    if not sims_present():
+        status.write("No correlated sims found — building them (Stage C)…")
+        if run_stage("run_slate.py", "Correlated sims (Stage C)", status):
+            _stamp_after_build(today, live_sig, full=False)
+            notes.append("Built correlated sims.")
+            sims_changed = True
+        return notes, sims_changed
 
-    stored = load_stored_slate()
-    if stored is None or slate_signature(live) != slate_signature(stored):
-        status.write("Confirmed lineups changed — rerunning correlated sims (Stage C)…")
+    # ---- (3) lineups / matchups moved vs what the sims were built from
+    if live_sig is None:
+        return notes, sims_changed          # already warned; keep existing sims
+    if stored_sig is None or live_sig != stored_sig:
+        changes = diff_slate(stored_sig, live_sig)
+        shown = ", ".join(changes[:10]) if changes else "updated"
+        status.write(f"Lineups/matchups changed ({shown}) — rerunning sims (Stage C)…")
         if run_stage("run_slate.py", "Correlated sim rerun (Stage C)", status):
-            write_build_stamp(sims_date=today)
-            notes.append("Reran correlated sims for updated lineups.")
+            _stamp_after_build(today, live_sig, full=False)
+            notes.append(f"Reran correlated sims — changes: {shown}.")
             sims_changed = True
     else:
-        notes.append(f"Projections current (built {built}) and confirmed lineups "
-                     "unchanged — no rebuild needed.")
+        notes.append(f"No lineup/matchup changes since the last build "
+                     f"(slate {stamp.get('slate_date') or slate_day}) — "
+                     "using the existing sims.")
     return notes, sims_changed
 
 

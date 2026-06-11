@@ -50,23 +50,35 @@ Nothing runs until all four are set and you press **Run simulation**.
 > the candidate lineups are built only from players in your uploaded CSV (that
 > also have sims). Nothing outside your ownership file can appear in either.
 
-## Freshness check on every Run (auto-refresh)
+## Freshness check on every Run (auto-refresh, persistent)
 
-When you press **Run**, before anything else the app makes sure the underlying
-data is current:
+When you press **Run**, the app reads the **live** lineup/matchup feed and
+compares it against a build stamp (`out/.build_stamp.json`) that records the
+game day, every team's batting order, and every team's starting pitcher as of
+the last build. It refreshes only what's actually stale:
 
-1. **Projections** — if the projection outputs in `out/` weren't built *today*,
-   it rebuilds projections **and** the correlated sims (Stage A–C via
-   `refresh_and_run.py`).
-2. **Confirmed lineups** — if projections are already current, it fetches the
-   live lineup feed and compares it to the slate the sims were built from; if a
-   confirmed lineup changed, it reruns the correlated sims (Stage C via
-   `run_slate.py`).
+1. **New game day** (or projections not built today) → rebuild projections **and**
+   correlated sims (Stage A–C via `refresh_and_run.py`).
+2. **Lineups or matchups changed** — a confirmed batting order moved, or a
+   starting pitcher changed — → rerun the correlated sims (Stage C via
+   `run_slate.py`, which pulls the lineups live from the API).
+3. **Nothing changed** → no rebuild; it uses the sims already on disk.
 
-This runs in a live progress panel and then continues straight into the contest
-sim. It needs network access (Statcast/statsapi and the lineup feed); if a
-refresh can't run or fails, the app warns and falls back to the existing sims
-rather than stopping. A full projection rebuild can take several minutes.
+The progress panel shows the live slate it read and exactly what changed (e.g.
+`ATL SP Sale→Lopez`, `NYM lineup`, `game day …→…`). Because the comparison is
+against the live API and the stamp is written on every successful build, the
+state **persists across sessions/restarts** on the same machine: re-opening the
+app the same day with unchanged lineups does **not** rebuild.
+
+It needs network access (Statcast/statsapi and the lineup feed). If the feed
+can't be reached, the app says so and falls back to the existing sims rather
+than silently using stale data. A full projection rebuild can take several
+minutes.
+
+> Persistence is file-based (`deliverables/`, `out/`, and the stamp). On a local
+> or persistent server these survive restarts. In an **ephemeral/cloud** session
+> that re-clones the repo each time, point those at a persistent volume (or
+> commit them) so they carry over.
 
 ## Download a filled DraftKings upload file (step 3)
 
