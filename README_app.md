@@ -75,6 +75,11 @@ can't be reached, the app says so and falls back to the existing sims rather
 than silently using stale data. A full projection rebuild can take several
 minutes.
 
+**Starter guard.** Independently of the sims, the pool is filtered to only the
+pitchers confirmed as today's **starters on the live slate**. So a pitcher who
+isn't starting (e.g. threw yesterday) can never appear in a lineup even if the
+sims are a build behind — the app reports any pitchers it excluded.
+
 > Persistence is file-based (`deliverables/`, `out/`, and the stamp). On a local
 > or persistent server these survive restarts. In an **ephemeral/cloud** session
 > that re-clones the repo each time, point those at a persistent volume (or

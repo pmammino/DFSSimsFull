@@ -421,21 +421,26 @@ def ensure_fresh(status):
     the LIVE API feed against the signature persisted in the build stamp, so it
     works across sessions and never relies on a stale saved slate.json.
 
-    Returns (notes, sims_changed)."""
+    Returns (notes, sims_changed, live_starters) where live_starters is the set
+    of normalized names of today's confirmed starting pitchers from the live
+    feed (or None if the feed couldn't be read)."""
     notes, sims_changed = [], False
     today = datetime.date.today().isoformat()
     stamp = read_build_stamp()
     proj_date = projections_built_date()
 
     # Always read the live feed so we compare against the API, not a saved file.
-    live = live_sig = None
+    live = live_sig = live_starters = None
     try:
         status.write("Reading the live lineup/matchup feed…")
         live = slate_ingest.build_slate(write=False)
         live_sig = slate_change_signature(live)
+        live_starters = {normname(tg["sp"]) for tg in live_sig["teams"].values()
+                         if tg.get("sp")}
         n_lu = sum(1 for tg in live_sig["teams"].values() if tg["order"])
         status.write(f"Live feed: slate {live_sig.get('date')}, "
-                     f"{len(live_sig['teams'])} teams, {n_lu} lineups posted.")
+                     f"{len(live_sig['teams'])} teams, {n_lu} lineups posted, "
+                     f"{len(live_starters)} starting pitchers.")
     except Exception as e:
         notes.append(f"⚠️ Couldn't reach the live lineup feed ({type(e).__name__}). "
                      "Can't check for lineup/matchup changes — using the last "
@@ -462,7 +467,7 @@ def ensure_fresh(status):
             _stamp_after_build(today, live_sig, full=True)
             notes.append(f"Rebuilt projections + sims — {why}.")
             sims_changed = True
-        return notes, sims_changed
+        return notes, sims_changed, live_starters
 
     if stamp.get("projections_date") != today:
         write_build_stamp(projections_date=today)
@@ -474,11 +479,11 @@ def ensure_fresh(status):
             _stamp_after_build(today, live_sig, full=False)
             notes.append("Built correlated sims.")
             sims_changed = True
-        return notes, sims_changed
+        return notes, sims_changed, live_starters
 
     # ---- (3) lineups / matchups moved vs what the sims were built from
     if live_sig is None:
-        return notes, sims_changed          # already warned; keep existing sims
+        return notes, sims_changed, live_starters   # already warned; keep sims
     if stored_sig is None or live_sig != stored_sig:
         changes = diff_slate(stored_sig, live_sig)
         shown = ", ".join(changes[:10]) if changes else "updated"
@@ -491,7 +496,7 @@ def ensure_fresh(status):
         notes.append(f"No lineup/matchup changes since the last build "
                      f"(slate {stamp.get('slate_date') or slate_day}) — "
                      "using the existing sims.")
-    return notes, sims_changed
+    return notes, sims_changed, live_starters
 
 
 # --------------------------------------------------------------------------- #
@@ -780,7 +785,7 @@ if submitted:
     t0 = time.time()
     with st.status("Running contest simulation…", expanded=True) as status:
         # ---- 0) freshness: rebuild projections / sims when stale ----
-        notes, sims_changed = ensure_fresh(status)
+        notes, sims_changed, live_starters = ensure_fresh(status)
         for n in notes:
             st.write("• " + n)
         H_, P_, score_, n_sim_ = H, P, score, n_sim
@@ -811,6 +816,21 @@ if submitted:
             pool = build_pool(tmp_csv, H_, P_, score_k)
         finally:
             os.unlink(tmp_csv)
+
+        # ---- hard guard: only today's confirmed starters may pitch ----
+        # Even if the sims momentarily lag, a pitcher who isn't a starter on the
+        # live slate (e.g. threw yesterday) must never appear in a lineup.
+        if live_starters:
+            is_sp = pool["Pos"] == "P"
+            ok_sp = pool["Name"].map(lambda n: normname(n) in live_starters)
+            dropped = sorted(set(pool[is_sp & ~ok_sp]["Name"]))
+            if dropped:
+                pool = pool[~is_sp | ok_sp].reset_index(drop=True)
+                st.write(f"⛔ Excluded {len(dropped)} pitcher(s) not starting today "
+                         f"per the live slate: {', '.join(dropped[:12])}"
+                         + (" …" if len(dropped) > 12 else "")
+                         + (". Your sims may be a build behind — they'll catch up "
+                            "on the next refresh." if not sims_changed else "."))
 
         nh = pool[pool.Pos != "P"].Name.nunique()
         npi = pool[pool.Pos == "P"].Name.nunique()
