@@ -288,14 +288,45 @@ def rows_to_upload_csv(rows_df, dkid):
 # --------------------------------------------------------------------------- #
 # Freshness: rebuild projections / sims before a run when they're stale
 # --------------------------------------------------------------------------- #
+BUILD_STAMP = os.path.join(HERE, "out", ".build_stamp.json")
+
+
+def read_build_stamp():
+    if os.path.exists(BUILD_STAMP):
+        try:
+            return json.load(open(BUILD_STAMP))
+        except Exception:
+            return {}
+    return {}
+
+
+def write_build_stamp(**kw):
+    """Record what was built and when, so a same-day re-run recognizes it as
+    current regardless of file-timestamp quirks. The stamp file is replaced on
+    every successful build."""
+    data = read_build_stamp()
+    data.update(kw)
+    data["ts"] = time.time()
+    try:
+        os.makedirs(os.path.dirname(BUILD_STAMP), exist_ok=True)
+        json.dump(data, open(BUILD_STAMP, "w"))
+    except Exception:
+        pass
+
+
 def projections_built_date():
-    """Date (YYYY-MM-DD) the projection outputs in out/ were last written, or
-    None if they don't exist."""
+    """Date (YYYY-MM-DD) the projections were last built. Prefers the explicit
+    build stamp the app writes; falls back to the projection files' mtime. The
+    later of the two wins, so a fresh build is always recognized."""
+    dates = []
+    stamped = read_build_stamp().get("projections_date")
+    if stamped:
+        dates.append(stamped)
     fs = glob.glob(os.path.join(HERE, "out", "*pa_projections*.csv"))
-    if not fs:
-        return None
-    newest = max(os.path.getmtime(f) for f in fs)
-    return datetime.date.fromtimestamp(newest).isoformat()
+    if fs:
+        newest = max(os.path.getmtime(f) for f in fs)
+        dates.append(datetime.date.fromtimestamp(newest).isoformat())
+    return max(dates) if dates else None
 
 
 def slate_signature(slate):
@@ -350,27 +381,36 @@ def ensure_fresh(status):
         status.write(f"Projections last built **{was}** (today is {today}). "
                      "Rebuilding projections and correlated sims…")
         if run_stage("refresh_and_run.py", "Projection + sim refresh (Stage A–C)", status):
-            notes.append(f"Rebuilt projections + sims (were from {was}).")
+            write_build_stamp(projections_date=today, sims_date=today)
+            notes.append(f"Rebuilt projections + sims (were from {was}); "
+                         "recorded today's build.")
             sims_changed = True
         return notes, sims_changed  # refresh_and_run also rebuilt the sims
 
-    # projections are current — check whether confirmed lineups have moved
+    # projections current — make sure today's build is recorded so the next
+    # same-day run is a no-op even if it was an external/earlier rebuild
+    if read_build_stamp().get("projections_date") != today:
+        write_build_stamp(projections_date=today)
+
+    # check whether confirmed lineups have moved
     status.write("Projections are current — checking for confirmed-lineup changes…")
     try:
         live = slate_ingest.build_slate(write=False)  # live fetch
     except Exception as e:
-        notes.append(f"Couldn't check live lineups ({type(e).__name__}); "
-                     "using existing sims.")
+        notes.append(f"Projections current (built {built}). Couldn't check live "
+                     f"lineups ({type(e).__name__}); using existing sims.")
         return notes, False
 
     stored = load_stored_slate()
     if stored is None or slate_signature(live) != slate_signature(stored):
         status.write("Confirmed lineups changed — rerunning correlated sims (Stage C)…")
         if run_stage("run_slate.py", "Correlated sim rerun (Stage C)", status):
+            write_build_stamp(sims_date=today)
             notes.append("Reran correlated sims for updated lineups.")
             sims_changed = True
     else:
-        notes.append("Projections current and confirmed lineups unchanged.")
+        notes.append(f"Projections current (built {built}) and confirmed lineups "
+                     "unchanged — no rebuild needed.")
     return notes, sims_changed
 
 
