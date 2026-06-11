@@ -18,6 +18,14 @@ pip install -r requirements.txt      # includes streamlit
 streamlit run app.py
 ```
 
+## Branding
+
+The UI uses brand purple **#A020FE** with black/white neutrals (set in
+`.streamlit/config.toml`). Drop your logo at **`assets/logo.png`** (or `.svg`,
+`.jpg`, `.webp`) — it's used as the top-left app logo, the page header, and the
+browser icon (favicon needs a raster `.png`/`.jpg`). A placeholder
+`assets/logo.svg` ships so the app is branded out of the box; replace it.
+
 Then open the URL it prints (default http://localhost:8501).
 
 ## What you provide (the app forces every choice)
@@ -32,7 +40,10 @@ Then open the URL it prints (default http://localhost:8501).
      (column-name variants like `Name`, `TeamAbbrev`, `Pos`, `Own` are accepted).
      Include a player-ID column — named `ID`, `Id`, `Player ID`, `DK ID`,
      `player_id`, or a DK `Name + ID` column — to enable the DK upload without a
-     separate template. The app shows which column it read IDs from.
+     separate template. If both a **contest ID** (`PlayerContestID`, `Contest ID`,
+     `Draftable ID`) and a generic player ID are present, the export uses the
+     **contest ID** (what DraftKings uploads require). The app shows which column
+     it read IDs from.
 
    Only players that match the sim universe are used; the app shows how many
    matched and how many DK IDs are available. `sample_ownership.csv` is a
