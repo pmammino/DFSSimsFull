@@ -98,10 +98,34 @@ pitchers confirmed as today's **starters on the live slate**. So a pitcher who
 isn't starting (e.g. threw yesterday) can never appear in a lineup even if the
 sims are a build behind — the app reports any pitchers it excluded.
 
-> Persistence is file-based (`deliverables/`, `out/`, and the stamp). On a local
-> or persistent server these survive restarts. In an **ephemeral/cloud** session
-> that re-clones the repo each time, point those at a persistent volume (or
-> commit them) so they carry over.
+## Sharing across users on a live deployment (S3)
+
+On Streamlit Community Cloud the filesystem is **ephemeral and per-instance**, so
+local files don't persist across restarts or replicas. To share one refreshed
+build across all users, configure an **S3 (or S3-compatible) bucket** in secrets:
+
+```toml
+# .streamlit/secrets.toml  (or the app's Settings → Secrets on Streamlit Cloud)
+[shared_store]
+bucket = "your-dfs-bucket"
+prefix = "dfs"
+region = "us-east-1"
+# endpoint_url = "https://<acct>.r2.cloudflarestorage.com"   # R2/MinIO/B2
+access_key_id = "AKIA..."
+secret_access_key = "..."
+```
+
+When configured, the app:
+- **pulls** the latest shared sims/projections/stamp on load and before each Run
+  (downloading only when the shared build is newer than local),
+- **rebuilds under a lock** — an in-process lock plus an S3 lock object — so two
+  users can't trigger the heavy rebuild at once; a user who arrives mid-rebuild
+  just gets the shared result,
+- **pushes** the regenerated artifacts back to S3 after a successful refresh.
+
+So one daily refresh is shared by everyone and survives restarts. With no
+`[shared_store]` config the app runs purely on the local filesystem (unchanged).
+Requires `boto3` (in `requirements.txt`). See `.streamlit/secrets.toml.example`.
 
 ## Download a filled DraftKings upload file (step 3)
 
