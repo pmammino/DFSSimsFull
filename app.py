@@ -967,13 +967,21 @@ with st.form("contest_form", clear_on_submit=False):
         seed_field = s1.number_input("Field seed", value=101, step=1)
         seed_cand = s2.number_input("Candidate seed", value=2025, step=1)
         talent_tilt = st.slider(
-            "Candidate talent tilt", min_value=0.0, max_value=2.0, value=0.6,
-            step=0.1,
+            "Candidate talent tilt (players)", min_value=0.0, max_value=2.0,
+            value=0.6, step=0.1,
             help="How strongly candidate lineups favor higher-projected players "
-                 "when filling stacks, one-off slots, and pitchers (stack-TEAM "
-                 "choice stays uniform). 0 = today's projection-blind uniform "
-                 "picks; ~0.6 moderate; higher = sharper toward elite players "
-                 "(incl. one-off bats).")
+                 "when filling stacks, one-off slots, and pitchers. 0 = "
+                 "projection-blind uniform picks; ~0.6 moderate; higher = sharper "
+                 "toward elite players (incl. one-off bats).")
+        team_tilt = st.slider(
+            "Candidate stack-team tilt (Vegas/talent)", min_value=0.0,
+            max_value=2.0, value=0.8, step=0.1,
+            help="How strongly candidates STACK higher-projected teams (team "
+                 "scoring power derived from the sims, which already embed Vegas/"
+                 "park/matchup). 0 = every team equally likely to be stacked "
+                 "(today's behavior); higher = concentrate stacks on the best "
+                 "offenses. Raise this to surface elite players and sharpen the "
+                 "edge; lower it for more team diversity.")
 
     force_refresh = st.checkbox(
         "Force full refresh (rebuild projections + sims now)", value=False,
@@ -1078,23 +1086,39 @@ if submitted:
         # ---- candidate lineups (uniform stack TEAMS; players tilted to talent) ----
         st.write(f"Developing {int(num_candidates):,} candidate lineups…")
         cdf = pool[(pool.Pos != "P") | (pool.Role == "SP")].copy()
+        # projected value per player from the sims (mean blended with ceiling)
+        tal = {}
+        for nm in cdf["Name"].unique():
+            a = score_k.get(normname(nm))
+            if a is not None and len(a):
+                tal[nm] = 0.5 * float(np.mean(a)) + 0.5 * float(np.percentile(a, 90))
+        base = float(np.median(list(tal.values()))) if tal else 1.0
+
         if talent_tilt > 0:
-            # projected value per player from the sims (mean blended with ceiling),
-            # fed as the pick weight; `uniform=True` keeps stack-TEAM choice uniform
-            # so only the players within stacks/one-offs/pitchers tilt to talent.
-            tal = {}
-            for nm in cdf["Name"].unique():
-                a = score_k.get(normname(nm))
-                if a is not None and len(a):
-                    tal[nm] = 0.5 * float(np.mean(a)) + 0.5 * float(np.percentile(a, 90))
-            base = float(np.median(list(tal.values()))) if tal else 1.0
+            # player pick weight = projected value^tilt (fills stacks/one-offs/pitchers)
             cdf["Ownership"] = cdf["Name"].map(
                 lambda n: max(tal.get(n, base), 0.01) ** float(talent_tilt))
-            st.caption(f"Candidate players tilted toward projected value "
-                       f"(tilt={talent_tilt:g}); stack teams stay uniform.")
         else:
-            cdf["Ownership"] = 1.0   # projection-blind uniform (tilt off)
-        cb = Builder(Pool(cdf), params, seed=int(seed_cand), uniform=True)
+            cdf["Ownership"] = 1.0   # projection-blind uniform players
+
+        # stack-TEAM weights via a z-score softmax of each team's scoring power
+        # (sum of its hitters' talent): weight = exp(tilt · z). Scale-invariant,
+        # so `tilt` acts as a temperature — 0 = uniform, higher = concentrate on
+        # the best offenses. None => uniform team choice (today's behavior).
+        team_weights = None
+        if team_tilt > 0:
+            hit = cdf[cdf["Pos"] != "P"]
+            tteam = hit.groupby("Team")["Name"].apply(
+                lambda s: sum(tal.get(n, base) for n in s)).to_dict()
+            vals = np.array(list(tteam.values()), float)
+            mu, sd = float(vals.mean()), float(vals.std()) + 1e-9
+            team_weights = {t: float(np.exp(float(team_tilt) * (v - mu) / sd))
+                            for t, v in tteam.items()}
+        st.caption(f"Candidates: player tilt={talent_tilt:g}, "
+                   f"stack-team tilt={team_tilt:g} "
+                   f"({'teams favor better offenses' if team_tilt > 0 else 'teams uniform'}).")
+        cb = Builder(Pool(cdf), params, seed=int(seed_cand), uniform=True,
+                     team_weights=team_weights)
         cands, c_att = build_many(cb, int(num_candidates), "Candidates")
         if not cands:
             status.update(label="Could not build candidate lineups", state="error")

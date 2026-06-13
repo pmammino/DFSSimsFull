@@ -133,10 +133,15 @@ def fill_team_stack(rng, pool, team, k, open_slots, used_names):
 # Core builder
 # ----------------------------------------------------------------------------- 
 class Builder:
-    def __init__(self, pool, params, seed=None, uniform=False):
+    def __init__(self, pool, params, seed=None, uniform=False, team_weights=None):
         self.pool = pool
         self.rng = np.random.default_rng(seed)
         self.uniform = uniform   # if True, pick stack TEAMS uniformly (ignore ownership)
+        # optional explicit per-team selection weights (already tilted); when
+        # provided they drive stack-TEAM choice regardless of `uniform`, letting
+        # candidates favor higher-projected/Vegas teams while player picks stay
+        # governed by the pool's Ownership column.
+        self.team_weights = team_weights
         structs = params["stack_structures"]
         self.struct_shapes = [tuple(s) for s, _ in structs]
         p = np.array([w for _, w in structs], float); self.struct_probs = p / p.sum()
@@ -171,7 +176,10 @@ class Builder:
                 return None
             w = []
             for t in cands:
-                wt = 1.0 if self.uniform else pool.team_weight[t]
+                if self.team_weights is not None:
+                    wt = max(self.team_weights.get(t, 1e-6), 1e-6)
+                else:
+                    wt = 1.0 if self.uniform else pool.team_weight[t]
                 # secondary stacks: usually NOT the primary's opponent (game stack rare)
                 if gi > 0 and hitters:
                     prim_team = hitters[0][1].Team
