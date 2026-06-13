@@ -196,14 +196,15 @@ The "Advanced field model" expander exposes:
 - **Field knobs** — medium baseline size, chalk sensitivity, stack-shape tilt,
   and the field/candidate RNG seeds.
 - **Candidate talent tilt (players)** — how strongly candidate lineups favor
-  higher-projected players when filling stacks, one-off slots, and pitchers
-  (0 = uniform; ~0.6 moderate).
-- **Candidate stack-team tilt (Vegas/talent)** — how strongly candidates stack
-  the better offenses. Team scoring power is derived from the sims (which embed
-  Vegas/park/matchup) and applied as a z-score softmax, so the value is a
-  *temperature*: 0 = every team equally likely to be stacked; ~0.8 (default)
-  concentrates most stacks on the top offenses while keeping spread; higher
-  sharpens further. Raise it to surface elite players and clarify the edge;
-  lower it for more team diversity.
+  higher-projected **players** (incl. one-off bats on any team) when filling
+  stacks, one-off slots, and pitchers. Applied as `exp(tilt·z)` on each player's
+  projected value, so it's a temperature: 0 = projection-blind uniform; ~0.7
+  (default) ≈3.5× more for the top players; higher sharpens further. **Stack
+  teams stay diverse** at any setting.
+- **Candidate stack-team tilt (Vegas/talent)** — *separate* lever for how
+  strongly candidates stack the better **offenses** (team scoring power from the
+  sims, applied as a z-score softmax). **0 = default** (every team equally likely
+  to be stacked); raise it to concentrate stacks on the top offenses (e.g. ~0.8
+  puts ~half the primary stacks on the top-5 offenses).
 
 All default to sensible values and don't change the four required inputs.

@@ -968,20 +968,20 @@ with st.form("contest_form", clear_on_submit=False):
         seed_cand = s2.number_input("Candidate seed", value=2025, step=1)
         talent_tilt = st.slider(
             "Candidate talent tilt (players)", min_value=0.0, max_value=2.0,
-            value=0.6, step=0.1,
-            help="How strongly candidate lineups favor higher-projected players "
-                 "when filling stacks, one-off slots, and pitchers. 0 = "
-                 "projection-blind uniform picks; ~0.6 moderate; higher = sharper "
-                 "toward elite players (incl. one-off bats).")
+            value=0.7, step=0.1,
+            help="How strongly candidate lineups favor higher-projected PLAYERS "
+                 "(incl. one-off bats on any team) when filling stacks, one-off "
+                 "slots, and pitchers. Applied as exp(tilt·z) on each player's "
+                 "projected value, so it's a temperature: 0 = projection-blind "
+                 "uniform; ~0.7 moderate; higher = sharply favor elite players.")
         team_tilt = st.slider(
             "Candidate stack-team tilt (Vegas/talent)", min_value=0.0,
-            max_value=2.0, value=0.8, step=0.1,
-            help="How strongly candidates STACK higher-projected teams (team "
-                 "scoring power derived from the sims, which already embed Vegas/"
-                 "park/matchup). 0 = every team equally likely to be stacked "
-                 "(today's behavior); higher = concentrate stacks on the best "
-                 "offenses. Raise this to surface elite players and sharpen the "
-                 "edge; lower it for more team diversity.")
+            max_value=2.0, value=0.0, step=0.1,
+            help="How strongly candidates STACK higher-projected TEAMS (team "
+                 "scoring power from the sims, which embed Vegas/park/matchup). "
+                 "0 (default) = every team equally likely to be stacked, so teams "
+                 "stay diverse; higher = concentrate stacks on the best offenses. "
+                 "Separate from the player tilt above.")
 
     force_refresh = st.checkbox(
         "Force full refresh (rebuild projections + sims now)", value=False,
@@ -1083,7 +1083,8 @@ if submitted:
                      "matched pool to fill a roster. Check your slate file.")
             st.stop()
 
-        # ---- candidate lineups (uniform stack TEAMS; players tilted to talent) ----
+        # ---- candidate lineups: players tilted to projected value (effective,
+        #      via a z-score softmax); stack TEAMS uniform unless team tilt > 0 ----
         st.write(f"Developing {int(num_candidates):,} candidate lineups…")
         cdf = pool[(pool.Pos != "P") | (pool.Role == "SP")].copy()
         # projected value per player from the sims (mean blended with ceiling)
@@ -1094,17 +1095,29 @@ if submitted:
                 tal[nm] = 0.5 * float(np.mean(a)) + 0.5 * float(np.percentile(a, 90))
         base = float(np.median(list(tal.values()))) if tal else 1.0
 
+        def zmap(names):
+            """z-score of talent within a player group (hitters or pitchers)."""
+            vals = np.array([tal[n] for n in names if n in tal], float)
+            if len(vals) == 0:
+                return {}
+            mu, sd = float(vals.mean()), float(vals.std()) + 1e-9
+            return {n: (tal.get(n, mu) - mu) / sd for n in names}
+
         if talent_tilt > 0:
-            # player pick weight = projected value^tilt (fills stacks/one-offs/pitchers)
-            cdf["Ownership"] = cdf["Name"].map(
-                lambda n: max(tal.get(n, base), 0.01) ** float(talent_tilt))
+            # weight = exp(tilt · z); scale-invariant so `tilt` is a temperature.
+            # z computed within hitters and within pitchers so each selection
+            # context (intra-stack, one-off, pitcher) is calibrated on its own.
+            zh = zmap(set(cdf[cdf["Pos"] != "P"]["Name"]))
+            zp = zmap(set(cdf[cdf["Pos"] == "P"]["Name"]))
+            cdf["Ownership"] = [
+                float(np.exp(float(talent_tilt) *
+                             (zp if r.Pos == "P" else zh).get(r.Name, 0.0)))
+                for r in cdf.itertuples()]
         else:
             cdf["Ownership"] = 1.0   # projection-blind uniform players
 
-        # stack-TEAM weights via a z-score softmax of each team's scoring power
-        # (sum of its hitters' talent): weight = exp(tilt · z). Scale-invariant,
-        # so `tilt` acts as a temperature — 0 = uniform, higher = concentrate on
-        # the best offenses. None => uniform team choice (today's behavior).
+        # stack-TEAM weights via a z-score softmax of team scoring power (sum of
+        # hitters' talent): weight = exp(tilt · z). 0 (default) => uniform teams.
         team_weights = None
         if team_tilt > 0:
             hit = cdf[cdf["Pos"] != "P"]
@@ -1114,7 +1127,7 @@ if submitted:
             mu, sd = float(vals.mean()), float(vals.std()) + 1e-9
             team_weights = {t: float(np.exp(float(team_tilt) * (v - mu) / sd))
                             for t, v in tteam.items()}
-        st.caption(f"Candidates: player tilt={talent_tilt:g}, "
+        st.caption(f"Candidates: player talent tilt={talent_tilt:g}, "
                    f"stack-team tilt={team_tilt:g} "
                    f"({'teams favor better offenses' if team_tilt > 0 else 'teams uniform'}).")
         cb = Builder(Pool(cdf), params, seed=int(seed_cand), uniform=True,
