@@ -966,6 +966,14 @@ with st.form("contest_form", clear_on_submit=False):
         s1, s2 = st.columns(2)
         seed_field = s1.number_input("Field seed", value=101, step=1)
         seed_cand = s2.number_input("Candidate seed", value=2025, step=1)
+        talent_tilt = st.slider(
+            "Candidate talent tilt", min_value=0.0, max_value=2.0, value=0.6,
+            step=0.1,
+            help="How strongly candidate lineups favor higher-projected players "
+                 "when filling stacks, one-off slots, and pitchers (stack-TEAM "
+                 "choice stays uniform). 0 = today's projection-blind uniform "
+                 "picks; ~0.6 moderate; higher = sharper toward elite players "
+                 "(incl. one-off bats).")
 
     force_refresh = st.checkbox(
         "Force full refresh (rebuild projections + sims now)", value=False,
@@ -1067,10 +1075,25 @@ if submitted:
                      "matched pool to fill a roster. Check your slate file.")
             st.stop()
 
-        # ---- candidate lineups (uniform, ownership-blind, starters only) ----
+        # ---- candidate lineups (uniform stack TEAMS; players tilted to talent) ----
         st.write(f"Developing {int(num_candidates):,} candidate lineups…")
         cdf = pool[(pool.Pos != "P") | (pool.Role == "SP")].copy()
-        cdf["Ownership"] = 1.0
+        if talent_tilt > 0:
+            # projected value per player from the sims (mean blended with ceiling),
+            # fed as the pick weight; `uniform=True` keeps stack-TEAM choice uniform
+            # so only the players within stacks/one-offs/pitchers tilt to talent.
+            tal = {}
+            for nm in cdf["Name"].unique():
+                a = score_k.get(normname(nm))
+                if a is not None and len(a):
+                    tal[nm] = 0.5 * float(np.mean(a)) + 0.5 * float(np.percentile(a, 90))
+            base = float(np.median(list(tal.values()))) if tal else 1.0
+            cdf["Ownership"] = cdf["Name"].map(
+                lambda n: max(tal.get(n, base), 0.01) ** float(talent_tilt))
+            st.caption(f"Candidate players tilted toward projected value "
+                       f"(tilt={talent_tilt:g}); stack teams stay uniform.")
+        else:
+            cdf["Ownership"] = 1.0   # projection-blind uniform (tilt off)
         cb = Builder(Pool(cdf), params, seed=int(seed_cand), uniform=True)
         cands, c_att = build_many(cb, int(num_candidates), "Candidates")
         if not cands:
