@@ -127,6 +127,33 @@ def cached_params(path, mtime):
     return None
 
 
+@st.cache_data(show_spinner=False)
+def cached_player_table(hpath, hmtime, ppath, pmtime):
+    """Per-player DK-point threshold table from the current sims (mean, floor/
+    median/ceiling, min/max, std, bust & boom rates). Cached on file mtimes."""
+    H, P, _, _ = cached_sims(hpath, hmtime, ppath, pmtime)
+    rows = []
+    for typ, D in (("Hitter", H), ("Pitcher", P)):
+        for nm, v in D.items():
+            a = np.asarray(v, float)
+            m = float(a.mean())
+            rows.append({
+                "Player": nm, "Type": typ,
+                "Proj": round(m, 1),
+                "Floor (p10)": round(float(np.percentile(a, 10)), 1),
+                "Median": round(float(np.percentile(a, 50)), 1),
+                "Ceiling (p90)": round(float(np.percentile(a, 90)), 1),
+                "p99": round(float(np.percentile(a, 99)), 1),
+                "Min": round(float(a.min()), 1),
+                "Max": round(float(a.max()), 1),
+                "Std": round(float(a.std()), 1),
+                "Bust% (≤0)": round(100 * float((a <= 0).mean()), 1),
+                "2x%": round(100 * float((a >= 2 * m).mean()), 1) if m > 0 else 0.0,
+                "30+%": round(100 * float((a >= 30).mean()), 1)})
+    return (pd.DataFrame(rows).sort_values("Proj", ascending=False)
+            .reset_index(drop=True))
+
+
 def find_sims():
     """Locate the two DK-point sim files in deliverables/."""
     h = os.path.join(DELIV, "hitter_dk_sims.npy")
@@ -514,7 +541,9 @@ def ensure_fresh(status, force=False):
         game day started, projections were rebuilt, or no sims exist — this is
         what actually pulls the new lineups/matchups/totals into the sims.
 
-    Returns (notes, sims_changed, live_starters)."""
+    Returns (notes, sims_changed, live_playable) where live_playable is the
+    set of normnames eligible to be rostered today (lineup hitters + starting/
+    opener/primary pitchers), or None if the live feed couldn't be read."""
     notes, sims_changed = [], False
     today = datetime.date.today().isoformat()
     # sync down the latest shared build before deciding anything
@@ -527,17 +556,30 @@ def ensure_fresh(status, force=False):
     proj_date = projections_built_date()
 
     # --- live feed (lineups + matchups + starters), compared against the API ---
-    live = live_sig = live_starters = None
+    live = live_sig = live_starters = live_playable = None
     try:
         status.write("Reading the live lineup/matchup feed…")
         live = slate_ingest.build_slate(write=False)
         live_sig = slate_change_signature(live)
         live_starters = {normname(tg["sp"]) for tg in live_sig["teams"].values()
                          if tg.get("sp")}
+        # everyone eligible to be rostered today: hitters in a posted (confirmed
+        # or expected) batting order + each game's starter/opener/primary pitcher
+        live_playable = set(live_starters)
+        for g in live.get("games", {}).values():
+            for side in ("away", "home"):
+                for pl in g.get("lineups", {}).get(side, []):
+                    if pl.get("name"):
+                        live_playable.add(normname(pl["name"]))
+                for role in ("starter", "opener", "primary"):
+                    nm = (g.get("pitchers", {}).get(side, {}) or {}).get(role)
+                    if nm:
+                        live_playable.add(normname(nm))
         n_lu = sum(1 for tg in live_sig["teams"].values() if tg["order"])
         status.write(f"Live feed: slate {live_sig.get('date')}, "
                      f"{len(live_sig['teams'])} teams, {n_lu} lineups posted, "
-                     f"{len(live_starters)} starting pitchers.")
+                     f"{len(live_starters)} starting pitchers, "
+                     f"{len(live_playable)} rosterable players.")
     except Exception as e:
         notes.append(f"⚠️ Couldn't reach the live lineup feed ({type(e).__name__}); "
                      "using the existing sims. Check your network and re-run.")
@@ -561,7 +603,7 @@ def ensure_fresh(status, force=False):
                 pass
         notes.append("A refresh is already running (another user/session) — "
                      "using the latest shared sims.")
-        return notes, True, live_starters
+        return notes, True, live_playable
 
     try:
         # --- 1) projections: ensure present; refresh best-effort when stale ----
@@ -579,7 +621,7 @@ def ensure_fresh(status, force=False):
                 if proj_date is None:
                     st.error("No projections exist and " + dep_msg)
                     notes.append("Projection deps missing; cannot build projections.")
-                    return notes, False, live_starters
+                    return notes, False, live_playable
                 if stamp.get("proj_warn_date") != today:
                     st.warning("Skipping the projection refresh — " + dep_msg +
                                f"\n\nContinuing with the existing projections from "
@@ -607,7 +649,7 @@ def ensure_fresh(status, force=False):
                     st.error("No projections exist and the projection build failed — "
                              f"cannot continue.\n\n```\n{_tail(out)}\n```")
                     notes.append("Projection build failed.")
-                    return notes, False, live_starters
+                    return notes, False, live_playable
                 else:
                     st.warning("Projection rebuild (Stage B) failed — continuing with "
                                f"the existing projections from {proj_date}. The sims "
@@ -629,7 +671,7 @@ def ensure_fresh(status, force=False):
             if not sims_present() and live_sig is None:
                 st.error("No sims on disk and the live feed is unreachable — can't "
                          "build sims. Check your network and re-run.")
-                return notes, False, live_starters
+                return notes, False, live_playable
             if not sims_present():
                 why = "no sims on disk"
             elif new_game_day:
@@ -667,7 +709,7 @@ def ensure_fresh(status, force=False):
             except Exception as e:
                 notes.append(f"⚠️ Could not publish to the shared store "
                              f"({type(e).__name__}); it stays local to this instance.")
-        return notes, sims_changed, live_starters
+        return notes, sims_changed, live_playable
     finally:
         _lock.release()
 
@@ -752,6 +794,29 @@ def place_distribution_chart(dist, i, n_field, n_sim):
         strokeOpacity=0)
 
 
+def player_score_chart(arr, nbins=40):
+    """Histogram of one player's DK-point outcomes across the sims."""
+    a = np.asarray(arr, float)
+    lo, hi = float(a.min()), float(a.max())
+    if hi <= lo:
+        hi = lo + 1.0
+    edges = np.linspace(lo, hi, nbins + 1)
+    cnt, _ = np.histogram(a, bins=edges)
+    centers = (edges[:-1] + edges[1:]) / 2
+    df = pd.DataFrame({"pts": centers, "pct": 100 * cnt / max(1, len(a))})
+    mean = float(a.mean())
+    bars = alt.Chart(df).mark_bar(color=BRAND, opacity=0.85).encode(
+        x=alt.X("pts:Q", title="DK points", scale=alt.Scale(domain=[lo, hi],
+                nice=False, zero=False)),
+        y=alt.Y("pct:Q", title="% of sims"),
+        tooltip=[alt.Tooltip("pts:Q", title="DK pts", format=".1f"),
+                 alt.Tooltip("pct:Q", title="% of sims", format=".2f")])
+    rule = alt.Chart(pd.DataFrame({"x": [mean]})).mark_rule(
+        color="#000000", strokeDash=[4, 3], size=1.5).encode(x="x:Q")
+    return alt.layer(bars, rule).properties(height=220).configure_view(
+        strokeOpacity=0)
+
+
 # --------------------------------------------------------------------------- #
 # Header
 # --------------------------------------------------------------------------- #
@@ -801,15 +866,46 @@ c1.metric("Hitters simmed", n_hit)
 c2.metric("Pitchers simmed", n_pit)
 c3.metric("Sims available", f"{n_sim:,}")
 
-with st.expander("Which players are in the sim universe? (your CSV must cover these)"):
-    universe = pd.DataFrame(
-        {"Player": sorted(list(H.keys())) + sorted(list(P.keys())),
-         "Type": ["Hitter"] * n_hit + ["Pitcher"] * n_pit}
-    )
-    st.dataframe(universe, use_container_width=True, height=240)
-    st.download_button("Download player list (CSV)",
-                       universe.to_csv(index=False).encode(),
-                       file_name="sim_player_universe.csv", mime="text/csv")
+with st.expander("📊 Players — projected ranges & thresholds", expanded=False):
+    st.caption("Per-player DK-point distribution from the current sims: projected "
+               "mean, floor (p10) / median / ceiling (p90), min/max, std, and "
+               "bust (≤0) / 2× / 30+ rates. Reflects the latest refreshed sims. "
+               "These are also the players your CSV must cover.")
+    ptable = cached_player_table(hpath, os.path.getmtime(hpath),
+                                 ppath, os.path.getmtime(ppath))
+    fc1, fc2 = st.columns([1, 3])
+    ptype = fc1.selectbox("Show", ["All", "Hitters", "Pitchers"], index=0)
+    psearch = fc2.text_input("Search player", "", placeholder="filter by name…")
+    view = ptable
+    if ptype != "All":
+        view = view[view["Type"] == ptype[:-1]]   # "Hitters"->"Hitter"
+    if psearch.strip():
+        view = view[view["Player"].str.contains(psearch.strip(), case=False, na=False)]
+    pct = st.column_config.NumberColumn(format="%.1f%%")
+    st.dataframe(
+        view, use_container_width=True, height=420, hide_index=True,
+        column_config={"Bust% (≤0)": pct, "2x%": pct, "30+%": pct})
+    st.download_button("Download player thresholds (CSV)",
+                       ptable.to_csv(index=False).encode(),
+                       file_name="player_thresholds.csv", mime="text/csv")
+
+    if len(view):
+        psel = st.selectbox("Inspect a player's outcome distribution",
+                            list(view["Player"]))
+        arr = H.get(psel)
+        if arr is None:
+            arr = P.get(psel)
+        if arr is not None:
+            r = ptable[ptable["Player"] == psel].iloc[0]
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Proj (mean)", f"{r['Proj']:.1f}")
+            m2.metric("Floor (p10)", f"{r['Floor (p10)']:.1f}")
+            m3.metric("Median", f"{r['Median']:.1f}")
+            m4.metric("Ceiling (p90)", f"{r['Ceiling (p90)']:.1f}")
+            st.altair_chart(player_score_chart(arr), use_container_width=True)
+            st.caption(f"{psel}: min {r['Min']:.1f} · max {r['Max']:.1f} · "
+                       f"std {r['Std']:.1f} · bust {r['Bust% (≤0)']:.0f}% · "
+                       f"30+ {r['30+%']:.0f}%. Dashed line = mean.")
 
 st.divider()
 
@@ -1019,7 +1115,7 @@ if submitted:
     t0 = time.time()
     with st.status("Running contest simulation…", expanded=True) as status:
         # ---- 0) freshness: rebuild projections / sims when stale ----
-        notes, sims_changed, live_starters = ensure_fresh(status, force=force_refresh)
+        notes, sims_changed, live_playable = ensure_fresh(status, force=force_refresh)
         for n in notes:
             st.write("• " + n)
         H_, P_, score_, n_sim_ = H, P, score, n_sim
@@ -1051,27 +1147,30 @@ if submitted:
         finally:
             os.unlink(tmp_csv)
 
-        # ---- hard guard: only today's confirmed starters may pitch ----
-        # Even if the sims momentarily lag, a pitcher who isn't a starter on the
-        # live slate (e.g. threw yesterday) must never appear in a lineup.
-        if live_starters:
-            is_sp = pool["Pos"] == "P"
-            ok_sp = pool["Name"].map(lambda n: normname(n) in live_starters)
-            dropped = sorted(set(pool[is_sp & ~ok_sp]["Name"]))
-            if dropped:
-                pool = pool[~is_sp | ok_sp].reset_index(drop=True)
-                st.write(f"⛔ Excluded {len(dropped)} pitcher(s) not starting today "
-                         f"per the live slate: {', '.join(dropped[:12])}"
-                         + (" …" if len(dropped) > 12 else "")
-                         + (". Your sims may be a build behind — they'll catch up "
-                            "on the next refresh." if not sims_changed else "."))
+        # ---- hard guard: restrict the pool to today's PLAYABLE players only ----
+        # Field + candidates may only use hitters in a projected/confirmed batting
+        # order and the starting/opener/primary pitchers (per the live slate).
+        # Anyone not in today's lineups is dropped even if the sims lag.
+        if live_playable:
+            keep = pool["Name"].map(lambda n: normname(n) in live_playable)
+            drop_df = pool[~keep]
+            if len(drop_df):
+                dh = drop_df[drop_df.Pos != "P"].Name.nunique()
+                dp = drop_df[drop_df.Pos == "P"].Name.nunique()
+                pool = pool[keep].reset_index(drop=True)
+                st.write(f"⛔ Restricted to projected/confirmed lineups + starting "
+                         f"pitchers — excluded **{dh} hitter(s)** and **{dp} "
+                         f"pitcher(s)** not in today's lineups"
+                         + ("" if sims_changed else " (sims may be a build behind; "
+                            "they'll catch up on the next refresh)") + ".")
 
         nh = pool[pool.Pos != "P"].Name.nunique()
         npi = pool[pool.Pos == "P"].Name.nunique()
         nt = pool.Team.nunique()
         st.write(f"Pool: **{nh} hitters + {npi} starters** across **{nt} teams** "
-                 "— drawn only from your uploaded slate (players with sims). "
-                 "Both the field and the candidate lineups use only these players.")
+                 "— only players in today's projected/confirmed lineups (+ starting "
+                 "pitchers) with sims. Ownership is renormalized over this pool for "
+                 "the field. Both the field and candidate lineups use only these.")
         dropped = len(dk_df) - int(dk_df["FullName"].map(
             lambda n: normname(n) in simnames).sum())
         if dropped:
