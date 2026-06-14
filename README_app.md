@@ -104,10 +104,13 @@ clear "statsapi returned no rate data" message rather than a cryptic error. In
 all these cases the **sims still rebuild** from today's slate on the existing
 projections.
 
-**Starter guard.** Independently of the sims, the pool is filtered to only the
-pitchers confirmed as today's **starters on the live slate**. So a pitcher who
-isn't starting (e.g. threw yesterday) can never appear in a lineup even if the
-sims are a build behind — the app reports any pitchers it excluded.
+**Playable-pool guard.** Independently of the sims, the pool is restricted to
+players in today's **projected/confirmed batting orders** plus each game's
+**starting / opener / primary pitcher** (per the live slate). Anyone not in
+today's lineups — benched hitters, non-starting pitchers — is dropped before the
+field and candidates are built (even if the sims lag), and projected ownership
+is then **renormalized over the remaining pool**. The app reports how many
+hitters and pitchers it excluded.
 
 ## Sharing across users on a live deployment (S3)
 
@@ -172,6 +175,14 @@ re-simulating.
    contest-size chalk model (chalk sharpens in small fields, flattens in large).
 4. Inserts each candidate into the field per sim and ranks it →
    **Win% / Top10% / Top100% / AvgPlace** for every candidate.
+
+## Players — projected ranges & thresholds
+
+A **📊 Players** section (expander above the workflow) shows, for every simmed
+player, the DK-point distribution from the current sims: projected mean, floor
+(p10) / median / ceiling (p90) / p99, min/max, std, and bust (≤0) / 2× / 30+
+rates. Filter by hitter/pitcher or name, download the table, and pick any player
+to see its outcome histogram. It reflects the latest refreshed sims.
 
 ## Output, filtering & inspecting lineups
 
