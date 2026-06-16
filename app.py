@@ -603,6 +603,55 @@ def slate_team_totals():
 TOTALS_OVERRIDE_PATH = os.path.join(HERE, "data", "team_totals_override.json")
 
 
+def run_vegas_diagnostic(date=None):
+    """Live probe of the FantasyLabs Vegas feed → human-readable report lines.
+    Runs on the host machine (needs egress to www.fantasylabs.com)."""
+    import urllib.request
+    import slate_config as C
+    date = date or datetime.date.today().isoformat()
+    url = C.FEED_VEGAS_TMPL.format(date=date)
+    out = [f"URL: {url}"]
+    ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "Chrome/124.0 Safari/537.36")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": ua})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            status = getattr(r, "status", r.getcode())
+            ctype = r.headers.get("Content-Type")
+            body = r.read().decode("utf-8", "replace")
+        out.append(f"HTTP {status} | {ctype} | {len(body)} bytes")
+        out.append(f"body head: {body[:240]}")
+    except Exception as e:
+        out.append(f"FETCH FAILED: {type(e).__name__}: {e}")
+        return "\n".join(out)
+    try:
+        data = json.loads(body)
+        rows = data if isinstance(data, list) else (
+            data.get("Events") or data.get("data") or data.get("events") or [])
+        out.append(f"JSON: {type(data).__name__}, {len(rows)} event rows")
+        if rows:
+            out.append(f"first-event keys: {sorted(rows[0].keys())}")
+    except Exception as e:
+        out.append(f"NOT JSON ({e}) — may need auth/cookies or returns HTML")
+        return "\n".join(out)
+    try:
+        parsed = slate_ingest.fetch_vegas(date)
+        out.append(f"fetch_vegas parsed {len(parsed)} matchups; "
+                   f"sample: {list(parsed.items())[:3]}")
+        slate = load_stored_slate() or {}
+        miss = []
+        for g in slate.get("games", {}).values():
+            key = f"{C.std_code(g['away'])}@{C.std_code(g['home'])}"
+            if key not in parsed:
+                miss.append(key)
+        if slate:
+            out.append(f"slate key-matches: {len(slate['games'])-len(miss)}/"
+                       f"{len(slate['games'])} matched; unmatched→default: {miss}")
+    except Exception as e:
+        out.append(f"parse/match step failed: {type(e).__name__}: {e}")
+    return "\n".join(out)
+
+
 def _tail(text, n=15):
     return "\n".join((text or "").strip().splitlines()[-n:])
 
@@ -1163,6 +1212,14 @@ with tabs[0]:
             st.caption("Today's Vegas implied run totals. **Edit at least 2** "
                        "(each change rescales that team's offense by your value ÷ "
                        "Vegas). The whole table drives the sims.")
+
+        with st.expander("🔬 Diagnose the live Vegas feed"):
+            st.caption("Probes www.fantasylabs.com live (from this host) and "
+                       "shows the status, JSON shape, and whether the totals "
+                       "match the slate. Use it to see why totals look flat.")
+            if st.button("Run Vegas feed diagnostic", key="vdiag"):
+                with st.spinner("Probing the Vegas feed…"):
+                    st.code(run_vegas_diagnostic(), language="text")
 
         up1, up2 = st.columns([1, 2])
         tmpl = pd.DataFrame([{"Team": r["Team"], "Total": r["Vegas total"]}
