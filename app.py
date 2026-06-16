@@ -1378,6 +1378,8 @@ with tabs[0]:
         # fresh run -> clear prior marks / inspection state
         st.session_state["picked"] = set()
         st.session_state.pop("show_dist_for", None)
+        # signal the UI to jump to the Players tab as a "done" indicator
+        st.session_state["_goto_players"] = True
 
 
     # --------------------------------------------------------------------------- #
@@ -1458,6 +1460,9 @@ with tabs[2]:
             match_mode = f1.radio("Player match", ["all", "any"], horizontal=True,
                                   help="'all' = lineup contains every selected player; "
                                        "'any' = at least one.")
+            exclude_sel = f1.multiselect(
+                "Exclude player(s)", sim["pool_players"],
+                help="Hide any lineup that contains any of these players.")
             shapes_sel = f2.multiselect("Stack shape (build style)",
                                         sorted(res["Stack"].unique()))
             teams_sel = f2.multiselect("Primary stack team",
@@ -1482,12 +1487,15 @@ with tabs[2]:
             min_t100 = h3.number_input("Min Top100%", 0.0, 100.0, 0.0, 1.0)
 
         mask = pd.Series(True, index=res.index)
+        c2p = sim["cand_to_players"]
         if players_sel:
             want = set(players_sel)
-            c2p = sim["cand_to_players"]
             mask &= res["Candidate"].map(
                 lambda c: (want.issubset(c2p[int(c)]) if match_mode == "all"
                            else bool(want & c2p[int(c)])))
+        if exclude_sel:
+            avoid = set(exclude_sel)
+            mask &= res["Candidate"].map(lambda c: not (avoid & c2p[int(c)]))
         if shapes_sel:
             mask &= res["Stack"].isin(shapes_sel)
         if teams_sel:
@@ -1726,3 +1734,26 @@ with tabs[3]:
                         file_name=f"DK_upload_{info['chosen']}.csv",
                         mime="text/csv", type="primary", use_container_width=True)
 
+
+# --------------------------------------------------------------------------- #
+# After a completed run, jump to the Players tab as a "done" indicator.
+# (Streamlit has no API to set the active tab, so click it from a one-shot
+#  same-origin script.)
+# --------------------------------------------------------------------------- #
+if st.session_state.pop("_goto_players", False):
+    import streamlit.components.v1 as _components
+    _components.html(
+        """
+        <script>
+          const doc = window.parent.document;
+          let tries = 0;
+          const jump = () => {
+            const tabs = doc.querySelectorAll('button[data-baseweb="tab"]');
+            if (tabs && tabs.length > 1) { tabs[1].click(); }
+            else if (tries++ < 20) { setTimeout(jump, 100); }
+          };
+          setTimeout(jump, 150);
+        </script>
+        """,
+        height=0,
+    )
