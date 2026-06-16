@@ -113,20 +113,43 @@ def fetch_vegas(date, vegas_json=None):
             print(f"  [vegas] live fetch failed ({e}); implied totals will fall back to default", file=sys.stderr)
             return {}
 
-    # FantasyLabs returns a list of sportevent dicts. Field names observed:
-    # HomeTeamShort / VisitorTeamShort / HomeVegasRuns / VisitorVegasRuns / OverUnder
+    # FantasyLabs returns a list of sportevent dicts. The per-team implied total
+    # is ProjHomeScore/ProjVisitorScore in the current feed, or HomeVegasRuns/
+    # VisitorVegasRuns in older exports; fall back to deriving from OU + spread.
+    # Returns {canonical_team_code: implied_runs} so matching is per-team and
+    # robust to matchup ordering / abbreviation variants.
+    def _num(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return None
+
     out = {}
-    rows = payload if isinstance(payload, list) else payload.get('Events', payload.get('data', []))
+    rows = payload if isinstance(payload, list) else payload.get('Events', payload.get('data', payload.get('events', [])))
     for ev in rows:
-        home = ev.get('HomeTeamShort') or ev.get('HomeTeam') or ev.get('HomeTeamAbbrev')
-        away = ev.get('VisitorTeamShort') or ev.get('VisitorTeam') or ev.get('VisitorTeamAbbrev')
-        hr = ev.get('HomeVegasRuns'); ar = ev.get('VisitorVegasRuns')
-        ou = ev.get('OverUnder') or ev.get('Total')
-        if home and away and hr is not None and ar is not None:
-            key = f"{away}@{home}"
-            out[key] = {'away': away, 'home': home,
-                        'away_runs': float(ar), 'home_runs': float(hr),
-                        'total': float(ou) if ou is not None else float(ar) + float(hr)}
+        if not isinstance(ev, dict):
+            continue
+        h = C.canonical_team(ev.get('HomeTeam') or ev.get('HomeTeamShort')
+                             or ev.get('HomeTeamAbbrev'))
+        a = C.canonical_team(ev.get('VisitorTeam') or ev.get('VisitorTeamShort')
+                             or ev.get('VisitorTeamAbbrev'))
+        h_imp = _num(ev.get('ProjHomeScore'))
+        if h_imp is None:
+            h_imp = _num(ev.get('HomeVegasRuns'))
+        a_imp = _num(ev.get('ProjVisitorScore'))
+        if a_imp is None:
+            a_imp = _num(ev.get('VisitorVegasRuns'))
+        if h_imp is None or a_imp is None:   # derive from OU + home spread
+            ou = _num(ev.get('OU') or ev.get('OverUnder') or ev.get('Total'))
+            sp = ev.get('SpreadHome')
+            sp = _num(sp if sp is not None else ev.get('Spread'))
+            if ou is not None and sp is not None:
+                h_imp = ou / 2.0 - sp / 2.0
+                a_imp = ou / 2.0 + sp / 2.0
+        if h and h_imp is not None:
+            out[h] = round(h_imp, 2)
+        if a and a_imp is not None:
+            out[a] = round(a_imp, 2)
     return out
 
 
@@ -178,15 +201,13 @@ def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=Tr
                 out['lineups'][side] = []
                 out['lineup_source'][side] = 'none'
 
-        # implied totals: match on standard codes
-        astd, hstd = C.std_code(away), C.std_code(home)
-        key = f"{astd}@{hstd}"
-        v = vegas.get(key)
-        if v:
-            out['implied'] = {'away': v['away_runs'], 'home': v['home_runs'], 'total': v['total']}
-        else:
-            out['implied'] = {'away': C.DEFAULT_TEAM_RUNS, 'home': C.DEFAULT_TEAM_RUNS,
-                              'total': 2 * C.DEFAULT_TEAM_RUNS}
+        # implied totals: match per-team on canonical codes (robust to feed
+        # abbreviation variants and matchup ordering)
+        a_imp = vegas.get(C.canonical_team(away))
+        h_imp = vegas.get(C.canonical_team(home))
+        a_imp = a_imp if a_imp is not None else C.DEFAULT_TEAM_RUNS
+        h_imp = h_imp if h_imp is not None else C.DEFAULT_TEAM_RUNS
+        out['implied'] = {'away': a_imp, 'home': h_imp, 'total': a_imp + h_imp}
         games[gid] = out
 
     slate = {'date': date, 'games': games}
