@@ -98,14 +98,99 @@ if LOGO:
         st.logo(LOGO)
     except Exception:
         pass
-st.markdown(f"""
+st.markdown("""
 <style>
-  h1, h2, h3 {{ color: {BRAND}; }}
-  [data-testid="stMetricValue"] {{ color: {BRAND}; }}
-  .stProgress > div > div > div > div {{ background-color: {BRAND}; }}
-  div[data-baseweb="tab-highlight"] {{ background-color: {BRAND}; }}
-  a, a:visited {{ color: {BRAND}; }}
-  hr {{ border-top: 2px solid {BRAND}33; }}
+  /* ---- RotoWire brand fonts (served from ./static) ---- */
+  @font-face{font-family:'Integral CF';src:url('app/static/fonts/Integral-Heavy.otf') format('opentype'),url('app/static/fonts/Integral-Heavy.ttf') format('truetype');font-weight:700;font-display:swap;}
+  @font-face{font-family:'Cosmica';src:url('app/static/fonts/Cosmica-Regular.otf') format('opentype');font-weight:400;font-display:swap;}
+  @font-face{font-family:'Cosmica';src:url('app/static/fonts/Cosmica-Semibold.otf') format('opentype');font-weight:600;font-display:swap;}
+  @font-face{font-family:'Cosmica';src:url('app/static/fonts/Cosmica-Heavy.otf') format('opentype');font-weight:700;font-display:swap;}
+  @font-face{font-family:'Cosmica Mono';src:url('app/static/fonts/CosmicaMono-Semibold.otf') format('opentype');font-weight:600;font-display:swap;}
+
+  :root{
+    --rw-purple:#a020fe; --rw-purple-400:#b34dfe; --rw-purple-700:#7217b4;
+    --rw-ink:#0b0b0d; --rw-surface:#0f0f12; --rw-raised:#16161a; --rw-line:#26262c;
+    --rw-mut:#8f8f99; --rw-turf:#00e657; --rw-ketchup:#ff4537; --rw-lemon:#d9fc07;
+    --font-body:'Cosmica',ui-sans-serif,system-ui,'Segoe UI',sans-serif;
+    --font-display:'Integral CF','Impact',system-ui,sans-serif;
+    --font-mono:'Cosmica Mono',ui-monospace,Menlo,Consolas,monospace;
+  }
+
+  html, body, .stApp, [data-testid="stAppViewContainer"],
+  p, span, div, label, input, textarea, button, select, li, td, th {
+    font-family: var(--font-body);
+  }
+  .stApp { background: var(--rw-ink); }
+
+  /* Display headings — Integral CF, uppercase */
+  h1, h2, h3, [data-testid="stHeading"] h1,
+  [data-testid="stHeading"] h2, [data-testid="stHeading"] h3 {
+    font-family: var(--font-display) !important;
+    text-transform: uppercase; letter-spacing: .02em; color: #fff;
+  }
+
+  /* Stat / metric cards */
+  [data-testid="stMetric"]{
+    background: var(--rw-surface); border:1px solid var(--rw-line);
+    border-radius:12px; padding:14px 16px;
+  }
+  [data-testid="stMetricLabel"] p{
+    font-family: var(--font-mono); text-transform:uppercase;
+    letter-spacing:.06em; font-size:10px !important; color: var(--rw-mut);
+  }
+  [data-testid="stMetricValue"]{
+    font-family: var(--font-display); color:#fff; font-size:30px;
+  }
+
+  /* Tabs — RotoWire purple active underline */
+  .stTabs [data-baseweb="tab-list"]{ gap:4px; border-bottom:1px solid var(--rw-line); }
+  .stTabs [data-baseweb="tab"]{
+    font-family: var(--font-display); text-transform:uppercase;
+    letter-spacing:.04em; font-size:13px; color: var(--rw-mut); padding:6px 14px;
+  }
+  .stTabs [aria-selected="true"]{ color:#fff !important; }
+  .stTabs [data-baseweb="tab-highlight"]{ background-color: var(--rw-purple) !important; height:3px; }
+
+  /* Buttons — primary purple, square-ish RW radius */
+  .stButton>button, .stDownloadButton>button, [data-testid="stFormSubmitButton"]>button{
+    font-family: var(--font-body); font-weight:600; border-radius:8px;
+    border:1px solid var(--rw-line);
+  }
+  [data-testid="stBaseButton-primary"], [data-testid="stFormSubmitButton"]>button{
+    background: var(--rw-purple) !important; border-color: var(--rw-purple) !important; color:#fff !important;
+  }
+  [data-testid="stBaseButton-primary"]:hover, [data-testid="stFormSubmitButton"]>button:hover{
+    background: var(--rw-purple-400) !important; border-color: var(--rw-purple-400) !important;
+  }
+
+  /* Surfaces: expanders, inputs, dataframes */
+  [data-testid="stExpander"]{ background: var(--rw-surface); border:1px solid var(--rw-line); border-radius:12px; }
+  [data-baseweb="input"], [data-baseweb="select"]>div, .stTextInput input, .stNumberInput input{
+    background: var(--rw-raised) !important; border-radius:8px !important;
+  }
+  [data-testid="stDataFrame"], [data-testid="stDataFrameResizable"]{ border:1px solid var(--rw-line); border-radius:10px; }
+  .stProgress > div > div > div > div { background-color: var(--rw-purple); }
+  a, a:visited { color: var(--rw-purple-400); }
+  hr { border-top:1px solid var(--rw-line); }
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#2b2b31;border-radius:8px}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  /* RotoWire branded header */
+  .rw-header{display:flex;align-items:center;gap:16px;padding:14px 18px;margin:2px 0 6px;
+    background:var(--rw-surface);border:1px solid var(--rw-line);border-radius:14px;}
+  .rw-header .rw-logo{width:42px;height:42px;flex-shrink:0;color:var(--rw-purple);}
+  .rw-header .rw-logo svg{width:100%;height:auto;display:block;}
+  .rw-title{font-family:var(--font-display);text-transform:uppercase;letter-spacing:.02em;
+    font-size:26px;line-height:1;color:#fff;}
+  .rw-eyebrow{font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;
+    font-size:10px;color:var(--rw-mut);margin-top:4px;}
+  .rw-badge{margin-left:auto;font-family:var(--font-mono);font-weight:600;font-size:11px;
+    text-transform:uppercase;letter-spacing:.04em;background:var(--rw-lemon);color:#3a3800;
+    padding:6px 12px;border-radius:9999px;display:inline-flex;align-items:center;gap:7px;}
+  .rw-badge .dot{width:7px;height:7px;border-radius:9999px;background:#3a3800;
+    display:inline-block;animation:rwspin 2s linear infinite;}
+  @keyframes rwspin{to{transform:rotate(360deg)}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -818,12 +903,39 @@ def player_score_chart(arr, nbins=40):
 
 
 # --------------------------------------------------------------------------- #
-# Header
+# Header — RotoWire branded lockup
 # --------------------------------------------------------------------------- #
-_t1, _t2 = st.columns([1, 9], vertical_alignment="center")
-with _t1:
-    render_logo(72)
-_t2.title("DFS Contest Simulator")
+def _logo_svg():
+    if LOGO and LOGO.endswith(".svg"):
+        try:
+            return open(LOGO, encoding="utf-8").read()
+        except Exception:
+            return ""
+    return ""
+
+
+def _slate_label():
+    d = (read_build_stamp().get("slate_date")
+         or projections_built_date() or "")
+    if d and len(d) == 10:
+        try:
+            dt = datetime.date.fromisoformat(d)
+            return f"SLATE · {dt.strftime('%b').upper()} {dt.day}"
+        except Exception:
+            return "SLATE · " + d
+    return "SLATE"
+
+
+st.markdown(
+    f"""<div class="rw-header">
+      <div class="rw-logo">{_logo_svg()}</div>
+      <div>
+        <div class="rw-title">DFS Contest Sims</div>
+        <div class="rw-eyebrow">RotoWire · MLB DFS contest simulator</div>
+      </div>
+      <span class="rw-badge"><span class="dot"></span>{_slate_label()}</span>
+    </div>""",
+    unsafe_allow_html=True)
 st.caption(
     "Simulate DraftKings MLB contest outcomes for machine-developed candidate "
     "lineups, against an ownership-weighted field, using the day's correlated "
