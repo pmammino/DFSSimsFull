@@ -902,27 +902,20 @@ def ensure_fresh(status, force=False, totals_path=None):
 # Contest scoring that also captures each candidate's finishing-place
 # distribution (compact per-candidate histogram + exact best/mean/worst)
 # --------------------------------------------------------------------------- #
-def run_contest_dist(field_mat, cand_mat, n_sim, n_field, max_cells=40_000_000):
+def run_contest_dist(field_mat, cand_mat, n_sim, n_field, nbins=24):
     """Score each candidate against the field per sim and capture its
-    finishing-place distribution at PER-POSITION resolution (one bin per place)
-    when feasible. To bound memory the bin count adapts so N_candidates × bins
-    stays under `max_cells`; for typical runs that still means one bin per place.
-    Returns (wins, t10, t100, avg, dist)."""
+    finishing-place distribution as a compact ~`nbins`-bucket histogram (wider
+    buckets read more clearly than per-position). Returns (wins, t10, t100, avg,
+    dist) with exact best/mean/worst places."""
     N = cand_mat.shape[1]
     wins = np.zeros(N, np.int64); t10 = np.zeros(N, np.int64)
     t100 = np.zeros(N, np.int64); ps = np.zeros(N, np.int64)
     best = np.full(N, n_field + 1, np.int64); worst = np.zeros(N, np.int64)
 
-    # one bin per finishing place when feasible; cap at 6000 so the chart stays
-    # renderable (and N×bins memory stays bounded) on very large fields
-    bins = min(int(n_field), max(120, min(6000, max_cells // max(1, N))))
-    if bins >= n_field:                      # one bin per finishing place
-        edges = np.arange(1, n_field + 2, dtype=np.int64)
-    else:
-        edges = np.unique(np.linspace(1, n_field + 1, bins + 1).astype(np.int64))
+    nb_target = max(6, min(int(nbins), int(n_field)))
+    edges = np.unique(np.linspace(1, n_field + 1, nb_target + 1).astype(np.int64))
     nb = len(edges) - 1
-    cdt = np.int16 if n_sim < 32767 else np.int32
-    counts = np.zeros((N, nb), cdt)
+    counts = np.zeros((N, nb), np.int32)
     idx = np.arange(N)
     for s in range(n_sim):
         fs = np.sort(field_mat[s]); cv = cand_mat[s]
@@ -932,49 +925,43 @@ def run_contest_dist(field_mat, cand_mat, n_sim, n_field, max_cells=40_000_000):
         b = np.clip(np.searchsorted(edges, pl, side="right") - 1, 0, nb - 1)
         np.add.at(counts, (idx, b), 1)
     dist = {"edges": edges, "counts": counts, "best": best, "worst": worst,
-            "mean": ps / n_sim, "per_place": bool(bins >= n_field)}
+            "mean": ps / n_sim}
     return wins, t10, t100, ps / n_sim, dist
 
 
 def place_distribution_chart(dist, i, n_field, n_sim):
-    """Per-finishing-position distribution for candidate i. Each x value is an
-    actual finishing place (1 = win); the y value is the share of sims that
-    finished at that place. Rendered as a faithful step so no detail is hidden
-    by smoothing, and the x-axis is clamped to valid places (never below 1)."""
-    edges = dist["edges"].astype(np.int64)
+    """Compact histogram of candidate i's finishing place — wide buckets, each
+    bar spanning its [lo, hi) place range, y = % of sims in that bucket."""
+    edges = dist["edges"].astype(float)
     counts = dist["counts"][i].astype(float)
-    place = edges[:-1]                     # the (left) finishing place of each bin
-    width = np.maximum(1, np.diff(edges))  # places covered by each bin (1 when per-place)
-    pct = 100 * counts / max(1, n_sim) / width   # density: % of sims per place
-    df = pd.DataFrame({"place": place, "pct": pct,
+    pct = 100 * counts / max(1, n_sim)
+    df = pd.DataFrame({"lo": edges[:-1], "hi": edges[1:], "pct": pct,
                        "sims": counts.astype(np.int64)})
     xmax = max(2, int(n_field))
     xscale = alt.Scale(domain=[1, xmax], nice=False, zero=False, clamp=True)
-    per_place = dist.get("per_place", False)
 
-    area = alt.Chart(df).mark_area(
-        interpolate="step-after", color=BRAND, opacity=0.35,
-        line={"color": BRAND, "strokeWidth": 1}).encode(
-        x=alt.X("place:Q", title="Finishing place  (1 = win)", scale=xscale,
+    bars = alt.Chart(df).mark_bar(color=BRAND, opacity=0.85).encode(
+        x=alt.X("lo:Q", title="Finishing place  (1 = win)", scale=xscale,
                 axis=alt.Axis(format="~s")),
-        y=alt.Y("pct:Q", title=("% of sims at each place" if per_place
-                                else "% of sims (per place)")),
-        tooltip=[alt.Tooltip("place:Q", title="place", format=",.0f"),
-                 alt.Tooltip("sims:Q", title="sims here", format=","),
-                 alt.Tooltip("pct:Q", title="% per place", format=".3f")])
+        x2="hi:Q",
+        y=alt.Y("pct:Q", title="% of sims"),
+        tooltip=[alt.Tooltip("lo:Q", title="place ≥", format=",.0f"),
+                 alt.Tooltip("hi:Q", title="< place", format=",.0f"),
+                 alt.Tooltip("sims:Q", title="sims", format=","),
+                 alt.Tooltip("pct:Q", title="% of sims", format=".2f")])
 
     rules = []
-    for x, label, color in [(1, "1st", "#000000"), (10, "Top-10", "#7a13c4"),
-                            (100, "Top-100", "#c08bff"),
-                            (float(dist["mean"][i]), "Mean", BRAND)]:
+    for x, label, color in [(1, "1st", "#ffffff"), (10, "Top-10", "#d398ff"),
+                            (100, "Top-100", "#7a13c4"),
+                            (float(dist["mean"][i]), "Mean", "#00e657")]:
         if 1 <= x <= xmax:
             rdf = pd.DataFrame({"x": [x], "label": [label]})
             rules.append(alt.Chart(rdf).mark_rule(
-                color=color, strokeDash=[4, 3], size=1.5, opacity=0.85).encode(
+                color=color, strokeDash=[4, 3], size=1.5, opacity=0.9).encode(
                 x=alt.X("x:Q", scale=xscale),
                 tooltip=[alt.Tooltip("label:N", title="marker"),
                          alt.Tooltip("x:Q", title="place", format=",.0f")]))
-    return alt.layer(area, *rules).properties(height=220).configure_view(
+    return alt.layer(bars, *rules).properties(height=150).configure_view(
         strokeOpacity=0)
 
 
@@ -1748,33 +1735,6 @@ with tabs[2]:
                                sim["field_df"].to_csv(index=False).encode(),
                                file_name=f"field_{sim['field_n']}.csv",
                                mime="text/csv", use_container_width=True)
-
-            # ---- quick export: top N of the CURRENT filter, no marking needed ----
-            st.markdown("**⚡ Quick export — top lineups from the current filter**")
-            qe1, qe2, qe3 = st.columns([1, 1.2, 2.2])
-            q_n = qe1.number_input("Top N", min_value=1, max_value=int(len(fres)),
-                                   value=min(20, int(len(fres))), step=1, key="qe_n")
-            q_sort = qe2.selectbox("by", ["Win%", "Top10 Rate", "Top100 Rate"],
-                                   index=0, key="qe_sort")
-            dkid_q = dict(sim.get("id_map") or {})
-            with qe3:
-                if dkid_q:
-                    qtext, qinfo = build_dk_upload(fres, dkid_q, int(q_n), q_sort)
-                    if qinfo["chosen"] == 0:
-                        st.caption("No DK-mappable lineups in this filter.")
-                    else:
-                        skip = (f" ({qinfo['skipped_unmapped']} skipped — no ID)"
-                                if qinfo["skipped_unmapped"] else "")
-                        st.download_button(
-                            f"⬇ Export top {qinfo['chosen']} by {q_sort} "
-                            f"(of {len(fres):,} filtered){skip}",
-                            qtext.encode(),
-                            file_name=f"DK_upload_filtered_{qinfo['chosen']}.csv",
-                            mime="text/csv", type="primary", use_container_width=True,
-                            key="qe_dl")
-                else:
-                    st.caption("Add player IDs (slate file, or a template in the "
-                               "export section below) to enable quick export.")
 
             # ---- secondary: finishing-position detail (de-emphasized) ----
             with st.expander("📊 Finishing-position detail — pick a lineup",
