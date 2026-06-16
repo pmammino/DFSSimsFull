@@ -1183,16 +1183,13 @@ with tabs[0]:
 
     # --------------------------------------------------------------------------- #
     # Team totals (Vegas) — shown + editable; >=2 edits required to run.
-    # The whole table is the source of truth that drives the sims (the live Vegas
-    # feed is often blocked, defaulting every team to the same value).
+    # Edited teams override the sim's implied total (rescaling that team's offense).
     # --------------------------------------------------------------------------- #
     st.subheader("Team totals (Vegas) — adjust before running")
     if "_tt_fetched" not in st.session_state:
         with st.spinner("Reading today's team totals…"):
             st.session_state["_tt_fetched"] = slate_team_totals()
     fetched = st.session_state["_tt_fetched"]
-    st.session_state.setdefault("_tt_uploaded", {})
-    st.session_state.setdefault("_tt_nonce", 0)
     tt_override = {}
     n_tt_edits = 0
     if not fetched:
@@ -1205,13 +1202,12 @@ with tabs[0]:
         vals = list(fetched_map.values())
         if len(set(round(v, 2) for v in vals)) <= 1:
             st.warning(f"⚠️ The live Vegas feed looks unavailable — every team "
-                       f"defaulted to **{vals[0]:.1f}** runs. Enter real per-team "
-                       "totals in the table, or bulk-load them (download the "
-                       "template, fill the **Total** column, re-upload).")
+                       f"defaulted to **{vals[0]:.1f}** runs. Use the diagnostic "
+                       "below to see why, or edit the totals manually.")
         else:
             st.caption("Today's Vegas implied run totals. **Edit at least 2** "
                        "(each change rescales that team's offense by your value ÷ "
-                       "Vegas). The whole table drives the sims.")
+                       "Vegas).")
 
         with st.expander("🔬 Diagnose the live Vegas feed"):
             st.caption("Probes www.fantasylabs.com live (from this host) and "
@@ -1221,53 +1217,9 @@ with tabs[0]:
                 with st.spinner("Probing the Vegas feed…"):
                     st.code(run_vegas_diagnostic(), language="text")
 
-        up1, up2 = st.columns([1, 2])
-        tmpl = pd.DataFrame([{"Team": r["Team"], "Total": r["Vegas total"]}
-                             for r in fetched])
-        up1.download_button("⬇ Totals template (CSV)",
-                            tmpl.to_csv(index=False).encode(),
-                            file_name="team_totals_template.csv", mime="text/csv",
-                            use_container_width=True)
-        up_csv = up2.file_uploader("Bulk-load totals (CSV: Team, Total)",
-                                   type=["csv"], key="tt_upload")
-        if up_csv is not None:
-            try:
-                udf = pd.read_csv(up_csv)
-                lc = {str(c).lower().strip(): c for c in udf.columns}
-                tcol = lc.get("team")
-                vcol = (lc.get("total") or lc.get("implied total")
-                        or lc.get("implied") or lc.get("vegas total"))
-                if tcol and vcol:
-                    codemap = {t.lower(): t for t in fetched_map}
-                    applied = {}
-                    for _, r in udf.iterrows():
-                        k = str(r[tcol]).strip()
-                        code = codemap.get(k.lower(), k if k in fetched_map else None)
-                        if code:
-                            try:
-                                applied[code] = float(r[vcol])
-                            except (TypeError, ValueError):
-                                pass
-                    if applied and applied != st.session_state["_tt_uploaded"]:
-                        st.session_state["_tt_uploaded"] = applied
-                        st.session_state["_tt_nonce"] += 1
-                    st.caption(f"Loaded {len(applied)} of {len(udf)} totals from CSV"
-                               + ("" if len(applied) == len(udf)
-                                  else " (some team codes didn't match the slate)."))
-                else:
-                    st.error("CSV needs columns named **Team** and **Total**.")
-            except Exception as e:
-                st.error(f"Couldn't read totals CSV: {e}")
-
-        uploaded = st.session_state["_tt_uploaded"]
-        seed = pd.DataFrame([
-            {"Game": r["Game"], "Team": r["Team"],
-             "Vegas total": round(float(uploaded.get(r["Team"], r["Vegas total"])), 1)}
-            for r in fetched])
         _tt_edit = st.data_editor(
-            seed, hide_index=True, use_container_width=True,
-            height=min(460, 60 + 34 * len(fetched)),
-            key=f"tt_editor_{st.session_state['_tt_nonce']}",
+            pd.DataFrame(fetched), hide_index=True, use_container_width=True,
+            height=min(460, 60 + 34 * len(fetched)), key="tt_editor",
             disabled=["Game", "Team"],
             column_config={
                 "Game": st.column_config.TextColumn(width="medium"),
@@ -1280,13 +1232,12 @@ with tabs[0]:
                 val = round(float(rr["Vegas total"]), 2)
             except (TypeError, ValueError):
                 continue
-            tt_override[rr["Team"]] = val          # whole table drives the sims
             if abs(val - float(fetched_map.get(rr["Team"], val))) > 1e-6:
+                tt_override[rr["Team"]] = val      # only edited teams override
                 n_tt_edits += 1
-        st.caption(f"✏️ {n_tt_edits} of {len(fetched_map)} totals changed vs the "
-                   "fetched values" + (" — run enabled."
-                   if n_tt_edits >= 2 else
-                   f" · change **{2 - n_tt_edits} more** to enable the run."))
+        st.caption(f"✏️ {n_tt_edits} team total(s) changed"
+                   + (" — run enabled." if n_tt_edits >= 2 else
+                      f" · change **{2 - n_tt_edits} more** to enable the run."))
 
     # --------------------------------------------------------------------------- #
     # Step 2 — forced decisions, gated behind a Run button
