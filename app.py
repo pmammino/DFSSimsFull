@@ -67,6 +67,7 @@ def _find_logo():
 
 
 LOGO = _find_logo()
+LOCKUP = os.path.join(ASSETS, "rotowire_lockup.svg")   # RotoWire wordmark
 # Browser favicons need a raster image; an SVG logo falls back to an emoji icon.
 _PAGE_ICON = LOGO if (LOGO and not LOGO.endswith(".svg")) else "⚾"
 
@@ -92,12 +93,11 @@ def render_logo(width=72):
 st.set_page_config(page_title="DFS Contest Simulator",
                    page_icon=_PAGE_ICON, layout="wide")
 
-# Persistent top-left brand logo (Streamlit ≥1.35) + brand accents.
-if LOGO:
-    try:
-        st.logo(LOGO)
-    except Exception:
-        pass
+# Persistent top-left RotoWire wordmark (Streamlit ≥1.35) + brand accents.
+try:
+    st.logo(LOCKUP if os.path.exists(LOCKUP) else LOGO)
+except Exception:
+    pass
 st.markdown("""
 <style>
   /* ---- RotoWire brand fonts (served from ./static) ---- */
@@ -181,6 +181,9 @@ st.markdown("""
     background:var(--rw-surface);border:1px solid var(--rw-line);border-radius:14px;}
   .rw-header .rw-logo{width:42px;height:42px;flex-shrink:0;color:var(--rw-purple);}
   .rw-header .rw-logo svg{width:100%;height:auto;display:block;}
+  .rw-header .rw-wordmark{height:30px;flex-shrink:0;display:flex;align-items:center;}
+  .rw-header .rw-wordmark svg{height:30px;width:auto;display:block;}
+  .rw-header .rw-divider{width:1px;height:34px;background:var(--rw-line);flex-shrink:0;}
   .rw-title{font-family:var(--font-display);text-transform:uppercase;letter-spacing:.02em;
     font-size:26px;line-height:1;color:#fff;}
   .rw-eyebrow{font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;
@@ -905,12 +908,13 @@ def player_score_chart(arr, nbins=40):
 # --------------------------------------------------------------------------- #
 # Header — RotoWire branded lockup
 # --------------------------------------------------------------------------- #
-def _logo_svg():
-    if LOGO and LOGO.endswith(".svg"):
-        try:
-            return open(LOGO, encoding="utf-8").read()
-        except Exception:
-            return ""
+def _lockup_svg():
+    for p in (LOCKUP, LOGO):
+        if p and str(p).endswith(".svg") and os.path.exists(p):
+            try:
+                return open(p, encoding="utf-8").read()
+            except Exception:
+                pass
     return ""
 
 
@@ -928,10 +932,11 @@ def _slate_label():
 
 st.markdown(
     f"""<div class="rw-header">
-      <div class="rw-logo">{_logo_svg()}</div>
+      <div class="rw-wordmark">{_lockup_svg()}</div>
+      <div class="rw-divider"></div>
       <div>
         <div class="rw-title">DFS Contest Sims</div>
-        <div class="rw-eyebrow">RotoWire · MLB DFS contest simulator</div>
+        <div class="rw-eyebrow">MLB DFS contest simulator</div>
       </div>
       <span class="rw-badge"><span class="dot"></span>{_slate_label()}</span>
     </div>""",
