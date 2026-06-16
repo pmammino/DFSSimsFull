@@ -569,22 +569,35 @@ def load_stored_slate():
 
 def slate_team_totals():
     """Per-team Vegas implied run totals for today's slate, from the live feed
-    (preferred) or the stored slate.json. Returns [{Game, Team, Vegas total}]."""
-    slate = None
+    (preferred) or the stored slate.json. Returns [{Game, Team, Vegas total}].
+    If the live feed returns all-identical totals (Vegas blocked → defaults) but
+    a stored slate has differentiated totals, prefer the stored one."""
+    def _rows(slate):
+        out = []
+        if slate:
+            for g in slate.get("games", {}).values():
+                for side in ("away", "home"):
+                    t = g.get(side)
+                    imp = (g.get("implied") or {}).get(side)
+                    if t and imp is not None:
+                        out.append({"Game": f"{g.get('away')} @ {g.get('home')}",
+                                    "Team": t, "Vegas total": round(float(imp), 1)})
+        return out
+
+    def _varied(rows):
+        return len({round(r["Vegas total"], 2) for r in rows}) > 1
+
+    live = []
     try:
-        slate = slate_ingest.build_slate(write=False)
+        live = _rows(slate_ingest.build_slate(write=False))
     except Exception:
-        slate = load_stored_slate()
-    rows = []
-    if slate:
-        for g in slate.get("games", {}).values():
-            for side in ("away", "home"):
-                t = g.get(side)
-                imp = (g.get("implied") or {}).get(side)
-                if t and imp is not None:
-                    rows.append({"Game": f"{g.get('away')} @ {g.get('home')}",
-                                 "Team": t, "Vegas total": round(float(imp), 1)})
-    return rows
+        live = []
+    if live and _varied(live):
+        return live
+    stored = _rows(load_stored_slate())
+    if stored and _varied(stored):
+        return stored
+    return live or stored
 
 
 TOTALS_OVERRIDE_PATH = os.path.join(HERE, "data", "team_totals_override.json")
@@ -1120,27 +1133,84 @@ with tabs[0]:
             st.error(f"Could not read slate file: {e}")
 
     # --------------------------------------------------------------------------- #
-    # Team totals (Vegas) — shown + editable; >=2 edits required to run
+    # Team totals (Vegas) — shown + editable; >=2 edits required to run.
+    # The whole table is the source of truth that drives the sims (the live Vegas
+    # feed is often blocked, defaulting every team to the same value).
     # --------------------------------------------------------------------------- #
     st.subheader("Team totals (Vegas) — adjust before running")
-    st.caption("These implied run totals drive the sims. **Edit at least 2** team "
-               "totals to enable the run — each change rescales that team's "
-               "offense by (your value ÷ Vegas).")
-    if "_tt_rows" not in st.session_state:
+    if "_tt_fetched" not in st.session_state:
         with st.spinner("Reading today's team totals…"):
-            st.session_state["_tt_rows"] = slate_team_totals()
-    _tt_rows = st.session_state["_tt_rows"]
+            st.session_state["_tt_fetched"] = slate_team_totals()
+    fetched = st.session_state["_tt_fetched"]
+    st.session_state.setdefault("_tt_uploaded", {})
+    st.session_state.setdefault("_tt_nonce", 0)
     tt_override = {}
     n_tt_edits = 0
-    if not _tt_rows:
-        st.info("Couldn't read today's team totals (live feed unavailable). The "
-                "2-edit gate is skipped; sims use the pipeline's Vegas totals.")
-        n_tt_edits = 2   # don't block when totals can't be shown
+    if not fetched:
+        st.info("Couldn't read today's team totals (live feed unavailable and no "
+                "slate on disk). The 2-edit gate is skipped; sims use the "
+                "pipeline's Vegas totals.")
+        n_tt_edits = 2
     else:
-        _tt_base = {r["Team"]: r["Vegas total"] for r in _tt_rows}
+        fetched_map = {r["Team"]: r["Vegas total"] for r in fetched}
+        vals = list(fetched_map.values())
+        if len(set(round(v, 2) for v in vals)) <= 1:
+            st.warning(f"⚠️ The live Vegas feed looks unavailable — every team "
+                       f"defaulted to **{vals[0]:.1f}** runs. Enter real per-team "
+                       "totals in the table, or bulk-load them (download the "
+                       "template, fill the **Total** column, re-upload).")
+        else:
+            st.caption("Today's Vegas implied run totals. **Edit at least 2** "
+                       "(each change rescales that team's offense by your value ÷ "
+                       "Vegas). The whole table drives the sims.")
+
+        up1, up2 = st.columns([1, 2])
+        tmpl = pd.DataFrame([{"Team": r["Team"], "Total": r["Vegas total"]}
+                             for r in fetched])
+        up1.download_button("⬇ Totals template (CSV)",
+                            tmpl.to_csv(index=False).encode(),
+                            file_name="team_totals_template.csv", mime="text/csv",
+                            use_container_width=True)
+        up_csv = up2.file_uploader("Bulk-load totals (CSV: Team, Total)",
+                                   type=["csv"], key="tt_upload")
+        if up_csv is not None:
+            try:
+                udf = pd.read_csv(up_csv)
+                lc = {str(c).lower().strip(): c for c in udf.columns}
+                tcol = lc.get("team")
+                vcol = (lc.get("total") or lc.get("implied total")
+                        or lc.get("implied") or lc.get("vegas total"))
+                if tcol and vcol:
+                    codemap = {t.lower(): t for t in fetched_map}
+                    applied = {}
+                    for _, r in udf.iterrows():
+                        k = str(r[tcol]).strip()
+                        code = codemap.get(k.lower(), k if k in fetched_map else None)
+                        if code:
+                            try:
+                                applied[code] = float(r[vcol])
+                            except (TypeError, ValueError):
+                                pass
+                    if applied and applied != st.session_state["_tt_uploaded"]:
+                        st.session_state["_tt_uploaded"] = applied
+                        st.session_state["_tt_nonce"] += 1
+                    st.caption(f"Loaded {len(applied)} of {len(udf)} totals from CSV"
+                               + ("" if len(applied) == len(udf)
+                                  else " (some team codes didn't match the slate)."))
+                else:
+                    st.error("CSV needs columns named **Team** and **Total**.")
+            except Exception as e:
+                st.error(f"Couldn't read totals CSV: {e}")
+
+        uploaded = st.session_state["_tt_uploaded"]
+        seed = pd.DataFrame([
+            {"Game": r["Game"], "Team": r["Team"],
+             "Vegas total": round(float(uploaded.get(r["Team"], r["Vegas total"])), 1)}
+            for r in fetched])
         _tt_edit = st.data_editor(
-            pd.DataFrame(_tt_rows), hide_index=True, use_container_width=True,
-            height=min(420, 60 + 35 * len(_tt_rows)), key="tt_editor",
+            seed, hide_index=True, use_container_width=True,
+            height=min(460, 60 + 34 * len(fetched)),
+            key=f"tt_editor_{st.session_state['_tt_nonce']}",
             disabled=["Game", "Team"],
             column_config={
                 "Game": st.column_config.TextColumn(width="medium"),
@@ -1149,19 +1219,17 @@ with tabs[0]:
                     "Implied total", min_value=0.0, max_value=18.0, step=0.1,
                     format="%.1f")})
         for _, rr in _tt_edit.iterrows():
-            base = _tt_base.get(rr["Team"])
             try:
-                val = float(rr["Vegas total"])
+                val = round(float(rr["Vegas total"]), 2)
             except (TypeError, ValueError):
                 continue
-            if base is not None and abs(val - float(base)) > 1e-6:
-                tt_override[rr["Team"]] = round(val, 2)
+            tt_override[rr["Team"]] = val          # whole table drives the sims
+            if abs(val - float(fetched_map.get(rr["Team"], val))) > 1e-6:
                 n_tt_edits += 1
-        if n_tt_edits >= 2:
-            st.caption(f"✏️ {n_tt_edits} team total(s) changed — run enabled.")
-        else:
-            st.caption(f"✏️ {n_tt_edits} changed · change "
-                       f"**{2 - n_tt_edits} more** to enable the run.")
+        st.caption(f"✏️ {n_tt_edits} of {len(fetched_map)} totals changed vs the "
+                   "fetched values" + (" — run enabled."
+                   if n_tt_edits >= 2 else
+                   f" · change **{2 - n_tt_edits} more** to enable the run."))
 
     # --------------------------------------------------------------------------- #
     # Step 2 — forced decisions, gated behind a Run button
