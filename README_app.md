@@ -18,13 +18,26 @@ pip install -r requirements.txt      # includes streamlit
 streamlit run app.py
 ```
 
-## Branding
+## Design — RotoWire (full dark) + Tabbed Workspace
 
-The UI uses brand purple **#A020FE** with black/white neutrals (set in
-`.streamlit/config.toml`). Drop your logo at **`assets/logo.png`** (or `.svg`,
-`.jpg`, `.webp`) — it's used as the top-left app logo, the page header, and the
-browser icon (favicon needs a raster `.png`/`.jpg`). A placeholder
-`assets/logo.svg` ships so the app is branded out of the box; replace it.
+The UI implements the **RotoWire product design system** (from the Claude Design
+handoff): full-dark theme, **RW Purple #A020FE**, the licensed brand fonts
+(**Integral CF** uppercase display, **Cosmica** body, **Cosmica Mono** labels,
+served from `static/fonts/` via Streamlit static serving), a branded header
+lockup with an animated **SLATE** date badge, and RotoWire-styled stat cards,
+pill badges, tabs (purple active underline), buttons, and tables.
+
+The flow is organized as a **Tabbed Workspace** (design Option C):
+
+- **⚙️ Setup** — upload the slate file, configure contest size / sim runs /
+  candidates / tilts, and Run (with the live freshness/rebuild log).
+- **📊 Players** — per-player projected ranges & thresholds.
+- **🏆 Results** — candidate lineups: metrics, filter/search, quick export.
+- **⬇️ Export** — build the DraftKings upload file.
+
+Theme tokens live in `.streamlit/config.toml`. Drop your logo at
+**`assets/logo.svg`** (or `.png`/`.jpg`/`.webp`) — it's used in the header
+lockup and as the favicon (favicon needs a raster file).
 
 Then open the URL it prints (default http://localhost:8501).
 

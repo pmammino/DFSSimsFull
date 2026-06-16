@@ -978,742 +978,746 @@ c1.metric("Hitters simmed", n_hit)
 c2.metric("Pitchers simmed", n_pit)
 c3.metric("Sims available", f"{n_sim:,}")
 
-with st.expander("📊 Players — projected ranges & thresholds", expanded=False):
-    st.caption("Per-player DK-point distribution from the current sims: projected "
-               "mean, floor (p10) / median / ceiling (p90), min/max, std, and "
-               "bust (≤0) / 2× / 30+ rates. Reflects the latest refreshed sims. "
-               "These are also the players your CSV must cover.")
-    ptable = cached_player_table(hpath, os.path.getmtime(hpath),
-                                 ppath, os.path.getmtime(ppath))
-    fc1, fc2 = st.columns([1, 3])
-    ptype = fc1.selectbox("Show", ["All", "Hitters", "Pitchers"], index=0)
-    psearch = fc2.text_input("Search player", "", placeholder="filter by name…")
-    view = ptable
-    if ptype != "All":
-        view = view[view["Type"] == ptype[:-1]]   # "Hitters"->"Hitter"
-    if psearch.strip():
-        view = view[view["Player"].str.contains(psearch.strip(), case=False, na=False)]
-    pct = st.column_config.NumberColumn(format="%.1f%%")
-    st.dataframe(
-        view, use_container_width=True, height=420, hide_index=True,
-        column_config={"Bust% (≤0)": pct, "2x%": pct, "30+%": pct})
-    st.download_button("Download player thresholds (CSV)",
-                       ptable.to_csv(index=False).encode(),
-                       file_name="player_thresholds.csv", mime="text/csv")
 
-    if len(view):
-        psel = st.selectbox("Inspect a player's outcome distribution",
-                            list(view["Player"]))
-        arr = H.get(psel)
-        if arr is None:
-            arr = P.get(psel)
-        if arr is not None:
-            r = ptable[ptable["Player"] == psel].iloc[0]
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Proj (mean)", f"{r['Proj']:.1f}")
-            m2.metric("Floor (p10)", f"{r['Floor (p10)']:.1f}")
-            m3.metric("Median", f"{r['Median']:.1f}")
-            m4.metric("Ceiling (p90)", f"{r['Ceiling (p90)']:.1f}")
-            st.altair_chart(player_score_chart(arr), use_container_width=True)
-            st.caption(f"{psel}: min {r['Min']:.1f} · max {r['Max']:.1f} · "
-                       f"std {r['Std']:.1f} · bust {r['Bust% (≤0)']:.0f}% · "
-                       f"30+ {r['30+%']:.0f}%. Dashed line = mean.")
+tabs = st.tabs(["⚙️  Setup", "📊  Players", "🏆  Results", "⬇️  Export"])
 
-st.divider()
+with tabs[0]:
+    st.subheader("1 · Upload your slate file")
+    st.caption(
+        "Upload either a **DraftKings salaries export** (the `DKSalaries.csv` with "
+        "the player table — it already carries salary, position, team **and player "
+        "IDs**, so it powers both the simulation and the upload export), or a "
+        "**clean CSV** with columns " + ", ".join(f"`{c}`" for c in REQ_COLS) +
+        " (add an `ID` column to enable the DK upload without a separate template). "
+        "Ownership is the projected draft % (0–100).")
+    upload = st.file_uploader("Slate file", type=["csv"], label_visibility="collapsed")
 
-# --------------------------------------------------------------------------- #
-# Step 1 — slate upload (outside the form so we can validate/preview)
-# --------------------------------------------------------------------------- #
-st.subheader("1 · Upload your slate file")
-st.caption(
-    "Upload either a **DraftKings salaries export** (the `DKSalaries.csv` with "
-    "the player table — it already carries salary, position, team **and player "
-    "IDs**, so it powers both the simulation and the upload export), or a "
-    "**clean CSV** with columns " + ", ".join(f"`{c}`" for c in REQ_COLS) +
-    " (add an `ID` column to enable the DK upload without a separate template). "
-    "Ownership is the projected draft % (0–100).")
-upload = st.file_uploader("Slate file", type=["csv"], label_visibility="collapsed")
-
-dk_df = None
-csv_ok = False
-id_map = {}
-id_col = None
-if upload is not None:
-    try:
-        raw = upload.getvalue().decode("latin-1", "replace")
-        export = parse_dk_export(raw)
-        if export is not None:
-            # raw DKSalaries export: has salary/pos/team/ID but no ownership
-            base_df, id_map = export
-            st.info(f"Detected a DraftKings salaries export — "
-                    f"{len(base_df)} players, {len(id_map)} IDs captured for the "
-                    "upload export. Now add ownership for these players.")
-            own_up = st.file_uploader(
-                "Ownership CSV (columns: FullName, Ownership)", type=["csv"],
-                key="ownership_for_export")
-            if own_up is None:
-                st.warning("Upload an ownership CSV to continue.")
-            else:
-                own = pd.read_csv(own_up, encoding="latin-1")
-                own.columns = [c.strip() for c in own.columns]
-                if "FullName" not in own.columns or "Ownership" not in own.columns:
-                    st.error("Ownership CSV needs `FullName` and `Ownership` columns.")
-                else:
-                    omap = {normname(r.FullName): float(r.Ownership)
-                            for r in own.itertuples()
-                            if str(r.Ownership).strip() not in ("", "nan")}
-                    base_df["Ownership"] = base_df["FullName"].map(
-                        lambda n: omap.get(normname(n)))
-                    dk_df = base_df.dropna(subset=["Ownership"]).copy()
-        else:
-            # clean CSV — accept DK/own column-name variants via aliasing
-            raw_df = pd.read_csv(io.StringIO(raw))
-            raw_df.columns = [str(c).strip() for c in raw_df.columns]
-            dk_df = alias_columns(raw_df)
-            id_map, id_col = ids_from_clean(dk_df)
-            missing = [c for c in REQ_COLS if c not in dk_df.columns]
-            if "Ownership" in missing and len([m for m in missing if m != "Ownership"]) == 0:
-                # everything but ownership is present (e.g. a DK salaries export)
-                st.info("This looks like a salaries/slate file without ownership. "
-                        "Add ownership for these players below.")
+    dk_df = None
+    csv_ok = False
+    id_map = {}
+    id_col = None
+    if upload is not None:
+        try:
+            raw = upload.getvalue().decode("latin-1", "replace")
+            export = parse_dk_export(raw)
+            if export is not None:
+                # raw DKSalaries export: has salary/pos/team/ID but no ownership
+                base_df, id_map = export
+                st.info(f"Detected a DraftKings salaries export — "
+                        f"{len(base_df)} players, {len(id_map)} IDs captured for the "
+                        "upload export. Now add ownership for these players.")
                 own_up = st.file_uploader(
                     "Ownership CSV (columns: FullName, Ownership)", type=["csv"],
-                    key="ownership_for_clean")
+                    key="ownership_for_export")
                 if own_up is None:
                     st.warning("Upload an ownership CSV to continue.")
-                    dk_df = None
                 else:
-                    own = alias_columns(pd.read_csv(own_up, encoding="latin-1"))
-                    own.columns = [str(c).strip() for c in own.columns]
-                    own = alias_columns(own)
+                    own = pd.read_csv(own_up, encoding="latin-1")
+                    own.columns = [c.strip() for c in own.columns]
                     if "FullName" not in own.columns or "Ownership" not in own.columns:
                         st.error("Ownership CSV needs `FullName` and `Ownership` columns.")
-                        dk_df = None
                     else:
                         omap = {normname(r.FullName): float(r.Ownership)
                                 for r in own.itertuples()
                                 if str(r.Ownership).strip() not in ("", "nan")}
-                        dk_df["Ownership"] = dk_df["FullName"].map(
+                        base_df["Ownership"] = base_df["FullName"].map(
                             lambda n: omap.get(normname(n)))
-                        dk_df = dk_df.dropna(subset=["Ownership"]).copy()
-            elif missing:
-                st.error("CSV is missing required column(s): " + ", ".join(missing)
-                         + f". Columns found: {', '.join(map(str, raw_df.columns))}")
-                dk_df = None
-
-        if dk_df is not None:
-            simset = set(score)
-            covered = int(dk_df["FullName"].map(lambda n: normname(n) in simset).sum())
-            csv_ok = covered > 0
-            cc1, cc2, cc3 = st.columns(3)
-            cc1.metric("Players in slate", len(dk_df))
-            cc2.metric("Matched to sims", covered)
-            cc3.metric("DK IDs available", len(id_map) if id_map else 0)
-            if covered == 0:
-                st.error("None of the players in this slate matched the sim "
-                         "universe — check names/teams. Nothing to simulate.")
+                        dk_df = base_df.dropna(subset=["Ownership"]).copy()
             else:
-                st.dataframe(dk_df.head(15), use_container_width=True)
-                if id_map:
-                    src = f"column **{id_col}**" if id_col else "the slate file"
-                    st.caption(f"✓ Player IDs detected (from {src}) — "
-                               "the DK upload export will use them automatically.")
+                # clean CSV — accept DK/own column-name variants via aliasing
+                raw_df = pd.read_csv(io.StringIO(raw))
+                raw_df.columns = [str(c).strip() for c in raw_df.columns]
+                dk_df = alias_columns(raw_df)
+                id_map, id_col = ids_from_clean(dk_df)
+                missing = [c for c in REQ_COLS if c not in dk_df.columns]
+                if "Ownership" in missing and len([m for m in missing if m != "Ownership"]) == 0:
+                    # everything but ownership is present (e.g. a DK salaries export)
+                    st.info("This looks like a salaries/slate file without ownership. "
+                            "Add ownership for these players below.")
+                    own_up = st.file_uploader(
+                        "Ownership CSV (columns: FullName, Ownership)", type=["csv"],
+                        key="ownership_for_clean")
+                    if own_up is None:
+                        st.warning("Upload an ownership CSV to continue.")
+                        dk_df = None
+                    else:
+                        own = alias_columns(pd.read_csv(own_up, encoding="latin-1"))
+                        own.columns = [str(c).strip() for c in own.columns]
+                        own = alias_columns(own)
+                        if "FullName" not in own.columns or "Ownership" not in own.columns:
+                            st.error("Ownership CSV needs `FullName` and `Ownership` columns.")
+                            dk_df = None
+                        else:
+                            omap = {normname(r.FullName): float(r.Ownership)
+                                    for r in own.itertuples()
+                                    if str(r.Ownership).strip() not in ("", "nan")}
+                            dk_df["Ownership"] = dk_df["FullName"].map(
+                                lambda n: omap.get(normname(n)))
+                            dk_df = dk_df.dropna(subset=["Ownership"]).copy()
+                elif missing:
+                    st.error("CSV is missing required column(s): " + ", ".join(missing)
+                             + f". Columns found: {', '.join(map(str, raw_df.columns))}")
+                    dk_df = None
+
+            if dk_df is not None:
+                simset = set(score)
+                covered = int(dk_df["FullName"].map(lambda n: normname(n) in simset).sum())
+                csv_ok = covered > 0
+                cc1, cc2, cc3 = st.columns(3)
+                cc1.metric("Players in slate", len(dk_df))
+                cc2.metric("Matched to sims", covered)
+                cc3.metric("DK IDs available", len(id_map) if id_map else 0)
+                if covered == 0:
+                    st.error("None of the players in this slate matched the sim "
+                             "universe — check names/teams. Nothing to simulate.")
                 else:
-                    st.caption("No player IDs detected in this file. Columns found: "
-                               f"`{', '.join(map(str, dk_df.columns))}`. To enable "
-                               "the one-file DK export, include a player-ID column "
-                               "(named e.g. `ID`, `Player ID`, `DK ID`, or a DK "
-                               "`Name + ID` column); otherwise you can supply a "
-                               "DKSalaries template at export time.")
-    except Exception as e:
-        st.error(f"Could not read slate file: {e}")
+                    st.dataframe(dk_df.head(15), use_container_width=True)
+                    if id_map:
+                        src = f"column **{id_col}**" if id_col else "the slate file"
+                        st.caption(f"✓ Player IDs detected (from {src}) — "
+                                   "the DK upload export will use them automatically.")
+                    else:
+                        st.caption("No player IDs detected in this file. Columns found: "
+                                   f"`{', '.join(map(str, dk_df.columns))}`. To enable "
+                                   "the one-file DK export, include a player-ID column "
+                                   "(named e.g. `ID`, `Player ID`, `DK ID`, or a DK "
+                                   "`Name + ID` column); otherwise you can supply a "
+                                   "DKSalaries template at export time.")
+        except Exception as e:
+            st.error(f"Could not read slate file: {e}")
 
-# --------------------------------------------------------------------------- #
-# Step 2 — forced decisions, gated behind a Run button
-# --------------------------------------------------------------------------- #
-st.subheader("2 · Make your selections, then run")
+    # --------------------------------------------------------------------------- #
+    # Step 2 — forced decisions, gated behind a Run button
+    # --------------------------------------------------------------------------- #
+    st.subheader("2 · Make your selections, then run")
 
-with st.form("contest_form", clear_on_submit=False):
-    fc1, fc2, fc3 = st.columns(3)
-    with fc1:
-        size_sel = st.selectbox(
-            "Contest size (field entries)", SIZE_PRESETS, index=None,
-            placeholder="Choose a contest size…",
-            help="How many entries the simulated field contains.")
-        size_custom = st.number_input(
-            "…or a custom size", min_value=2, max_value=2_000_000,
-            value=None, step=100, placeholder="optional")
-    with fc2:
-        sim_runs = st.number_input(
-            f"Number of sim runs (max {n_sim:,})", min_value=100,
-            max_value=int(n_sim), value=None, step=500,
-            placeholder="e.g. 10000",
-            help="How many of the available correlated sims to score the "
-                 "contest over. More = smoother estimates, slower.")
-    with fc3:
-        num_candidates = st.number_input(
-            "Number of candidate lineups", min_value=10, max_value=200_000,
-            value=None, step=500, placeholder="e.g. 5000",
-            help="How many machine-built lineups to develop and evaluate.")
+    with st.form("contest_form", clear_on_submit=False):
+        fc1, fc2, fc3 = st.columns(3)
+        with fc1:
+            size_sel = st.selectbox(
+                "Contest size (field entries)", SIZE_PRESETS, index=None,
+                placeholder="Choose a contest size…",
+                help="How many entries the simulated field contains.")
+            size_custom = st.number_input(
+                "…or a custom size", min_value=2, max_value=2_000_000,
+                value=None, step=100, placeholder="optional")
+        with fc2:
+            sim_runs = st.number_input(
+                f"Number of sim runs (max {n_sim:,})", min_value=100,
+                max_value=int(n_sim), value=None, step=500,
+                placeholder="e.g. 10000",
+                help="How many of the available correlated sims to score the "
+                     "contest over. More = smoother estimates, slower.")
+        with fc3:
+            num_candidates = st.number_input(
+                "Number of candidate lineups", min_value=10, max_value=200_000,
+                value=None, step=500, placeholder="e.g. 5000",
+                help="How many machine-built lineups to develop and evaluate.")
 
-    with st.expander("Advanced field model (optional)"):
-        a1, a2, a3 = st.columns(3)
-        medium = a1.number_input("Medium baseline size", min_value=100,
-                                 value=6000, step=500,
-                                 help="Field size at which projected ownership "
-                                      "is taken as-is (chalk neither sharpened "
-                                      "nor flattened).")
-        chalk = a2.number_input("Chalk sensitivity", min_value=0.0, max_value=2.0,
-                                value=0.35, step=0.05,
-                                help="How hard chalk concentrates in small "
-                                     "fields / flattens in large ones.")
-        tilt = a3.number_input("Stack-shape tilt", min_value=0.0, max_value=1.0,
-                               value=0.15, step=0.05,
-                               help="How much large fields consolidate onto "
-                                    "5-man primary stacks.")
-        s1, s2 = st.columns(2)
-        seed_field = s1.number_input("Field seed", value=101, step=1)
-        seed_cand = s2.number_input("Candidate seed", value=2025, step=1)
-        talent_tilt = st.slider(
-            "Candidate talent tilt (players)", min_value=0.0, max_value=2.0,
-            value=0.7, step=0.1,
-            help="How strongly candidate lineups favor higher-projected PLAYERS "
-                 "(incl. one-off bats on any team) when filling stacks, one-off "
-                 "slots, and pitchers. Applied as exp(tilt·z) on each player's "
-                 "projected value, so it's a temperature: 0 = projection-blind "
-                 "uniform; ~0.7 moderate; higher = sharply favor elite players.")
-        team_tilt = st.slider(
-            "Candidate stack-team tilt (Vegas/talent)", min_value=0.0,
-            max_value=2.0, value=0.0, step=0.1,
-            help="How strongly candidates STACK higher-projected TEAMS (team "
-                 "scoring power from the sims, which embed Vegas/park/matchup). "
-                 "0 (default) = every team equally likely to be stacked, so teams "
-                 "stay diverse; higher = concentrate stacks on the best offenses. "
-                 "Separate from the player tilt above.")
+        with st.expander("Advanced field model (optional)"):
+            a1, a2, a3 = st.columns(3)
+            medium = a1.number_input("Medium baseline size", min_value=100,
+                                     value=6000, step=500,
+                                     help="Field size at which projected ownership "
+                                          "is taken as-is (chalk neither sharpened "
+                                          "nor flattened).")
+            chalk = a2.number_input("Chalk sensitivity", min_value=0.0, max_value=2.0,
+                                    value=0.35, step=0.05,
+                                    help="How hard chalk concentrates in small "
+                                         "fields / flattens in large ones.")
+            tilt = a3.number_input("Stack-shape tilt", min_value=0.0, max_value=1.0,
+                                   value=0.15, step=0.05,
+                                   help="How much large fields consolidate onto "
+                                        "5-man primary stacks.")
+            s1, s2 = st.columns(2)
+            seed_field = s1.number_input("Field seed", value=101, step=1)
+            seed_cand = s2.number_input("Candidate seed", value=2025, step=1)
+            talent_tilt = st.slider(
+                "Candidate talent tilt (players)", min_value=0.0, max_value=2.0,
+                value=0.7, step=0.1,
+                help="How strongly candidate lineups favor higher-projected PLAYERS "
+                     "(incl. one-off bats on any team) when filling stacks, one-off "
+                     "slots, and pitchers. Applied as exp(tilt·z) on each player's "
+                     "projected value, so it's a temperature: 0 = projection-blind "
+                     "uniform; ~0.7 moderate; higher = sharply favor elite players.")
+            team_tilt = st.slider(
+                "Candidate stack-team tilt (Vegas/talent)", min_value=0.0,
+                max_value=2.0, value=0.0, step=0.1,
+                help="How strongly candidates STACK higher-projected TEAMS (team "
+                     "scoring power from the sims, which embed Vegas/park/matchup). "
+                     "0 (default) = every team equally likely to be stacked, so teams "
+                     "stay diverse; higher = concentrate stacks on the best offenses. "
+                     "Separate from the player tilt above.")
 
-    force_refresh = st.checkbox(
-        "Force full refresh (rebuild projections + sims now)", value=False,
-        help="Rebuild projections (Stage B) and correlated sims (Stage C) "
-             "regardless of staleness — bypasses the once-a-day retry guard. "
-             "Use after fixing a data/connection issue.")
-    submitted = st.form_submit_button("▶ Run simulation", type="primary",
-                                      use_container_width=True)
+        force_refresh = st.checkbox(
+            "Force full refresh (rebuild projections + sims now)", value=False,
+            help="Rebuild projections (Stage B) and correlated sims (Stage C) "
+                 "regardless of staleness — bypasses the once-a-day retry guard. "
+                 "Use after fixing a data/connection issue.")
+        submitted = st.form_submit_button("▶ Run simulation", type="primary",
+                                          use_container_width=True)
 
-contest_size = int(size_custom) if size_custom else (int(size_sel) if size_sel else None)
+    contest_size = int(size_custom) if size_custom else (int(size_sel) if size_sel else None)
 
-# --------------------------------------------------------------------------- #
-# Run
-# --------------------------------------------------------------------------- #
-if submitted:
-    # ---- hard-gate on every decision ----
-    errs = []
-    if not csv_ok:
-        errs.append("Upload a valid slate file that matches the sim universe (step 1).")
-    if contest_size is None:
-        errs.append("Choose a contest size.")
-    if sim_runs is None:
-        errs.append("Enter the number of sim runs.")
-    if num_candidates is None:
-        errs.append("Enter the number of candidate lineups.")
-    if errs:
-        for e in errs:
-            st.warning(e)
-        st.stop()
-
-    if contest_size > 100_000 or num_candidates > 50_000:
-        st.info("Large request — field/candidate construction and scoring may "
-                "take a while and use significant memory.")
-
-    t0 = time.time()
-    with st.status("Running contest simulation…", expanded=True) as status:
-        # ---- 0) freshness: rebuild projections / sims when stale ----
-        notes, sims_changed, live_playable = ensure_fresh(status, force=force_refresh)
-        for n in notes:
-            st.write("• " + n)
-        H_, P_, score_, n_sim_ = H, P, score, n_sim
-        if sims_changed:
-            hp_, pp_ = find_sims()
-            if hp_ and pp_:
-                H_, P_, score_, n_sim_ = cached_sims(
-                    hp_, os.path.getmtime(hp_), pp_, os.path.getmtime(pp_))
-
-        K = min(int(sim_runs), int(n_sim_))
-        # sim index is aligned across players, so a prefix slice preserves the
-        # correlation structure
-        score_k = {k: v[:K] for k, v in score_.items()}
-        simnames = set(score_k)
-        if int(dk_df["FullName"].map(lambda n: normname(n) in simnames).sum()) == 0:
-            status.update(label="No players match the sims", state="error")
-            st.error("After the freshness check, none of your slate players "
-                     "matched the sim universe. Check the slate file.")
+    # --------------------------------------------------------------------------- #
+    # Run
+    # --------------------------------------------------------------------------- #
+    if submitted:
+        # ---- hard-gate on every decision ----
+        errs = []
+        if not csv_ok:
+            errs.append("Upload a valid slate file that matches the sim universe (step 1).")
+        if contest_size is None:
+            errs.append("Choose a contest size.")
+        if sim_runs is None:
+            errs.append("Enter the number of sim runs.")
+        if num_candidates is None:
+            errs.append("Enter the number of candidate lineups.")
+        if errs:
+            for e in errs:
+                st.warning(e)
             st.stop()
 
-        # ---- build the pool (write CSV to a temp path for build_pool) ----
-        st.write("Building player pool from your slate + sims…")
-        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False,
-                                         newline="") as tf:
-            dk_df.to_csv(tf.name, index=False)
-            tmp_csv = tf.name
-        try:
-            pool = build_pool(tmp_csv, H_, P_, score_k)
-        finally:
-            os.unlink(tmp_csv)
+        if contest_size > 100_000 or num_candidates > 50_000:
+            st.info("Large request — field/candidate construction and scoring may "
+                    "take a while and use significant memory.")
 
-        # ---- hard guard: restrict the pool to today's PLAYABLE players only ----
-        # Field + candidates may only use hitters in a projected/confirmed batting
-        # order and the starting/opener/primary pitchers (per the live slate).
-        # Anyone not in today's lineups is dropped even if the sims lag.
-        if live_playable:
-            keep = pool["Name"].map(lambda n: normname(n) in live_playable)
-            drop_df = pool[~keep]
-            if len(drop_df):
-                dh = drop_df[drop_df.Pos != "P"].Name.nunique()
-                dp = drop_df[drop_df.Pos == "P"].Name.nunique()
-                pool = pool[keep].reset_index(drop=True)
-                st.write(f"⛔ Restricted to projected/confirmed lineups + starting "
-                         f"pitchers — excluded **{dh} hitter(s)** and **{dp} "
-                         f"pitcher(s)** not in today's lineups"
-                         + ("" if sims_changed else " (sims may be a build behind; "
-                            "they'll catch up on the next refresh)") + ".")
+        t0 = time.time()
+        with st.status("Running contest simulation…", expanded=True) as status:
+            # ---- 0) freshness: rebuild projections / sims when stale ----
+            notes, sims_changed, live_playable = ensure_fresh(status, force=force_refresh)
+            for n in notes:
+                st.write("• " + n)
+            H_, P_, score_, n_sim_ = H, P, score, n_sim
+            if sims_changed:
+                hp_, pp_ = find_sims()
+                if hp_ and pp_:
+                    H_, P_, score_, n_sim_ = cached_sims(
+                        hp_, os.path.getmtime(hp_), pp_, os.path.getmtime(pp_))
 
-        nh = pool[pool.Pos != "P"].Name.nunique()
-        npi = pool[pool.Pos == "P"].Name.nunique()
-        nt = pool.Team.nunique()
-        st.write(f"Pool: **{nh} hitters + {npi} starters** across **{nt} teams** "
-                 "— only players in today's projected/confirmed lineups (+ starting "
-                 "pitchers) with sims. Ownership is renormalized over this pool for "
-                 "the field. Both the field and candidate lineups use only these.")
-        dropped = len(dk_df) - int(dk_df["FullName"].map(
-            lambda n: normname(n) in simnames).sum())
-        if dropped:
-            st.caption(f"{dropped} player(s) in your slate had no sim and were "
-                       "excluded (they can't be scored).")
-        if npi < 2 or nh < 8:
-            status.update(label="Pool too small to build lineups", state="error")
-            st.error("Need at least 2 starting pitchers and 8 hitters in the "
-                     "matched pool to fill a roster. Check your slate file.")
-            st.stop()
+            K = min(int(sim_runs), int(n_sim_))
+            # sim index is aligned across players, so a prefix slice preserves the
+            # correlation structure
+            score_k = {k: v[:K] for k, v in score_.items()}
+            simnames = set(score_k)
+            if int(dk_df["FullName"].map(lambda n: normname(n) in simnames).sum()) == 0:
+                status.update(label="No players match the sims", state="error")
+                st.error("After the freshness check, none of your slate players "
+                         "matched the sim universe. Check the slate file.")
+                st.stop()
 
-        # ---- candidate lineups: players tilted to projected value (effective,
-        #      via a z-score softmax); stack TEAMS uniform unless team tilt > 0 ----
-        st.write(f"Developing {int(num_candidates):,} candidate lineups…")
-        cdf = pool[(pool.Pos != "P") | (pool.Role == "SP")].copy()
-        # projected value per player from the sims (mean blended with ceiling)
-        tal = {}
-        for nm in cdf["Name"].unique():
-            a = score_k.get(normname(nm))
-            if a is not None and len(a):
-                tal[nm] = 0.5 * float(np.mean(a)) + 0.5 * float(np.percentile(a, 90))
-        base = float(np.median(list(tal.values()))) if tal else 1.0
+            # ---- build the pool (write CSV to a temp path for build_pool) ----
+            st.write("Building player pool from your slate + sims…")
+            with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False,
+                                             newline="") as tf:
+                dk_df.to_csv(tf.name, index=False)
+                tmp_csv = tf.name
+            try:
+                pool = build_pool(tmp_csv, H_, P_, score_k)
+            finally:
+                os.unlink(tmp_csv)
 
-        def zmap(names):
-            """z-score of talent within a player group (hitters or pitchers)."""
-            vals = np.array([tal[n] for n in names if n in tal], float)
-            if len(vals) == 0:
-                return {}
-            mu, sd = float(vals.mean()), float(vals.std()) + 1e-9
-            return {n: (tal.get(n, mu) - mu) / sd for n in names}
+            # ---- hard guard: restrict the pool to today's PLAYABLE players only ----
+            # Field + candidates may only use hitters in a projected/confirmed batting
+            # order and the starting/opener/primary pitchers (per the live slate).
+            # Anyone not in today's lineups is dropped even if the sims lag.
+            if live_playable:
+                keep = pool["Name"].map(lambda n: normname(n) in live_playable)
+                drop_df = pool[~keep]
+                if len(drop_df):
+                    dh = drop_df[drop_df.Pos != "P"].Name.nunique()
+                    dp = drop_df[drop_df.Pos == "P"].Name.nunique()
+                    pool = pool[keep].reset_index(drop=True)
+                    st.write(f"⛔ Restricted to projected/confirmed lineups + starting "
+                             f"pitchers — excluded **{dh} hitter(s)** and **{dp} "
+                             f"pitcher(s)** not in today's lineups"
+                             + ("" if sims_changed else " (sims may be a build behind; "
+                                "they'll catch up on the next refresh)") + ".")
 
-        if talent_tilt > 0:
-            # weight = exp(tilt · z); scale-invariant so `tilt` is a temperature.
-            # z computed within hitters and within pitchers so each selection
-            # context (intra-stack, one-off, pitcher) is calibrated on its own.
-            zh = zmap(set(cdf[cdf["Pos"] != "P"]["Name"]))
-            zp = zmap(set(cdf[cdf["Pos"] == "P"]["Name"]))
-            cdf["Ownership"] = [
-                float(np.exp(float(talent_tilt) *
-                             (zp if r.Pos == "P" else zh).get(r.Name, 0.0)))
-                for r in cdf.itertuples()]
-        else:
-            cdf["Ownership"] = 1.0   # projection-blind uniform players
+            nh = pool[pool.Pos != "P"].Name.nunique()
+            npi = pool[pool.Pos == "P"].Name.nunique()
+            nt = pool.Team.nunique()
+            st.write(f"Pool: **{nh} hitters + {npi} starters** across **{nt} teams** "
+                     "— only players in today's projected/confirmed lineups (+ starting "
+                     "pitchers) with sims. Ownership is renormalized over this pool for "
+                     "the field. Both the field and candidate lineups use only these.")
+            dropped = len(dk_df) - int(dk_df["FullName"].map(
+                lambda n: normname(n) in simnames).sum())
+            if dropped:
+                st.caption(f"{dropped} player(s) in your slate had no sim and were "
+                           "excluded (they can't be scored).")
+            if npi < 2 or nh < 8:
+                status.update(label="Pool too small to build lineups", state="error")
+                st.error("Need at least 2 starting pitchers and 8 hitters in the "
+                         "matched pool to fill a roster. Check your slate file.")
+                st.stop()
 
-        # stack-TEAM weights via a z-score softmax of team scoring power (sum of
-        # hitters' talent): weight = exp(tilt · z). 0 (default) => uniform teams.
-        team_weights = None
-        if team_tilt > 0:
-            hit = cdf[cdf["Pos"] != "P"]
-            tteam = hit.groupby("Team")["Name"].apply(
-                lambda s: sum(tal.get(n, base) for n in s)).to_dict()
-            vals = np.array(list(tteam.values()), float)
-            mu, sd = float(vals.mean()), float(vals.std()) + 1e-9
-            team_weights = {t: float(np.exp(float(team_tilt) * (v - mu) / sd))
-                            for t, v in tteam.items()}
-        st.caption(f"Candidates: player talent tilt={talent_tilt:g}, "
-                   f"stack-team tilt={team_tilt:g} "
-                   f"({'teams favor better offenses' if team_tilt > 0 else 'teams uniform'}).")
-        cb = Builder(Pool(cdf), params, seed=int(seed_cand), uniform=True,
-                     team_weights=team_weights)
-        cands, c_att = build_many(cb, int(num_candidates), "Candidates")
-        if not cands:
-            status.update(label="Could not build candidate lineups", state="error")
-            st.error("Failed to construct any valid candidate lineup from this pool.")
-            st.stop()
-        cand_mat = score_matrix(cands, score_k, K)
+            # ---- candidate lineups: players tilted to projected value (effective,
+            #      via a z-score softmax); stack TEAMS uniform unless team tilt > 0 ----
+            st.write(f"Developing {int(num_candidates):,} candidate lineups…")
+            cdf = pool[(pool.Pos != "P") | (pool.Role == "SP")].copy()
+            # projected value per player from the sims (mean blended with ceiling)
+            tal = {}
+            for nm in cdf["Name"].unique():
+                a = score_k.get(normname(nm))
+                if a is not None and len(a):
+                    tal[nm] = 0.5 * float(np.mean(a)) + 0.5 * float(np.percentile(a, 90))
+            base = float(np.median(list(tal.values()))) if tal else 1.0
 
-        # ---- field for the chosen contest size ----
-        st.write(f"Building an ownership-weighted field of {contest_size:,}…")
-        beta = beta_for_size(contest_size, int(medium), float(chalk))
-        fdf = adjust_ownership(normalize_to_slots(pool, 0.15), beta=beta)
-        tilted = tilt_structures(
-            [(tuple(s), w) for s, w in params["stack_structures"]],
-            contest_size, int(medium), float(tilt))
-        fp = dict(params)
-        fp["stack_structures"] = [(list(s), w) for s, w in tilted]
-        fb = Builder(Pool(fdf), fp, seed=int(seed_field), uniform=False)
-        field, f_att = build_many(fb, contest_size, "Field")
-        if len(field) < contest_size:
-            st.warning(f"Built {len(field):,} of {contest_size:,} requested field "
-                       "lineups (pool constrained); simulating against the field "
-                       "that could be built.")
-        field_mat = score_matrix(field, score_k, K)
+            def zmap(names):
+                """z-score of talent within a player group (hitters or pitchers)."""
+                vals = np.array([tal[n] for n in names if n in tal], float)
+                if len(vals) == 0:
+                    return {}
+                mu, sd = float(vals.mean()), float(vals.std()) + 1e-9
+                return {n: (tal.get(n, mu) - mu) / sd for n in names}
 
-        # ---- the contest (captures each candidate's finishing-place distro) ----
-        st.write(f"Simulating the contest over {K:,} runs…")
-        wins, t10, t100, avg, dist = run_contest_dist(
-            field_mat, cand_mat, K, len(field))
-        status.update(label=f"Done in {time.time()-t0:.1f}s", state="complete")
+            if talent_tilt > 0:
+                # weight = exp(tilt · z); scale-invariant so `tilt` is a temperature.
+                # z computed within hitters and within pitchers so each selection
+                # context (intra-stack, one-off, pitcher) is calibrated on its own.
+                zh = zmap(set(cdf[cdf["Pos"] != "P"]["Name"]))
+                zp = zmap(set(cdf[cdf["Pos"] == "P"]["Name"]))
+                cdf["Ownership"] = [
+                    float(np.exp(float(talent_tilt) *
+                                 (zp if r.Pos == "P" else zh).get(r.Name, 0.0)))
+                    for r in cdf.itertuples()]
+            else:
+                cdf["Ownership"] = 1.0   # projection-blind uniform players
 
-    # ---- per-lineup attributes for filtering/search ----
-    own_map = {normname(rr.FullName): float(rr.Ownership) for rr in dk_df.itertuples()}
-    cand_players = [frozenset(pl.Name for pl in lu["players"]) for lu in cands]
-    prim_team, prim_size, own_sum = [], [], []
-    for lu in cands:
-        if lu["teams"]:
-            pt, ps_ = max(lu["teams"].items(), key=lambda kv: kv[1])
-        else:
-            pt, ps_ = "", 0
-        prim_team.append(pt); prim_size.append(int(ps_))
-        own_sum.append(round(sum(own_map.get(normname(pl.Name), 0.0)
-                                 for pl in lu["players"]), 1))
+            # stack-TEAM weights via a z-score softmax of team scoring power (sum of
+            # hitters' talent): weight = exp(tilt · z). 0 (default) => uniform teams.
+            team_weights = None
+            if team_tilt > 0:
+                hit = cdf[cdf["Pos"] != "P"]
+                tteam = hit.groupby("Team")["Name"].apply(
+                    lambda s: sum(tal.get(n, base) for n in s)).to_dict()
+                vals = np.array(list(tteam.values()), float)
+                mu, sd = float(vals.mean()), float(vals.std()) + 1e-9
+                team_weights = {t: float(np.exp(float(team_tilt) * (v - mu) / sd))
+                                for t, v in tteam.items()}
+            st.caption(f"Candidates: player talent tilt={talent_tilt:g}, "
+                       f"stack-team tilt={team_tilt:g} "
+                       f"({'teams favor better offenses' if team_tilt > 0 else 'teams uniform'}).")
+            cb = Builder(Pool(cdf), params, seed=int(seed_cand), uniform=True,
+                         team_weights=team_weights)
+            cands, c_att = build_many(cb, int(num_candidates), "Candidates")
+            if not cands:
+                status.update(label="Could not build candidate lineups", state="error")
+                st.error("Failed to construct any valid candidate lineup from this pool.")
+                st.stop()
+            cand_mat = score_matrix(cands, score_k, K)
 
-    # ---- results for the developed (candidate) lineups ----
-    res = lineups_to_df(cands)
-    res.insert(0, "Candidate", np.arange(1, len(cands) + 1))
-    res["Wins"] = wins
-    res["Win%"] = np.round(100 * wins / K, 3)
-    res["Top10"] = t10
-    res["Top10%"] = np.round(100 * t10 / K, 2)
-    res["Top100"] = t100
-    res["Top100%"] = np.round(100 * t100 / K, 2)
-    res["AvgPlace"] = np.round(avg, 1)
-    res["BestPlace"] = dist["best"]
-    res["WorstPlace"] = dist["worst"]
-    res["OwnSum"] = own_sum
-    res["PrimaryTeam"] = prim_team
-    res["PrimaryStack"] = prim_size
-    res = res.sort_values(["Wins", "Top10", "Top100", "AvgPlace"],
-                          ascending=[False, False, False, True]).reset_index(drop=True)
+            # ---- field for the chosen contest size ----
+            st.write(f"Building an ownership-weighted field of {contest_size:,}…")
+            beta = beta_for_size(contest_size, int(medium), float(chalk))
+            fdf = adjust_ownership(normalize_to_slots(pool, 0.15), beta=beta)
+            tilted = tilt_structures(
+                [(tuple(s), w) for s, w in params["stack_structures"]],
+                contest_size, int(medium), float(tilt))
+            fp = dict(params)
+            fp["stack_structures"] = [(list(s), w) for s, w in tilted]
+            fb = Builder(Pool(fdf), fp, seed=int(seed_field), uniform=False)
+            field, f_att = build_many(fb, contest_size, "Field")
+            if len(field) < contest_size:
+                st.warning(f"Built {len(field):,} of {contest_size:,} requested field "
+                           "lineups (pool constrained); simulating against the field "
+                           "that could be built.")
+            field_mat = score_matrix(field, score_k, K)
 
-    # persist so the filter/export controls below can change without re-simulating
-    st.session_state["sim"] = {
-        "res": res, "cands": cands, "field_df": lineups_to_df(field),
-        "K": K, "contest_size": contest_size, "field_n": len(field), "beta": beta,
-        "dist": dist, "id_map": id_map,
-        "cand_to_players": {i + 1: cand_players[i] for i in range(len(cands))},
-        "pool_players": sorted({pl.Name for lu in cands for pl in lu["players"]}),
-    }
-    # fresh run -> clear prior marks / inspection state
-    st.session_state["picked"] = set()
-    st.session_state.pop("show_dist_for", None)
+            # ---- the contest (captures each candidate's finishing-place distro) ----
+            st.write(f"Simulating the contest over {K:,} runs…")
+            wins, t10, t100, avg, dist = run_contest_dist(
+                field_mat, cand_mat, K, len(field))
+            status.update(label=f"Done in {time.time()-t0:.1f}s", state="complete")
+
+        # ---- per-lineup attributes for filtering/search ----
+        own_map = {normname(rr.FullName): float(rr.Ownership) for rr in dk_df.itertuples()}
+        cand_players = [frozenset(pl.Name for pl in lu["players"]) for lu in cands]
+        prim_team, prim_size, own_sum = [], [], []
+        for lu in cands:
+            if lu["teams"]:
+                pt, ps_ = max(lu["teams"].items(), key=lambda kv: kv[1])
+            else:
+                pt, ps_ = "", 0
+            prim_team.append(pt); prim_size.append(int(ps_))
+            own_sum.append(round(sum(own_map.get(normname(pl.Name), 0.0)
+                                     for pl in lu["players"]), 1))
+
+        # ---- results for the developed (candidate) lineups ----
+        res = lineups_to_df(cands)
+        res.insert(0, "Candidate", np.arange(1, len(cands) + 1))
+        res["Wins"] = wins
+        res["Win%"] = np.round(100 * wins / K, 3)
+        res["Top10"] = t10
+        res["Top10%"] = np.round(100 * t10 / K, 2)
+        res["Top100"] = t100
+        res["Top100%"] = np.round(100 * t100 / K, 2)
+        res["AvgPlace"] = np.round(avg, 1)
+        res["BestPlace"] = dist["best"]
+        res["WorstPlace"] = dist["worst"]
+        res["OwnSum"] = own_sum
+        res["PrimaryTeam"] = prim_team
+        res["PrimaryStack"] = prim_size
+        res = res.sort_values(["Wins", "Top10", "Top100", "AvgPlace"],
+                              ascending=[False, False, False, True]).reset_index(drop=True)
+
+        # persist so the filter/export controls below can change without re-simulating
+        st.session_state["sim"] = {
+            "res": res, "cands": cands, "field_df": lineups_to_df(field),
+            "K": K, "contest_size": contest_size, "field_n": len(field), "beta": beta,
+            "dist": dist, "id_map": id_map,
+            "cand_to_players": {i + 1: cand_players[i] for i in range(len(cands))},
+            "pool_players": sorted({pl.Name for lu in cands for pl in lu["players"]}),
+        }
+        # fresh run -> clear prior marks / inspection state
+        st.session_state["picked"] = set()
+        st.session_state.pop("show_dist_for", None)
 
 
-# --------------------------------------------------------------------------- #
-# Results + DK upload  (rendered from session_state so widget tweaks below
-# don't trigger a re-simulation)
-# --------------------------------------------------------------------------- #
+    # --------------------------------------------------------------------------- #
+    # Results + DK upload  (rendered from session_state so widget tweaks below
+    # don't trigger a re-simulation)
+    # --------------------------------------------------------------------------- #
+
+with tabs[1]:
+    with st.expander("📊 Players — projected ranges & thresholds", expanded=True):
+        st.caption("Per-player DK-point distribution from the current sims: projected "
+                   "mean, floor (p10) / median / ceiling (p90), min/max, std, and "
+                   "bust (≤0) / 2× / 30+ rates. Reflects the latest refreshed sims. "
+                   "These are also the players your CSV must cover.")
+        ptable = cached_player_table(hpath, os.path.getmtime(hpath),
+                                     ppath, os.path.getmtime(ppath))
+        fc1, fc2 = st.columns([1, 3])
+        ptype = fc1.selectbox("Show", ["All", "Hitters", "Pitchers"], index=0)
+        psearch = fc2.text_input("Search player", "", placeholder="filter by name…")
+        view = ptable
+        if ptype != "All":
+            view = view[view["Type"] == ptype[:-1]]   # "Hitters"->"Hitter"
+        if psearch.strip():
+            view = view[view["Player"].str.contains(psearch.strip(), case=False, na=False)]
+        pct = st.column_config.NumberColumn(format="%.1f%%")
+        st.dataframe(
+            view, use_container_width=True, height=420, hide_index=True,
+            column_config={"Bust% (≤0)": pct, "2x%": pct, "30+%": pct})
+        st.download_button("Download player thresholds (CSV)",
+                           ptable.to_csv(index=False).encode(),
+                           file_name="player_thresholds.csv", mime="text/csv")
+
+        if len(view):
+            psel = st.selectbox("Inspect a player's outcome distribution",
+                                list(view["Player"]))
+            arr = H.get(psel)
+            if arr is None:
+                arr = P.get(psel)
+            if arr is not None:
+                r = ptable[ptable["Player"] == psel].iloc[0]
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Proj (mean)", f"{r['Proj']:.1f}")
+                m2.metric("Floor (p10)", f"{r['Floor (p10)']:.1f}")
+                m3.metric("Median", f"{r['Median']:.1f}")
+                m4.metric("Ceiling (p90)", f"{r['Ceiling (p90)']:.1f}")
+                st.altair_chart(player_score_chart(arr), use_container_width=True)
+                st.caption(f"{psel}: min {r['Min']:.1f} · max {r['Max']:.1f} · "
+                           f"std {r['Std']:.1f} · bust {r['Bust% (≤0)']:.0f}% · "
+                           f"30+ {r['30+%']:.0f}%. Dashed line = mean.")
+
+
 sim = st.session_state.get("sim")
-if sim is None:
-    st.info("Upload your slate file and make all three selections above, "
-            "then press **Run simulation**.")
-else:
-    res = sim["res"]
-    K = sim["K"]
-    st.success(f"Simulated {len(sim['cands']):,} candidate lineups in a "
-               f"{sim['field_n']:,}-entry field over {K:,} runs "
-               f"(chalk β = {sim['beta']:.2f}).")
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Best Win%", f"{res['Win%'].max():.2f}%")
-    m2.metric("Candidates that ever win", int((res["Wins"] > 0).sum()))
-    m3.metric("Best Top100%", f"{res['Top100%'].max():.1f}%")
-    m4.metric("Best AvgPlace", f"{res['AvgPlace'].min():,.0f}")
-
-    res = res.copy()
-    res["Rank"] = np.arange(1, len(res) + 1)
-
-    st.subheader("Candidate lineups")
-
-    # ---------------------- filter & search -------------------------------- #
-    with st.expander("🔎 Filter & search lineups", expanded=False):
-        f1, f2 = st.columns(2)
-        players_sel = f1.multiselect("Must include player(s)", sim["pool_players"])
-        match_mode = f1.radio("Player match", ["all", "any"], horizontal=True,
-                              help="'all' = lineup contains every selected player; "
-                                   "'any' = at least one.")
-        shapes_sel = f2.multiselect("Stack shape (build style)",
-                                    sorted(res["Stack"].unique()))
-        teams_sel = f2.multiselect("Primary stack team",
-                                   sorted(t for t in res["PrimaryTeam"].unique() if t))
-        g1, g2, g3 = st.columns(3)
-        psize_sel = g1.multiselect("Primary stack size",
-                                   sorted(res["PrimaryStack"].unique(), reverse=True))
-
-        def rng_slider(col, label, step, fmt):
-            lo, hi = float(res[col].min()), float(res[col].max())
-            if hi <= lo:
-                return (lo, hi)
-            return col_obj.slider(label, lo, hi, (lo, hi), step=step, format=fmt)
-
-        col_obj = g2
-        own_rng = rng_slider("OwnSum", "Combined ownership %", 0.5, "%.0f")
-        col_obj = g3
-        sal_rng = rng_slider("Salary", "Salary", 100.0, "$%d")
-        h1, h2, h3 = st.columns(3)
-        min_win = h1.number_input("Min Win%", 0.0, 100.0, 0.0, 0.1, format="%.2f")
-        min_t10 = h2.number_input("Min Top10%", 0.0, 100.0, 0.0, 0.5)
-        min_t100 = h3.number_input("Min Top100%", 0.0, 100.0, 0.0, 1.0)
-
-    mask = pd.Series(True, index=res.index)
-    if players_sel:
-        want = set(players_sel)
-        c2p = sim["cand_to_players"]
-        mask &= res["Candidate"].map(
-            lambda c: (want.issubset(c2p[int(c)]) if match_mode == "all"
-                       else bool(want & c2p[int(c)])))
-    if shapes_sel:
-        mask &= res["Stack"].isin(shapes_sel)
-    if teams_sel:
-        mask &= res["PrimaryTeam"].isin(teams_sel)
-    if psize_sel:
-        mask &= res["PrimaryStack"].isin(psize_sel)
-    mask &= res["OwnSum"].between(*own_rng)
-    mask &= res["Salary"].between(*sal_rng)
-    mask &= res["Win%"] >= min_win
-    mask &= res["Top10%"] >= min_t10
-    mask &= res["Top100%"] >= min_t100
-    fres = res[mask].reset_index(drop=True)
-
-    picked = st.session_state.setdefault("picked", set())
-    c1, c2, c3 = st.columns([1.2, 1, 3])
-    c1.caption(f"**{len(fres):,}** of {len(res):,} lineups match.")
-    if c2.button("Mark all", help="Mark every lineup currently shown",
-                 use_container_width=True):
-        picked |= {int(x) for x in fres["Candidate"]}
-    if c3.button("Clear marks", use_container_width=False):
-        picked.clear()
-
-    if len(fres) == 0:
-        st.info("No lineups match these filters — loosen them.")
+with tabs[2]:
+    if sim is None:
+        st.info("Upload your slate file and make all three selections above, "
+                "then press **Run simulation**.")
     else:
-        # ---- player-focused lineups table (✓ to mark; metrics compact) ----
-        slot_label = {"P1": "P", "P2": "P", "C": "C", "1B": "1B", "2B": "2B",
-                      "3B": "3B", "SS": "SS", "OF1": "OF", "OF2": "OF", "OF3": "OF"}
+        res = sim["res"]
+        K = sim["K"]
+        st.success(f"Simulated {len(sim['cands']):,} candidate lineups in a "
+                   f"{sim['field_n']:,}-entry field over {K:,} runs "
+                   f"(chalk β = {sim['beta']:.2f}).")
 
-        def _nm(v):
-            return str(v).rsplit(" (", 1)[0]
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Best Win%", f"{res['Win%'].max():.2f}%")
+        m2.metric("Candidates that ever win", int((res["Wins"] > 0).sum()))
+        m3.metric("Best Top100%", f"{res['Top100%'].max():.1f}%")
+        m4.metric("Best AvgPlace", f"{res['AvgPlace'].min():,.0f}")
 
-        disp = pd.DataFrame({"✓": [int(x) in picked for x in fres["Candidate"]],
-                             "Rank": fres["Rank"]})
-        for c in COLS:
-            disp[c] = fres[c].map(_nm)
-        disp["Win%"] = fres["Win%"]
-        disp["Top10%"] = fres["Top10%"]
-        disp["Top100%"] = fres["Top100%"]
-        disp["Salary"] = fres["Salary"]
-        disp["Own%"] = fres["OwnSum"]
-        disp["Stack"] = fres["Stack"]
+        res = res.copy()
+        res["Rank"] = np.arange(1, len(res) + 1)
 
-        colcfg = {
-            "✓": st.column_config.CheckboxColumn("✓", help="Mark for export",
-                                                 width="small"),
-            "Rank": st.column_config.NumberColumn(width="small"),
-            "Win%": st.column_config.NumberColumn(format="%.2f%%", width="small"),
-            "Top10%": st.column_config.NumberColumn(format="%.1f%%", width="small"),
-            "Top100%": st.column_config.NumberColumn(format="%.1f%%", width="small"),
-            "Salary": st.column_config.NumberColumn(format="$%d", width="small"),
-            "Own%": st.column_config.NumberColumn(format="%.0f%%", width="small"),
-            "Stack": st.column_config.TextColumn(width="small")}
-        for c in COLS:
-            colcfg[c] = st.column_config.TextColumn(slot_label[c])
+        st.subheader("Candidate lineups")
 
-        st.caption("Players are the focus — tick **✓** to mark lineups for "
-                   "export. Win/Top-10/Top-100/own are compact on the right; "
-                   "finishing-position detail is in the panel below.")
-        edited = st.data_editor(
-            disp, hide_index=True, height=460, use_container_width=True,
-            disabled=[c for c in disp.columns if c != "✓"], column_config=colcfg,
-            column_order=["✓", "Rank"] + COLS +
-                         ["Win%", "Top10%", "Top100%", "Salary", "Own%", "Stack"])
-        for cand_id, on in zip(fres["Candidate"], edited["✓"]):
-            (picked.add if on else picked.discard)(int(cand_id))
-        st.caption(f"☑️ **{len(picked):,}** lineup(s) marked for export.")
+        # ---------------------- filter & search -------------------------------- #
+        with st.expander("🔎 Filter & search lineups", expanded=False):
+            f1, f2 = st.columns(2)
+            players_sel = f1.multiselect("Must include player(s)", sim["pool_players"])
+            match_mode = f1.radio("Player match", ["all", "any"], horizontal=True,
+                                  help="'all' = lineup contains every selected player; "
+                                       "'any' = at least one.")
+            shapes_sel = f2.multiselect("Stack shape (build style)",
+                                        sorted(res["Stack"].unique()))
+            teams_sel = f2.multiselect("Primary stack team",
+                                       sorted(t for t in res["PrimaryTeam"].unique() if t))
+            g1, g2, g3 = st.columns(3)
+            psize_sel = g1.multiselect("Primary stack size",
+                                       sorted(res["PrimaryStack"].unique(), reverse=True))
 
-        d1, d2, d3 = st.columns(3)
-        d1.download_button("Download filtered results (CSV)",
-                           fres.to_csv(index=False).encode(),
-                           file_name=f"candidate_results_{sim['contest_size']}.csv",
-                           mime="text/csv", use_container_width=True)
-        d2.download_button("Download all candidate lineups (CSV)",
-                           lineups_to_df(sim["cands"]).to_csv(index=False).encode(),
-                           file_name=f"candidates_{len(sim['cands'])}.csv",
-                           mime="text/csv", use_container_width=True)
-        d3.download_button("Download field (CSV)",
-                           sim["field_df"].to_csv(index=False).encode(),
-                           file_name=f"field_{sim['field_n']}.csv",
-                           mime="text/csv", use_container_width=True)
+            def rng_slider(col, label, step, fmt):
+                lo, hi = float(res[col].min()), float(res[col].max())
+                if hi <= lo:
+                    return (lo, hi)
+                return col_obj.slider(label, lo, hi, (lo, hi), step=step, format=fmt)
 
-        # ---- quick export: top N of the CURRENT filter, no marking needed ----
-        st.markdown("**⚡ Quick export — top lineups from the current filter**")
-        qe1, qe2, qe3 = st.columns([1, 1.2, 2.2])
-        q_n = qe1.number_input("Top N", min_value=1, max_value=int(len(fres)),
-                               value=min(20, int(len(fres))), step=1, key="qe_n")
-        q_sort = qe2.selectbox("by", ["Win%", "Top10 Rate", "Top100 Rate"],
-                               index=0, key="qe_sort")
-        dkid_q = dict(sim.get("id_map") or {})
-        with qe3:
-            if dkid_q:
-                qtext, qinfo = build_dk_upload(fres, dkid_q, int(q_n), q_sort)
-                if qinfo["chosen"] == 0:
-                    st.caption("No DK-mappable lineups in this filter.")
+            col_obj = g2
+            own_rng = rng_slider("OwnSum", "Combined ownership %", 0.5, "%.0f")
+            col_obj = g3
+            sal_rng = rng_slider("Salary", "Salary", 100.0, "$%d")
+            h1, h2, h3 = st.columns(3)
+            min_win = h1.number_input("Min Win%", 0.0, 100.0, 0.0, 0.1, format="%.2f")
+            min_t10 = h2.number_input("Min Top10%", 0.0, 100.0, 0.0, 0.5)
+            min_t100 = h3.number_input("Min Top100%", 0.0, 100.0, 0.0, 1.0)
+
+        mask = pd.Series(True, index=res.index)
+        if players_sel:
+            want = set(players_sel)
+            c2p = sim["cand_to_players"]
+            mask &= res["Candidate"].map(
+                lambda c: (want.issubset(c2p[int(c)]) if match_mode == "all"
+                           else bool(want & c2p[int(c)])))
+        if shapes_sel:
+            mask &= res["Stack"].isin(shapes_sel)
+        if teams_sel:
+            mask &= res["PrimaryTeam"].isin(teams_sel)
+        if psize_sel:
+            mask &= res["PrimaryStack"].isin(psize_sel)
+        mask &= res["OwnSum"].between(*own_rng)
+        mask &= res["Salary"].between(*sal_rng)
+        mask &= res["Win%"] >= min_win
+        mask &= res["Top10%"] >= min_t10
+        mask &= res["Top100%"] >= min_t100
+        fres = res[mask].reset_index(drop=True)
+
+        picked = st.session_state.setdefault("picked", set())
+        c1, c2, c3 = st.columns([1.2, 1, 3])
+        c1.caption(f"**{len(fres):,}** of {len(res):,} lineups match.")
+        if c2.button("Mark all", help="Mark every lineup currently shown",
+                     use_container_width=True):
+            picked |= {int(x) for x in fres["Candidate"]}
+        if c3.button("Clear marks", use_container_width=False):
+            picked.clear()
+
+        if len(fres) == 0:
+            st.info("No lineups match these filters — loosen them.")
+        else:
+            # ---- player-focused lineups table (✓ to mark; metrics compact) ----
+            slot_label = {"P1": "P", "P2": "P", "C": "C", "1B": "1B", "2B": "2B",
+                          "3B": "3B", "SS": "SS", "OF1": "OF", "OF2": "OF", "OF3": "OF"}
+
+            def _nm(v):
+                return str(v).rsplit(" (", 1)[0]
+
+            disp = pd.DataFrame({"✓": [int(x) in picked for x in fres["Candidate"]],
+                                 "Rank": fres["Rank"]})
+            for c in COLS:
+                disp[c] = fres[c].map(_nm)
+            disp["Win%"] = fres["Win%"]
+            disp["Top10%"] = fres["Top10%"]
+            disp["Top100%"] = fres["Top100%"]
+            disp["Salary"] = fres["Salary"]
+            disp["Own%"] = fres["OwnSum"]
+            disp["Stack"] = fres["Stack"]
+
+            colcfg = {
+                "✓": st.column_config.CheckboxColumn("✓", help="Mark for export",
+                                                     width="small"),
+                "Rank": st.column_config.NumberColumn(width="small"),
+                "Win%": st.column_config.NumberColumn(format="%.2f%%", width="small"),
+                "Top10%": st.column_config.NumberColumn(format="%.1f%%", width="small"),
+                "Top100%": st.column_config.NumberColumn(format="%.1f%%", width="small"),
+                "Salary": st.column_config.NumberColumn(format="$%d", width="small"),
+                "Own%": st.column_config.NumberColumn(format="%.0f%%", width="small"),
+                "Stack": st.column_config.TextColumn(width="small")}
+            for c in COLS:
+                colcfg[c] = st.column_config.TextColumn(slot_label[c])
+
+            st.caption("Players are the focus — tick **✓** to mark lineups for "
+                       "export. Win/Top-10/Top-100/own are compact on the right; "
+                       "finishing-position detail is in the panel below.")
+            edited = st.data_editor(
+                disp, hide_index=True, height=460, use_container_width=True,
+                disabled=[c for c in disp.columns if c != "✓"], column_config=colcfg,
+                column_order=["✓", "Rank"] + COLS +
+                             ["Win%", "Top10%", "Top100%", "Salary", "Own%", "Stack"])
+            for cand_id, on in zip(fres["Candidate"], edited["✓"]):
+                (picked.add if on else picked.discard)(int(cand_id))
+            st.caption(f"☑️ **{len(picked):,}** lineup(s) marked for export.")
+
+            d1, d2, d3 = st.columns(3)
+            d1.download_button("Download filtered results (CSV)",
+                               fres.to_csv(index=False).encode(),
+                               file_name=f"candidate_results_{sim['contest_size']}.csv",
+                               mime="text/csv", use_container_width=True)
+            d2.download_button("Download all candidate lineups (CSV)",
+                               lineups_to_df(sim["cands"]).to_csv(index=False).encode(),
+                               file_name=f"candidates_{len(sim['cands'])}.csv",
+                               mime="text/csv", use_container_width=True)
+            d3.download_button("Download field (CSV)",
+                               sim["field_df"].to_csv(index=False).encode(),
+                               file_name=f"field_{sim['field_n']}.csv",
+                               mime="text/csv", use_container_width=True)
+
+            # ---- quick export: top N of the CURRENT filter, no marking needed ----
+            st.markdown("**⚡ Quick export — top lineups from the current filter**")
+            qe1, qe2, qe3 = st.columns([1, 1.2, 2.2])
+            q_n = qe1.number_input("Top N", min_value=1, max_value=int(len(fres)),
+                                   value=min(20, int(len(fres))), step=1, key="qe_n")
+            q_sort = qe2.selectbox("by", ["Win%", "Top10 Rate", "Top100 Rate"],
+                                   index=0, key="qe_sort")
+            dkid_q = dict(sim.get("id_map") or {})
+            with qe3:
+                if dkid_q:
+                    qtext, qinfo = build_dk_upload(fres, dkid_q, int(q_n), q_sort)
+                    if qinfo["chosen"] == 0:
+                        st.caption("No DK-mappable lineups in this filter.")
+                    else:
+                        skip = (f" ({qinfo['skipped_unmapped']} skipped — no ID)"
+                                if qinfo["skipped_unmapped"] else "")
+                        st.download_button(
+                            f"⬇ Export top {qinfo['chosen']} by {q_sort} "
+                            f"(of {len(fres):,} filtered){skip}",
+                            qtext.encode(),
+                            file_name=f"DK_upload_filtered_{qinfo['chosen']}.csv",
+                            mime="text/csv", type="primary", use_container_width=True,
+                            key="qe_dl")
                 else:
-                    skip = (f" ({qinfo['skipped_unmapped']} skipped — no ID)"
-                            if qinfo["skipped_unmapped"] else "")
+                    st.caption("Add player IDs (slate file, or a template in the "
+                               "export section below) to enable quick export.")
+
+            # ---- secondary: finishing-position detail (de-emphasized) ----
+            with st.expander("📊 Finishing-position detail — pick a lineup",
+                             expanded=False):
+                labels = {int(c): f"Rank {int(rk)} · {stk} · Win {w:.2f}%"
+                          for c, rk, stk, w in zip(fres["Candidate"], fres["Rank"],
+                                                   fres["Stack"], fres["Win%"])}
+                chosen_cand = st.selectbox("Lineup", list(fres["Candidate"]),
+                                           format_func=lambda c: labels[int(c)],
+                                           label_visibility="collapsed")
+                cand_idx = int(chosen_cand) - 1
+                r = res[res["Candidate"] == chosen_cand].iloc[0]
+                cc1, cc2 = st.columns([3, 2])
+                with cc1:
+                    st.altair_chart(
+                        place_distribution_chart(sim["dist"], cand_idx,
+                                                 sim["field_n"], K),
+                        use_container_width=True)
+                with cc2:
+                    st.caption(f"Rank #{int(r['Rank'])} · {r['Stack']} · "
+                               f"${int(r['Salary']):,}")
+                    q1, q2, q3 = st.columns(3)
+                    q1.metric("Best", f"{int(r['BestPlace']):,}")
+                    q2.metric("Avg", f"{r['AvgPlace']:,.0f}")
+                    q3.metric("Worst", f"{int(r['WorstPlace']):,}")
+                    in_marks = int(chosen_cand) in picked
+                    if st.button(("☑️ Unmark" if in_marks else "⬜ Mark for export"),
+                                 use_container_width=True):
+                        (picked.discard if in_marks else picked.add)(int(chosen_cand))
+                        st.rerun()
+                st.caption("Dashed lines mark 1st, Top-10, Top-100, and the lineup's "
+                           "mean place. The x-axis covers valid places (1 … field).")
+
+with tabs[3]:
+    if sim is None:
+        st.info("Run a simulation first (Setup tab) to build a DraftKings upload.")
+    else:
+            st.subheader("3 · Build a DraftKings upload file")
+
+            # IDs come from the slate file you already uploaded; a template is only a
+            # fallback if that file carried no player IDs.
+            dkid = dict(sim.get("id_map") or {})
+            if dkid:
+                st.caption(f"Using the {len(dkid)} player IDs from the slate file you "
+                           "uploaded — no extra template needed.")
+            else:
+                st.caption("Your slate file had no player IDs, so upload a DKSalaries "
+                           "template once to supply them (or re-upload a slate file that "
+                           "includes IDs).")
+                tmpl = st.file_uploader("DKSalaries template CSV", type=["csv"],
+                                        key="dk_template")
+                if tmpl is not None:
+                    parsed = parse_dk_template(tmpl.getvalue().decode("utf-8", "replace"))
+                    if not parsed:
+                        st.error("Couldn't find the player table in that template — "
+                                 "expected a row whose 12th column is 'Position' with "
+                                 "Name/ID columns.")
+                    else:
+                        dkid = parsed
+
+            mode = st.radio(
+                "Which lineups to export?",
+                [f"My marked selections ({len(picked)})", "Top N by ranking"],
+                index=0 if picked else 1, horizontal=True)
+
+            if not dkid:
+                st.info("Player IDs are needed to build the upload file (see above).")
+            elif mode.startswith("My marked"):
+                if not picked:
+                    st.info("Mark some lineups above (tick the ✓ column), then export them here.")
+                else:
+                    sel_df = res[res["Candidate"].isin(picked)]   # already in rank order
+                    csv_text, info = rows_to_upload_csv(sel_df, dkid)
+                    if info["chosen"] == 0:
+                        st.error("None of your marked lineups had a DK ID for every "
+                                 "player — check that the slate file's IDs cover these "
+                                 "players.")
+                    else:
+                        msg = f"Exporting **{info['chosen']}** marked lineup(s)."
+                        if info["skipped_unmapped"]:
+                            msg += (f" ({info['skipped_unmapped']} skipped — a player had "
+                                    "no DK ID.)")
+                        st.success(msg)
+                        st.download_button(
+                            "⬇ Download DraftKings upload CSV", csv_text.encode(),
+                            file_name=f"DK_upload_marked_{info['chosen']}.csv",
+                            mime="text/csv", type="primary", use_container_width=True)
+            else:
+                from_filter = st.radio(
+                    "Rank from", [f"Current filter ({len(fres):,})",
+                                  f"All candidates ({len(res):,})"],
+                    index=0, horizontal=True,
+                    help="Top-N is taken from your active filters by default, so e.g. "
+                         "filter to 5 primary-stack teams and export the top 20 by Win%.")
+                src = fres if from_filter.startswith("Current") else res
+                uc1, uc2 = st.columns(2)
+                n_up = uc1.number_input("Number of lineups to export", min_value=1,
+                                        max_value=max(1, int(len(src))),
+                                        value=min(20, max(1, int(len(src)))), step=1)
+                sort_by = uc2.selectbox("Rank lineups by",
+                                        ["Win%", "Top10 Rate", "Top100 Rate"], index=0,
+                                        help="Win% favors tournament-winning ceiling; the "
+                                             "Top10/Top100 rates favor consistent cashing.")
+                with st.expander("Exposure caps (optional)"):
+                    pc1, pc2 = st.columns(2)
+                    player_cap = pc1.slider("Max player exposure", 0.05, 1.0, 1.0, 0.05,
+                                            help="Cap the share of exported lineups any "
+                                                 "one player can appear in (1.0 = no cap).")
+                    team_cap = pc2.slider("Max primary-stack-team exposure", 0.05, 1.0,
+                                          1.0, 0.05, help="Cap the share sharing the same "
+                                                          "primary stack team.")
+                csv_text, info = build_dk_upload(src, dkid, n_up, sort_by,
+                                                 player_cap, team_cap)
+                if info["chosen"] == 0:
+                    st.error("No exportable lineups — players had no DK ID, or the caps "
+                             "are too strict.")
+                else:
+                    msg = (f"Selected **{info['chosen']} of {n_up}** lineups by "
+                           f"**{sort_by}**. Max single-player exposure "
+                           f"{info['max_player']}/{info['chosen']}, max stack-team "
+                           f"{info['max_team']}/{info['chosen']}.")
+                    if info["skipped_unmapped"]:
+                        msg += (f" ({info['skipped_unmapped']} skipped: a player had no "
+                                "DK ID.)")
+                    st.success(msg)
                     st.download_button(
-                        f"⬇ Export top {qinfo['chosen']} by {q_sort} "
-                        f"(of {len(fres):,} filtered){skip}",
-                        qtext.encode(),
-                        file_name=f"DK_upload_filtered_{qinfo['chosen']}.csv",
-                        mime="text/csv", type="primary", use_container_width=True,
-                        key="qe_dl")
-            else:
-                st.caption("Add player IDs (slate file, or a template in the "
-                           "export section below) to enable quick export.")
+                        "⬇ Download DraftKings upload CSV", csv_text.encode(),
+                        file_name=f"DK_upload_{info['chosen']}.csv",
+                        mime="text/csv", type="primary", use_container_width=True)
 
-        # ---- secondary: finishing-position detail (de-emphasized) ----
-        with st.expander("📊 Finishing-position detail — pick a lineup",
-                         expanded=False):
-            labels = {int(c): f"Rank {int(rk)} · {stk} · Win {w:.2f}%"
-                      for c, rk, stk, w in zip(fres["Candidate"], fres["Rank"],
-                                               fres["Stack"], fres["Win%"])}
-            chosen_cand = st.selectbox("Lineup", list(fres["Candidate"]),
-                                       format_func=lambda c: labels[int(c)],
-                                       label_visibility="collapsed")
-            cand_idx = int(chosen_cand) - 1
-            r = res[res["Candidate"] == chosen_cand].iloc[0]
-            cc1, cc2 = st.columns([3, 2])
-            with cc1:
-                st.altair_chart(
-                    place_distribution_chart(sim["dist"], cand_idx,
-                                             sim["field_n"], K),
-                    use_container_width=True)
-            with cc2:
-                st.caption(f"Rank #{int(r['Rank'])} · {r['Stack']} · "
-                           f"${int(r['Salary']):,}")
-                q1, q2, q3 = st.columns(3)
-                q1.metric("Best", f"{int(r['BestPlace']):,}")
-                q2.metric("Avg", f"{r['AvgPlace']:,.0f}")
-                q3.metric("Worst", f"{int(r['WorstPlace']):,}")
-                in_marks = int(chosen_cand) in picked
-                if st.button(("☑️ Unmark" if in_marks else "⬜ Mark for export"),
-                             use_container_width=True):
-                    (picked.discard if in_marks else picked.add)(int(chosen_cand))
-                    st.rerun()
-            st.caption("Dashed lines mark 1st, Top-10, Top-100, and the lineup's "
-                       "mean place. The x-axis covers valid places (1 … field).")
-
-    # ----------------------------------------------------------------------- #
-    # Step 3 — filled DraftKings upload file
-    # ----------------------------------------------------------------------- #
-    st.divider()
-    st.subheader("3 · Build a DraftKings upload file")
-
-    # IDs come from the slate file you already uploaded; a template is only a
-    # fallback if that file carried no player IDs.
-    dkid = dict(sim.get("id_map") or {})
-    if dkid:
-        st.caption(f"Using the {len(dkid)} player IDs from the slate file you "
-                   "uploaded — no extra template needed.")
-    else:
-        st.caption("Your slate file had no player IDs, so upload a DKSalaries "
-                   "template once to supply them (or re-upload a slate file that "
-                   "includes IDs).")
-        tmpl = st.file_uploader("DKSalaries template CSV", type=["csv"],
-                                key="dk_template")
-        if tmpl is not None:
-            parsed = parse_dk_template(tmpl.getvalue().decode("utf-8", "replace"))
-            if not parsed:
-                st.error("Couldn't find the player table in that template — "
-                         "expected a row whose 12th column is 'Position' with "
-                         "Name/ID columns.")
-            else:
-                dkid = parsed
-
-    mode = st.radio(
-        "Which lineups to export?",
-        [f"My marked selections ({len(picked)})", "Top N by ranking"],
-        index=0 if picked else 1, horizontal=True)
-
-    if not dkid:
-        st.info("Player IDs are needed to build the upload file (see above).")
-    elif mode.startswith("My marked"):
-        if not picked:
-            st.info("Mark some lineups above (tick the ✓ column), then export them here.")
-        else:
-            sel_df = res[res["Candidate"].isin(picked)]   # already in rank order
-            csv_text, info = rows_to_upload_csv(sel_df, dkid)
-            if info["chosen"] == 0:
-                st.error("None of your marked lineups had a DK ID for every "
-                         "player — check that the slate file's IDs cover these "
-                         "players.")
-            else:
-                msg = f"Exporting **{info['chosen']}** marked lineup(s)."
-                if info["skipped_unmapped"]:
-                    msg += (f" ({info['skipped_unmapped']} skipped — a player had "
-                            "no DK ID.)")
-                st.success(msg)
-                st.download_button(
-                    "⬇ Download DraftKings upload CSV", csv_text.encode(),
-                    file_name=f"DK_upload_marked_{info['chosen']}.csv",
-                    mime="text/csv", type="primary", use_container_width=True)
-    else:
-        from_filter = st.radio(
-            "Rank from", [f"Current filter ({len(fres):,})",
-                          f"All candidates ({len(res):,})"],
-            index=0, horizontal=True,
-            help="Top-N is taken from your active filters by default, so e.g. "
-                 "filter to 5 primary-stack teams and export the top 20 by Win%.")
-        src = fres if from_filter.startswith("Current") else res
-        uc1, uc2 = st.columns(2)
-        n_up = uc1.number_input("Number of lineups to export", min_value=1,
-                                max_value=max(1, int(len(src))),
-                                value=min(20, max(1, int(len(src)))), step=1)
-        sort_by = uc2.selectbox("Rank lineups by",
-                                ["Win%", "Top10 Rate", "Top100 Rate"], index=0,
-                                help="Win% favors tournament-winning ceiling; the "
-                                     "Top10/Top100 rates favor consistent cashing.")
-        with st.expander("Exposure caps (optional)"):
-            pc1, pc2 = st.columns(2)
-            player_cap = pc1.slider("Max player exposure", 0.05, 1.0, 1.0, 0.05,
-                                    help="Cap the share of exported lineups any "
-                                         "one player can appear in (1.0 = no cap).")
-            team_cap = pc2.slider("Max primary-stack-team exposure", 0.05, 1.0,
-                                  1.0, 0.05, help="Cap the share sharing the same "
-                                                  "primary stack team.")
-        csv_text, info = build_dk_upload(src, dkid, n_up, sort_by,
-                                         player_cap, team_cap)
-        if info["chosen"] == 0:
-            st.error("No exportable lineups — players had no DK ID, or the caps "
-                     "are too strict.")
-        else:
-            msg = (f"Selected **{info['chosen']} of {n_up}** lineups by "
-                   f"**{sort_by}**. Max single-player exposure "
-                   f"{info['max_player']}/{info['chosen']}, max stack-team "
-                   f"{info['max_team']}/{info['chosen']}.")
-            if info["skipped_unmapped"]:
-                msg += (f" ({info['skipped_unmapped']} skipped: a player had no "
-                        "DK ID.)")
-            st.success(msg)
-            st.download_button(
-                "⬇ Download DraftKings upload CSV", csv_text.encode(),
-                file_name=f"DK_upload_{info['chosen']}.csv",
-                mime="text/csv", type="primary", use_container_width=True)
