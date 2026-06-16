@@ -74,6 +74,8 @@ def simulate(matchup, n_sims=10000, seed=20260610):
         for side in ('away', 'home'):
             sh = shared[side]; sh_var = float(np.var(sh))
             implied = g['implied'][side]
+            # user team-total override rescales this team's offense (1.0 = none)
+            ts = float(g.get('total_scale', {}).get(side, 1.0) or 1.0)
             for p in g['lineups'][side]:
                 vec = p['vec']
                 if vec is None:
@@ -82,8 +84,8 @@ def simulate(matchup, n_sims=10000, seed=20260610):
                 pa_mean = _pa_per_game(slot)
                 pa = np.clip(rng.poisson(pa_mean, n), 1, 7)
                 idio = SI * rng.standard_normal(n)
-                m_off = np.exp(sh + idio - 0.5*(sh_var + SI**2))
-                m_hr  = np.exp(sh + idio + SG_HR_EXTRA*Lg - 0.5*(sh_var + SI**2 + SG_HR_EXTRA**2))
+                m_off = ts * np.exp(sh + idio - 0.5*(sh_var + SI**2))
+                m_hr  = ts * np.exp(sh + idio + SG_HR_EXTRA*Lg - 0.5*(sh_var + SI**2 + SG_HR_EXTRA**2))
 
                 p_hr = np.clip(vec['p_hr'] * m_hr, 0.001, 0.20)
                 p_3b = np.clip(vec['p_3b'] * m_off, 0, 0.05)

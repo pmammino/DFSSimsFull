@@ -68,6 +68,9 @@ def main():
     ap.add_argument('--refresh-proj', action='store_true')
     ap.add_argument('--n-sims', type=int, default=10000)
     ap.add_argument('--seed', type=int, default=20260610)
+    ap.add_argument('--team-totals', help='JSON {team_code: implied_runs} to '
+                    'override the slate Vegas team totals (scales that team\'s '
+                    'offense by edited/original).')
     args = ap.parse_args()
 
     os.makedirs(DELIV_DIR, exist_ok=True)
@@ -84,6 +87,24 @@ def main():
     vj = open(args.vegas).read() if args.vegas else None
     slate = slate_ingest.build_slate(cx, ex, vegas_json=vj)
     print(f"   date={slate['date']} games={len(slate['games'])}")
+
+    # 2b) optional user override of team Vegas totals -> rescale team offense
+    if args.team_totals:
+        ov = json.load(open(args.team_totals))
+        n_ov = 0
+        for g in slate['games'].values():
+            g.setdefault('total_scale', {'away': 1.0, 'home': 1.0})
+            for side in ('away', 'home'):
+                team = g[side]
+                if team in ov:
+                    orig = float(g['implied'].get(side) or 0.0) or 4.4
+                    new = float(ov[team])
+                    g['implied'][side] = new
+                    g['total_scale'][side] = max(0.2, min(2.5, new / orig))
+                    n_ov += 1
+            g['implied']['total'] = (float(g['implied'].get('away') or 0.0)
+                                     + float(g['implied'].get('home') or 0.0))
+        print(f"   applied team-total overrides for {n_ov} team(s)")
 
     # 3) matchup
     print("[3/6] Building matchup-specific per-PA inputs (vL/vR + park)...")
