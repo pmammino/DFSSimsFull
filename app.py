@@ -1450,6 +1450,33 @@ else:
                            file_name=f"field_{sim['field_n']}.csv",
                            mime="text/csv", use_container_width=True)
 
+        # ---- quick export: top N of the CURRENT filter, no marking needed ----
+        st.markdown("**⚡ Quick export — top lineups from the current filter**")
+        qe1, qe2, qe3 = st.columns([1, 1.2, 2.2])
+        q_n = qe1.number_input("Top N", min_value=1, max_value=int(len(fres)),
+                               value=min(20, int(len(fres))), step=1, key="qe_n")
+        q_sort = qe2.selectbox("by", ["Win%", "Top10 Rate", "Top100 Rate"],
+                               index=0, key="qe_sort")
+        dkid_q = dict(sim.get("id_map") or {})
+        with qe3:
+            if dkid_q:
+                qtext, qinfo = build_dk_upload(fres, dkid_q, int(q_n), q_sort)
+                if qinfo["chosen"] == 0:
+                    st.caption("No DK-mappable lineups in this filter.")
+                else:
+                    skip = (f" ({qinfo['skipped_unmapped']} skipped — no ID)"
+                            if qinfo["skipped_unmapped"] else "")
+                    st.download_button(
+                        f"⬇ Export top {qinfo['chosen']} by {q_sort} "
+                        f"(of {len(fres):,} filtered){skip}",
+                        qtext.encode(),
+                        file_name=f"DK_upload_filtered_{qinfo['chosen']}.csv",
+                        mime="text/csv", type="primary", use_container_width=True,
+                        key="qe_dl")
+            else:
+                st.caption("Add player IDs (slate file, or a template in the "
+                           "export section below) to enable quick export.")
+
         # ---- secondary: finishing-position detail (de-emphasized) ----
         with st.expander("📊 Finishing-position detail — pick a lineup",
                          expanded=False):
@@ -1537,10 +1564,17 @@ else:
                     file_name=f"DK_upload_marked_{info['chosen']}.csv",
                     mime="text/csv", type="primary", use_container_width=True)
     else:
+        from_filter = st.radio(
+            "Rank from", [f"Current filter ({len(fres):,})",
+                          f"All candidates ({len(res):,})"],
+            index=0, horizontal=True,
+            help="Top-N is taken from your active filters by default, so e.g. "
+                 "filter to 5 primary-stack teams and export the top 20 by Win%.")
+        src = fres if from_filter.startswith("Current") else res
         uc1, uc2 = st.columns(2)
         n_up = uc1.number_input("Number of lineups to export", min_value=1,
-                                max_value=int(len(res)),
-                                value=min(20, int(len(res))), step=1)
+                                max_value=max(1, int(len(src))),
+                                value=min(20, max(1, int(len(src)))), step=1)
         sort_by = uc2.selectbox("Rank lineups by",
                                 ["Win%", "Top10 Rate", "Top100 Rate"], index=0,
                                 help="Win% favors tournament-winning ceiling; the "
@@ -1553,7 +1587,7 @@ else:
             team_cap = pc2.slider("Max primary-stack-team exposure", 0.05, 1.0,
                                   1.0, 0.05, help="Cap the share sharing the same "
                                                   "primary stack team.")
-        csv_text, info = build_dk_upload(res, dkid, n_up, sort_by,
+        csv_text, info = build_dk_upload(src, dkid, n_up, sort_by,
                                          player_cap, team_cap)
         if info["chosen"] == 0:
             st.error("No exportable lineups — players had no DK ID, or the caps "
