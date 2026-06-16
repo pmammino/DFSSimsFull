@@ -29,9 +29,12 @@ pill badges, tabs (purple active underline), buttons, and tables.
 
 The flow is organized as a **Tabbed Workspace** (design Option C):
 
-- **⚙️ Setup** — upload the slate file, configure contest size / sim runs /
-  candidates / tilts, and Run (with the live freshness/rebuild log).
-- **📊 Players** — per-player projected ranges & thresholds.
+- **⚙️ Setup** — upload the slate file; review & **edit the day's Vegas team
+  totals** (you must change **≥2** before Run enables — each edit rescales that
+  team's offense by your value ÷ Vegas, and the sims rebuild with them);
+  configure contest size / sim runs / candidates / tilts, and Run.
+- **📊 Players** — per-player projected ranges & thresholds. (The app jumps here
+  automatically when a run finishes, as a "done" indicator.)
 - **🏆 Results** — candidate lineups: metrics, filter/search, quick export.
 - **⬇️ Export** — build the DraftKings upload file.
 
@@ -200,9 +203,10 @@ to see its outcome histogram. It reflects the latest refreshed sims.
 ## Output, filtering & inspecting lineups
 
 - Headline metrics + a **candidate-lineups** table you can mark up and filter.
-- **🔎 Filter & search** by: player(s) the lineup must include (all/any), stack
-  shape (build style), primary stack team, primary stack size, combined
-  ownership %, salary range, and minimum Win% / Top10% / Top100%.
+- **🔎 Filter & search** by: player(s) the lineup must include (all/any),
+  player(s) to **exclude**, stack shape (build style), primary stack team,
+  primary stack size, combined ownership %, salary range, and minimum
+  Win% / Top10% / Top100%.
 - **Mark off lineups** — tick the ✓ column on any rows (or **Mark all** the
   filtered set); marks persist across filtering and feed the export below.
 - **⚡ Quick export** — under the table, export the **top N by Win% / Top10 /

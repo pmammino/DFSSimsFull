@@ -567,6 +567,29 @@ def load_stored_slate():
     return None
 
 
+def slate_team_totals():
+    """Per-team Vegas implied run totals for today's slate, from the live feed
+    (preferred) or the stored slate.json. Returns [{Game, Team, Vegas total}]."""
+    slate = None
+    try:
+        slate = slate_ingest.build_slate(write=False)
+    except Exception:
+        slate = load_stored_slate()
+    rows = []
+    if slate:
+        for g in slate.get("games", {}).values():
+            for side in ("away", "home"):
+                t = g.get(side)
+                imp = (g.get("implied") or {}).get(side)
+                if t and imp is not None:
+                    rows.append({"Game": f"{g.get('away')} @ {g.get('home')}",
+                                 "Team": t, "Vegas total": round(float(imp), 1)})
+    return rows
+
+
+TOTALS_OVERRIDE_PATH = os.path.join(HERE, "data", "team_totals_override.json")
+
+
 def _tail(text, n=15):
     return "\n".join((text or "").strip().splitlines()[-n:])
 
@@ -616,7 +639,7 @@ def _stamp_after_sims(today, live_sig):
                       slate_date=(fresh or {}).get("date") or (live_sig or {}).get("date"))
 
 
-def ensure_fresh(status, force=False):
+def ensure_fresh(status, force=False, totals_path=None):
     """Refresh only what's stale, with the daily SIM rebuild decoupled from the
     heavier projection rebuild. When `force` is set, rebuild both projections
     (bypassing the once-a-day attempt guard) and sims regardless of staleness.
@@ -754,13 +777,15 @@ def ensure_fresh(status, force=False):
         lineups_changed = live_sig is not None and (stored_sig is None
                                                     or live_sig != stored_sig)
         need_sims = (force or not sims_present() or projections_rebuilt
-                     or new_game_day or lineups_changed)
+                     or new_game_day or lineups_changed or totals_path is not None)
         if need_sims:
-            if not sims_present() and live_sig is None:
+            if not sims_present() and live_sig is None and totals_path is None:
                 st.error("No sims on disk and the live feed is unreachable — can't "
                          "build sims. Check your network and re-run.")
                 return notes, False, live_playable
-            if not sims_present():
+            if totals_path is not None:
+                why = "edited team totals"
+            elif not sims_present():
                 why = "no sims on disk"
             elif new_game_day:
                 why = f"new game day ({stamp.get('slate_date')}→{slate_day})"
@@ -774,7 +799,10 @@ def ensure_fresh(status, force=False):
                 why = "first run"
             status.write("Rebuilding correlated sims from today's live slate "
                          f"(lineups + matchups + Vegas totals) — {why}…")
-            ok, out = run_script(["run_slate.py"], "Correlated sims (Stage C)", status)
+            cmd = ["run_slate.py"]
+            if totals_path is not None:
+                cmd += ["--team-totals", totals_path]
+            ok, out = run_script(cmd, "Correlated sims (Stage C)", status)
             if ok:
                 _stamp_after_sims(today, live_sig)
                 notes.append(f"Rebuilt correlated sims from today's slate — {why}.")
@@ -1092,6 +1120,50 @@ with tabs[0]:
             st.error(f"Could not read slate file: {e}")
 
     # --------------------------------------------------------------------------- #
+    # Team totals (Vegas) — shown + editable; >=2 edits required to run
+    # --------------------------------------------------------------------------- #
+    st.subheader("Team totals (Vegas) — adjust before running")
+    st.caption("These implied run totals drive the sims. **Edit at least 2** team "
+               "totals to enable the run — each change rescales that team's "
+               "offense by (your value ÷ Vegas).")
+    if "_tt_rows" not in st.session_state:
+        with st.spinner("Reading today's team totals…"):
+            st.session_state["_tt_rows"] = slate_team_totals()
+    _tt_rows = st.session_state["_tt_rows"]
+    tt_override = {}
+    n_tt_edits = 0
+    if not _tt_rows:
+        st.info("Couldn't read today's team totals (live feed unavailable). The "
+                "2-edit gate is skipped; sims use the pipeline's Vegas totals.")
+        n_tt_edits = 2   # don't block when totals can't be shown
+    else:
+        _tt_base = {r["Team"]: r["Vegas total"] for r in _tt_rows}
+        _tt_edit = st.data_editor(
+            pd.DataFrame(_tt_rows), hide_index=True, use_container_width=True,
+            height=min(420, 60 + 35 * len(_tt_rows)), key="tt_editor",
+            disabled=["Game", "Team"],
+            column_config={
+                "Game": st.column_config.TextColumn(width="medium"),
+                "Team": st.column_config.TextColumn(width="small"),
+                "Vegas total": st.column_config.NumberColumn(
+                    "Implied total", min_value=0.0, max_value=18.0, step=0.1,
+                    format="%.1f")})
+        for _, rr in _tt_edit.iterrows():
+            base = _tt_base.get(rr["Team"])
+            try:
+                val = float(rr["Vegas total"])
+            except (TypeError, ValueError):
+                continue
+            if base is not None and abs(val - float(base)) > 1e-6:
+                tt_override[rr["Team"]] = round(val, 2)
+                n_tt_edits += 1
+        if n_tt_edits >= 2:
+            st.caption(f"✏️ {n_tt_edits} team total(s) changed — run enabled.")
+        else:
+            st.caption(f"✏️ {n_tt_edits} changed · change "
+                       f"**{2 - n_tt_edits} more** to enable the run.")
+
+    # --------------------------------------------------------------------------- #
     # Step 2 — forced decisions, gated behind a Run button
     # --------------------------------------------------------------------------- #
     st.subheader("2 · Make your selections, then run")
@@ -1159,8 +1231,11 @@ with tabs[0]:
             help="Rebuild projections (Stage B) and correlated sims (Stage C) "
                  "regardless of staleness — bypasses the once-a-day retry guard. "
                  "Use after fixing a data/connection issue.")
-        submitted = st.form_submit_button("▶ Run simulation", type="primary",
-                                          use_container_width=True)
+        submitted = st.form_submit_button(
+            "▶ Run simulation", type="primary", use_container_width=True,
+            disabled=(n_tt_edits < 2),
+            help=None if n_tt_edits >= 2 else
+            "Adjust at least 2 team totals above to enable the run.")
 
     contest_size = int(size_custom) if size_custom else (int(size_sel) if size_sel else None)
 
@@ -1187,10 +1262,24 @@ with tabs[0]:
             st.info("Large request — field/candidate construction and scoring may "
                     "take a while and use significant memory.")
 
+        # write the user's team-total overrides so Stage C rebuilds with them
+        tt_path = None
+        if tt_override:
+            try:
+                os.makedirs(os.path.dirname(TOTALS_OVERRIDE_PATH), exist_ok=True)
+                json.dump(tt_override, open(TOTALS_OVERRIDE_PATH, "w"))
+                tt_path = TOTALS_OVERRIDE_PATH
+            except Exception as e:
+                st.warning(f"Couldn't save team-total overrides ({e}); using Vegas.")
+
         t0 = time.time()
         with st.status("Running contest simulation…", expanded=True) as status:
+            if tt_path:
+                st.write(f"Applying {len(tt_override)} team-total override(s): "
+                         + ", ".join(f"{t} {v:g}" for t, v in tt_override.items()))
             # ---- 0) freshness: rebuild projections / sims when stale ----
-            notes, sims_changed, live_playable = ensure_fresh(status, force=force_refresh)
+            notes, sims_changed, live_playable = ensure_fresh(
+                status, force=force_refresh, totals_path=tt_path)
             for n in notes:
                 st.write("• " + n)
             H_, P_, score_, n_sim_ = H, P, score, n_sim
@@ -1378,6 +1467,8 @@ with tabs[0]:
         # fresh run -> clear prior marks / inspection state
         st.session_state["picked"] = set()
         st.session_state.pop("show_dist_for", None)
+        # signal the UI to jump to the Players tab as a "done" indicator
+        st.session_state["_goto_players"] = True
 
 
     # --------------------------------------------------------------------------- #
@@ -1458,6 +1549,9 @@ with tabs[2]:
             match_mode = f1.radio("Player match", ["all", "any"], horizontal=True,
                                   help="'all' = lineup contains every selected player; "
                                        "'any' = at least one.")
+            exclude_sel = f1.multiselect(
+                "Exclude player(s)", sim["pool_players"],
+                help="Hide any lineup that contains any of these players.")
             shapes_sel = f2.multiselect("Stack shape (build style)",
                                         sorted(res["Stack"].unique()))
             teams_sel = f2.multiselect("Primary stack team",
@@ -1482,12 +1576,15 @@ with tabs[2]:
             min_t100 = h3.number_input("Min Top100%", 0.0, 100.0, 0.0, 1.0)
 
         mask = pd.Series(True, index=res.index)
+        c2p = sim["cand_to_players"]
         if players_sel:
             want = set(players_sel)
-            c2p = sim["cand_to_players"]
             mask &= res["Candidate"].map(
                 lambda c: (want.issubset(c2p[int(c)]) if match_mode == "all"
                            else bool(want & c2p[int(c)])))
+        if exclude_sel:
+            avoid = set(exclude_sel)
+            mask &= res["Candidate"].map(lambda c: not (avoid & c2p[int(c)]))
         if shapes_sel:
             mask &= res["Stack"].isin(shapes_sel)
         if teams_sel:
@@ -1726,3 +1823,26 @@ with tabs[3]:
                         file_name=f"DK_upload_{info['chosen']}.csv",
                         mime="text/csv", type="primary", use_container_width=True)
 
+
+# --------------------------------------------------------------------------- #
+# After a completed run, jump to the Players tab as a "done" indicator.
+# (Streamlit has no API to set the active tab, so click it from a one-shot
+#  same-origin script.)
+# --------------------------------------------------------------------------- #
+if st.session_state.pop("_goto_players", False):
+    import streamlit.components.v1 as _components
+    _components.html(
+        """
+        <script>
+          const doc = window.parent.document;
+          let tries = 0;
+          const jump = () => {
+            const tabs = doc.querySelectorAll('button[data-baseweb="tab"]');
+            if (tabs && tabs.length > 1) { tabs[1].click(); }
+            else if (tries++ < 20) { setTimeout(jump, 100); }
+          };
+          setTimeout(jump, 150);
+        </script>
+        """,
+        height=0,
+    )

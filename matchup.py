@@ -155,7 +155,9 @@ def build_matchup_inputs(slate, hproj, pproj):
 
     for gid, g in slate['games'].items():
         rec = {'away': g['away'], 'home': g['home'], 'datetime': g['datetime'],
-               'implied': g['implied'], 'pitchers': {}, 'lineups': {},
+               'implied': g['implied'],
+               'total_scale': g.get('total_scale', {'away': 1.0, 'home': 1.0}),
+               'pitchers': {}, 'lineups': {},
                'lineup_hand_share': {}, 'lineup_source': g['lineup_source']}
 
         # resolve pitcher hands first (needed for hitter splits)
