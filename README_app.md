@@ -18,13 +18,26 @@ pip install -r requirements.txt      # includes streamlit
 streamlit run app.py
 ```
 
-## Branding
+## Design — RotoWire (full dark) + Tabbed Workspace
 
-The UI uses brand purple **#A020FE** with black/white neutrals (set in
-`.streamlit/config.toml`). Drop your logo at **`assets/logo.png`** (or `.svg`,
-`.jpg`, `.webp`) — it's used as the top-left app logo, the page header, and the
-browser icon (favicon needs a raster `.png`/`.jpg`). A placeholder
-`assets/logo.svg` ships so the app is branded out of the box; replace it.
+The UI implements the **RotoWire product design system** (from the Claude Design
+handoff): full-dark theme, **RW Purple #A020FE**, the licensed brand fonts
+(**Integral CF** uppercase display, **Cosmica** body, **Cosmica Mono** labels,
+served from `static/fonts/` via Streamlit static serving), a branded header
+lockup with an animated **SLATE** date badge, and RotoWire-styled stat cards,
+pill badges, tabs (purple active underline), buttons, and tables.
+
+The flow is organized as a **Tabbed Workspace** (design Option C):
+
+- **⚙️ Setup** — upload the slate file, configure contest size / sim runs /
+  candidates / tilts, and Run (with the live freshness/rebuild log).
+- **📊 Players** — per-player projected ranges & thresholds.
+- **🏆 Results** — candidate lineups: metrics, filter/search, quick export.
+- **⬇️ Export** — build the DraftKings upload file.
+
+Theme tokens live in `.streamlit/config.toml`. Drop your logo at
+**`assets/logo.svg`** (or `.png`/`.jpg`/`.webp`) — it's used in the header
+lockup and as the favicon (favicon needs a raster file).
 
 Then open the URL it prints (default http://localhost:8501).
 
@@ -154,7 +167,7 @@ After a run, you can export a ready-to-upload DK file:
      order; or
    - **Top N by ranking** — choose how many and rank by **Win%**, **Top10
      Rate**, or **Top100 Rate**, with optional per-player / stack-team exposure
-     caps.
+     caps. Ranks from the **current filter** by default (or all candidates).
 3. Download `DK_upload_<N>.csv` — header `P,P,C,1B,2B,3B,SS,OF,OF,OF` followed by
    one row of DraftKings player IDs per lineup.
 
@@ -192,6 +205,9 @@ to see its outcome histogram. It reflects the latest refreshed sims.
   ownership %, salary range, and minimum Win% / Top10% / Top100%.
 - **Mark off lineups** — tick the ✓ column on any rows (or **Mark all** the
   filtered set); marks persist across filtering and feed the export below.
+- **⚡ Quick export** — under the table, export the **top N by Win% / Top10 /
+  Top100 from the current filter** in one click (no marking needed). E.g. filter
+  to 5 primary-stack teams, then export the top 20 by Win% directly.
 - **Inspect a lineup** — pick one to see a clean, player-focused table (slot,
   player, team, position, salary) plus its rates and best/avg/worst place, and a
   one-click mark/unmark.
