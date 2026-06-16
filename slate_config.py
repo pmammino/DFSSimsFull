@@ -98,3 +98,41 @@ def park_for(home_abbr):
 
 def std_code(rotowire_code):
     return TEAM_CODE_MAP.get(rotowire_code, rotowire_code)
+
+
+# ── Canonical team codes ─────────────────────────────────────────────────────
+# Fold common abbreviation variants (FantasyLabs etc.) and full team names onto
+# one canonical code so external Vegas totals reconcile with the slate.
+_CANON_ALIASES = {
+    'ARZ': 'ARI', 'AZ': 'ARI', 'CHW': 'CWS', 'CHA': 'CWS', 'CHN': 'CHC',
+    'KCR': 'KC', 'KCA': 'KC', 'SDP': 'SD', 'SDN': 'SD', 'SFG': 'SF', 'SFN': 'SF',
+    'TBR': 'TB', 'TBA': 'TB', 'TBD': 'TB', 'ANA': 'LAA', 'LAN': 'LAD', 'LA': 'LAD',
+    'ATH': 'OAK', 'LV': 'OAK', 'SAC': 'OAK', 'NYN': 'NYM', 'NYA': 'NYY',
+    'WAS': 'WSH', 'WSN': 'WSH', 'CHI-A': 'CWS', 'CHI-N': 'CHC', 'NY-A': 'NYY',
+    'NY-N': 'NYM',
+}
+_FULLNAME_CANON = {
+    'arizona diamondbacks': 'ARI', 'atlanta braves': 'ATL', 'baltimore orioles': 'BAL',
+    'boston red sox': 'BOS', 'chicago cubs': 'CHC', 'chicago white sox': 'CWS',
+    'cincinnati reds': 'CIN', 'cleveland guardians': 'CLE', 'colorado rockies': 'COL',
+    'detroit tigers': 'DET', 'houston astros': 'HOU', 'kansas city royals': 'KC',
+    'los angeles angels': 'LAA', 'los angeles dodgers': 'LAD', 'miami marlins': 'MIA',
+    'milwaukee brewers': 'MIL', 'minnesota twins': 'MIN', 'new york mets': 'NYM',
+    'new york yankees': 'NYY', 'oakland athletics': 'OAK', 'athletics': 'OAK',
+    'philadelphia phillies': 'PHI', 'pittsburgh pirates': 'PIT', 'san diego padres': 'SD',
+    'seattle mariners': 'SEA', 'san francisco giants': 'SF', 'st. louis cardinals': 'STL',
+    'st louis cardinals': 'STL', 'tampa bay rays': 'TB', 'texas rangers': 'TEX',
+    'toronto blue jays': 'TOR', 'washington nationals': 'WSH',
+}
+
+
+def canonical_team(code_or_name):
+    """Map a team code or full name to the canonical standard code."""
+    if not code_or_name:
+        return None
+    s = str(code_or_name).strip()
+    full = _FULLNAME_CANON.get(s.lower())
+    if full:
+        return full
+    up = s.upper()
+    return _CANON_ALIASES.get(up, std_code(up))

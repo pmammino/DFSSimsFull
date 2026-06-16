@@ -636,17 +636,15 @@ def run_vegas_diagnostic(date=None):
         return "\n".join(out)
     try:
         parsed = slate_ingest.fetch_vegas(date)
-        out.append(f"fetch_vegas parsed {len(parsed)} matchups; "
-                   f"sample: {list(parsed.items())[:3]}")
+        out.append(f"fetch_vegas parsed {len(parsed)} teams; "
+                   f"sample: {dict(list(parsed.items())[:6])}")
         slate = load_stored_slate() or {}
-        miss = []
-        for g in slate.get("games", {}).values():
-            key = f"{C.std_code(g['away'])}@{C.std_code(g['home'])}"
-            if key not in parsed:
-                miss.append(key)
-        if slate:
-            out.append(f"slate key-matches: {len(slate['games'])-len(miss)}/"
-                       f"{len(slate['games'])} matched; unmatched→default: {miss}")
+        teams = [g[s] for g in slate.get("games", {}).values()
+                 for s in ("away", "home")]
+        miss = [t for t in teams if C.canonical_team(t) not in parsed]
+        if teams:
+            out.append(f"slate team-matches: {len(teams)-len(miss)}/{len(teams)} "
+                       f"matched; unmatched→default: {miss}")
     except Exception as e:
         out.append(f"parse/match step failed: {type(e).__name__}: {e}")
     return "\n".join(out)

@@ -68,23 +68,25 @@ def main():
         print(f"    FIRST EVENT KEYS: {sorted(rows[0].keys())}")
         print(f"    FIRST EVENT: {json.dumps(rows[0])[:600]}")
 
-    print("\n[3] fetch_vegas() parse result")
+    print("\n[3] fetch_vegas() parse result (per-team implied totals)")
     parsed = SI.fetch_vegas(date)
-    print(f"    parsed {len(parsed)} matchups")
-    for k, v in list(parsed.items())[:6]:
+    print(f"    parsed {len(parsed)} teams")
+    for k, v in list(parsed.items())[:8]:
         print(f"      {k}: {v}")
 
-    print("\n[4] slate key-match (does each game find its Vegas totals?)")
+    print("\n[4] slate team-match (does each team find its Vegas total?)")
     try:
         slate = SI.build_slate(write=False)
         print(f"    slate {slate.get('date')}: {len(slate.get('games', {}))} games")
         miss = 0
         for g in slate["games"].values():
-            key = f"{C.std_code(g['away'])}@{C.std_code(g['home'])}"
-            hit = key in parsed
-            miss += (0 if hit else 1)
-            print(f"      slate key {key:14} matched={hit}  implied={g['implied']}")
-        print(f"\n    UNMATCHED games: {miss} "
+            for side in ("away", "home"):
+                canon = C.canonical_team(g[side])
+                hit = canon in parsed
+                miss += (0 if hit else 1)
+                print(f"      {g[side]:6} → canon {canon:5} matched={hit}  "
+                      f"implied={g['implied'][side]}")
+        print(f"\n    UNMATCHED teams: {miss} "
               f"(these default to {C.DEFAULT_TEAM_RUNS} → 'all teams same')")
     except Exception as e:
         print(f"    slate build failed: {type(e).__name__}: {e}")
