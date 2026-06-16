@@ -404,16 +404,19 @@ def ids_from_clean(df):
     return {}, None
 
 
-def build_dk_upload(res_df, dkid, n_select, sort_by, player_cap=1.0, team_cap=1.0):
+def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
+                    pitcher_cap=1.0, team_cap=1.0):
     """Greedily pick n_select lineups from the ranked candidate results under
-    exposure caps, map players to DK IDs, and emit a ready-to-upload CSV
-    (header P,P,C,1B,2B,3B,SS,OF,OF,OF + one ID row per lineup)."""
+    separate hitter / pitcher / stack-team exposure caps, map players to DK IDs,
+    and emit a ready-to-upload CSV (P,P,C,1B,2B,3B,SS,OF,OF,OF + one ID row each).
+    COLS[0:2] are the two pitcher slots; COLS[2:] are the 8 hitters."""
     keymap = {"Win%": ["Wins", "Top10", "Top100"],
               "Top10 Rate": ["Top10", "Top100", "Wins"],
               "Top100 Rate": ["Top100", "Top10", "Wins"]}[sort_by]
     rdf = res_df.sort_values(keymap, ascending=False).reset_index(drop=True)
     N = int(n_select)
-    pcap = max(1, int(round(player_cap * N)))
+    hcap = max(1, int(round(hitter_cap * N)))
+    pcap = max(1, int(round(pitcher_cap * N)))
     tcap = max(1, int(round(team_cap * N)))
 
     def names_of(row):
@@ -424,16 +427,20 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, player_cap=1.0, team_cap=1.
                     for x in HITC if " (" in str(row[x]))
         return c.most_common(1)[0][0]
 
-    expo, teamc, chosen, skipped = Counter(), Counter(), [], 0
+    expo, teamc, chosen, skipped, pitchers = Counter(), Counter(), [], 0, set()
     for _, row in rdf.iterrows():
         nms = names_of(row)
         if any(normname(n) not in dkid for n in nms):
             skipped += 1
             continue
-        if all(expo[n] < pcap for n in nms) and teamc[prim(row)] < tcap:
+        caps_ok = all(expo[n] < (pcap if i < 2 else hcap)
+                      for i, n in enumerate(nms))
+        if caps_ok and teamc[prim(row)] < tcap:
             chosen.append(row)
-            for n in nms:
+            for i, n in enumerate(nms):
                 expo[n] += 1
+                if i < 2:
+                    pitchers.add(n)
             teamc[prim(row)] += 1
         if len(chosen) == N:
             break
@@ -444,7 +451,8 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, player_cap=1.0, team_cap=1.
     for row in chosen:
         w.writerow([dkid[normname(n)] for n in names_of(row)])
     info = {"chosen": len(chosen), "requested": N, "skipped_unmapped": skipped,
-            "max_player": max(expo.values()) if expo else 0,
+            "max_pitcher": max((expo[n] for n in pitchers), default=0),
+            "max_hitter": max((expo[n] for n in expo if n not in pitchers), default=0),
             "max_team": max(teamc.values()) if teamc else 0}
     return out.getvalue(), info
 
@@ -1871,22 +1879,28 @@ with tabs[3]:
                                         help="Win% favors tournament-winning ceiling; the "
                                              "Top10/Top100 rates favor consistent cashing.")
                 with st.expander("Exposure caps (optional)"):
-                    pc1, pc2 = st.columns(2)
-                    player_cap = pc1.slider("Max player exposure", 0.05, 1.0, 1.0, 0.05,
-                                            help="Cap the share of exported lineups any "
-                                                 "one player can appear in (1.0 = no cap).")
-                    team_cap = pc2.slider("Max primary-stack-team exposure", 0.05, 1.0,
-                                          1.0, 0.05, help="Cap the share sharing the same "
-                                                          "primary stack team.")
+                    pc1, pc2, pc3 = st.columns(3)
+                    hitter_cap = pc1.slider(
+                        "Max hitter exposure", 0.05, 1.0, 1.0, 0.05,
+                        help="Cap the share of exported lineups any one HITTER "
+                             "can appear in (1.0 = no cap).")
+                    pitcher_cap = pc2.slider(
+                        "Max pitcher exposure", 0.05, 1.0, 1.0, 0.05,
+                        help="Cap the share of exported lineups any one PITCHER "
+                             "can appear in (1.0 = no cap).")
+                    team_cap = pc3.slider(
+                        "Max stack-team exposure", 0.05, 1.0, 1.0, 0.05,
+                        help="Cap the share sharing the same primary stack team.")
                 csv_text, info = build_dk_upload(src, dkid, n_up, sort_by,
-                                                 player_cap, team_cap)
+                                                 hitter_cap, pitcher_cap, team_cap)
                 if info["chosen"] == 0:
                     st.error("No exportable lineups — players had no DK ID, or the caps "
                              "are too strict.")
                 else:
                     msg = (f"Selected **{info['chosen']} of {n_up}** lineups by "
-                           f"**{sort_by}**. Max single-player exposure "
-                           f"{info['max_player']}/{info['chosen']}, max stack-team "
+                           f"**{sort_by}**. Max hitter exposure "
+                           f"{info['max_hitter']}/{info['chosen']}, max pitcher "
+                           f"{info['max_pitcher']}/{info['chosen']}, max stack-team "
                            f"{info['max_team']}/{info['chosen']}.")
                     if info["skipped_unmapped"]:
                         msg += (f" ({info['skipped_unmapped']} skipped: a player had no "

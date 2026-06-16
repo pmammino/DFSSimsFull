@@ -171,8 +171,9 @@ After a run, you can export a ready-to-upload DK file:
    - **My marked selections** — exactly the lineups you ticked above, in rank
      order; or
    - **Top N by ranking** — choose how many and rank by **Win%**, **Top10
-     Rate**, or **Top100 Rate**, with optional per-player / stack-team exposure
-     caps. Ranks from the **current filter** by default (or all candidates).
+     Rate**, or **Top100 Rate**, with optional separate **hitter / pitcher /
+     stack-team** exposure caps. Ranks from the **current filter** by default
+     (or all candidates).
 3. Download `DK_upload_<N>.csv` — header `P,P,C,1B,2B,3B,SS,OF,OF,OF` followed by
    one row of DraftKings player IDs per lineup.
 
