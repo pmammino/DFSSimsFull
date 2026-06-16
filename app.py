@@ -569,25 +569,87 @@ def load_stored_slate():
 
 def slate_team_totals():
     """Per-team Vegas implied run totals for today's slate, from the live feed
-    (preferred) or the stored slate.json. Returns [{Game, Team, Vegas total}]."""
-    slate = None
+    (preferred) or the stored slate.json. Returns [{Game, Team, Vegas total}].
+    If the live feed returns all-identical totals (Vegas blocked → defaults) but
+    a stored slate has differentiated totals, prefer the stored one."""
+    def _rows(slate):
+        out = []
+        if slate:
+            for g in slate.get("games", {}).values():
+                for side in ("away", "home"):
+                    t = g.get(side)
+                    imp = (g.get("implied") or {}).get(side)
+                    if t and imp is not None:
+                        out.append({"Game": f"{g.get('away')} @ {g.get('home')}",
+                                    "Team": t, "Vegas total": round(float(imp), 1)})
+        return out
+
+    def _varied(rows):
+        return len({round(r["Vegas total"], 2) for r in rows}) > 1
+
+    live = []
     try:
-        slate = slate_ingest.build_slate(write=False)
+        live = _rows(slate_ingest.build_slate(write=False))
     except Exception:
-        slate = load_stored_slate()
-    rows = []
-    if slate:
-        for g in slate.get("games", {}).values():
-            for side in ("away", "home"):
-                t = g.get(side)
-                imp = (g.get("implied") or {}).get(side)
-                if t and imp is not None:
-                    rows.append({"Game": f"{g.get('away')} @ {g.get('home')}",
-                                 "Team": t, "Vegas total": round(float(imp), 1)})
-    return rows
+        live = []
+    if live and _varied(live):
+        return live
+    stored = _rows(load_stored_slate())
+    if stored and _varied(stored):
+        return stored
+    return live or stored
 
 
 TOTALS_OVERRIDE_PATH = os.path.join(HERE, "data", "team_totals_override.json")
+
+
+def run_vegas_diagnostic(date=None):
+    """Live probe of the FantasyLabs Vegas feed → human-readable report lines.
+    Runs on the host machine (needs egress to www.fantasylabs.com)."""
+    import urllib.request
+    import slate_config as C
+    date = date or datetime.date.today().isoformat()
+    url = C.FEED_VEGAS_TMPL.format(date=date)
+    out = [f"URL: {url}"]
+    ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "Chrome/124.0 Safari/537.36")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": ua})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            status = getattr(r, "status", r.getcode())
+            ctype = r.headers.get("Content-Type")
+            body = r.read().decode("utf-8", "replace")
+        out.append(f"HTTP {status} | {ctype} | {len(body)} bytes")
+        out.append(f"body head: {body[:240]}")
+    except Exception as e:
+        out.append(f"FETCH FAILED: {type(e).__name__}: {e}")
+        return "\n".join(out)
+    try:
+        data = json.loads(body)
+        rows = data if isinstance(data, list) else (
+            data.get("Events") or data.get("data") or data.get("events") or [])
+        out.append(f"JSON: {type(data).__name__}, {len(rows)} event rows")
+        if rows:
+            out.append(f"first-event keys: {sorted(rows[0].keys())}")
+    except Exception as e:
+        out.append(f"NOT JSON ({e}) — may need auth/cookies or returns HTML")
+        return "\n".join(out)
+    try:
+        parsed = slate_ingest.fetch_vegas(date)
+        out.append(f"fetch_vegas parsed {len(parsed)} matchups; "
+                   f"sample: {list(parsed.items())[:3]}")
+        slate = load_stored_slate() or {}
+        miss = []
+        for g in slate.get("games", {}).values():
+            key = f"{C.std_code(g['away'])}@{C.std_code(g['home'])}"
+            if key not in parsed:
+                miss.append(key)
+        if slate:
+            out.append(f"slate key-matches: {len(slate['games'])-len(miss)}/"
+                       f"{len(slate['games'])} matched; unmatched→default: {miss}")
+    except Exception as e:
+        out.append(f"parse/match step failed: {type(e).__name__}: {e}")
+    return "\n".join(out)
 
 
 def _tail(text, n=15):
@@ -1120,27 +1182,44 @@ with tabs[0]:
             st.error(f"Could not read slate file: {e}")
 
     # --------------------------------------------------------------------------- #
-    # Team totals (Vegas) — shown + editable; >=2 edits required to run
+    # Team totals (Vegas) — shown + editable; >=2 edits required to run.
+    # Edited teams override the sim's implied total (rescaling that team's offense).
     # --------------------------------------------------------------------------- #
     st.subheader("Team totals (Vegas) — adjust before running")
-    st.caption("These implied run totals drive the sims. **Edit at least 2** team "
-               "totals to enable the run — each change rescales that team's "
-               "offense by (your value ÷ Vegas).")
-    if "_tt_rows" not in st.session_state:
+    if "_tt_fetched" not in st.session_state:
         with st.spinner("Reading today's team totals…"):
-            st.session_state["_tt_rows"] = slate_team_totals()
-    _tt_rows = st.session_state["_tt_rows"]
+            st.session_state["_tt_fetched"] = slate_team_totals()
+    fetched = st.session_state["_tt_fetched"]
     tt_override = {}
     n_tt_edits = 0
-    if not _tt_rows:
-        st.info("Couldn't read today's team totals (live feed unavailable). The "
-                "2-edit gate is skipped; sims use the pipeline's Vegas totals.")
-        n_tt_edits = 2   # don't block when totals can't be shown
+    if not fetched:
+        st.info("Couldn't read today's team totals (live feed unavailable and no "
+                "slate on disk). The 2-edit gate is skipped; sims use the "
+                "pipeline's Vegas totals.")
+        n_tt_edits = 2
     else:
-        _tt_base = {r["Team"]: r["Vegas total"] for r in _tt_rows}
+        fetched_map = {r["Team"]: r["Vegas total"] for r in fetched}
+        vals = list(fetched_map.values())
+        if len(set(round(v, 2) for v in vals)) <= 1:
+            st.warning(f"⚠️ The live Vegas feed looks unavailable — every team "
+                       f"defaulted to **{vals[0]:.1f}** runs. Use the diagnostic "
+                       "below to see why, or edit the totals manually.")
+        else:
+            st.caption("Today's Vegas implied run totals. **Edit at least 2** "
+                       "(each change rescales that team's offense by your value ÷ "
+                       "Vegas).")
+
+        with st.expander("🔬 Diagnose the live Vegas feed"):
+            st.caption("Probes www.fantasylabs.com live (from this host) and "
+                       "shows the status, JSON shape, and whether the totals "
+                       "match the slate. Use it to see why totals look flat.")
+            if st.button("Run Vegas feed diagnostic", key="vdiag"):
+                with st.spinner("Probing the Vegas feed…"):
+                    st.code(run_vegas_diagnostic(), language="text")
+
         _tt_edit = st.data_editor(
-            pd.DataFrame(_tt_rows), hide_index=True, use_container_width=True,
-            height=min(420, 60 + 35 * len(_tt_rows)), key="tt_editor",
+            pd.DataFrame(fetched), hide_index=True, use_container_width=True,
+            height=min(460, 60 + 34 * len(fetched)), key="tt_editor",
             disabled=["Game", "Team"],
             column_config={
                 "Game": st.column_config.TextColumn(width="medium"),
@@ -1149,19 +1228,16 @@ with tabs[0]:
                     "Implied total", min_value=0.0, max_value=18.0, step=0.1,
                     format="%.1f")})
         for _, rr in _tt_edit.iterrows():
-            base = _tt_base.get(rr["Team"])
             try:
-                val = float(rr["Vegas total"])
+                val = round(float(rr["Vegas total"]), 2)
             except (TypeError, ValueError):
                 continue
-            if base is not None and abs(val - float(base)) > 1e-6:
-                tt_override[rr["Team"]] = round(val, 2)
+            if abs(val - float(fetched_map.get(rr["Team"], val))) > 1e-6:
+                tt_override[rr["Team"]] = val      # only edited teams override
                 n_tt_edits += 1
-        if n_tt_edits >= 2:
-            st.caption(f"✏️ {n_tt_edits} team total(s) changed — run enabled.")
-        else:
-            st.caption(f"✏️ {n_tt_edits} changed · change "
-                       f"**{2 - n_tt_edits} more** to enable the run.")
+        st.caption(f"✏️ {n_tt_edits} team total(s) changed"
+                   + (" — run enabled." if n_tt_edits >= 2 else
+                      f" · change **{2 - n_tt_edits} more** to enable the run."))
 
     # --------------------------------------------------------------------------- #
     # Step 2 — forced decisions, gated behind a Run button

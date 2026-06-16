@@ -30,9 +30,11 @@ pill badges, tabs (purple active underline), buttons, and tables.
 The flow is organized as a **Tabbed Workspace** (design Option C):
 
 - **⚙️ Setup** — upload the slate file; review & **edit the day's Vegas team
-  totals** (you must change **≥2** before Run enables — each edit rescales that
-  team's offense by your value ÷ Vegas, and the sims rebuild with them);
-  configure contest size / sim runs / candidates / tilts, and Run.
+  totals** (you must change **≥2** before Run enables — each edit overrides that
+  team's implied total and rescales its offense by your value ÷ Vegas). A
+  **🔬 Diagnose the live Vegas feed** expander shows what the feed returns if the
+  totals look flat. Then configure contest size / sim runs / candidates / tilts,
+  and Run.
 - **📊 Players** — per-player projected ranges & thresholds. (The app jumps here
   automatically when a run finishes, as a "done" indicator.)
 - **🏆 Results** — candidate lineups: metrics, filter/search, quick export.
