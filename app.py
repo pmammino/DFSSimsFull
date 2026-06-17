@@ -1380,39 +1380,54 @@ with tabs[0]:
             finally:
                 os.unlink(tmp_csv)
 
-            # ---- hard guard: restrict the pool to today's PLAYABLE players only ----
-            # Field + candidates may only use hitters in a projected/confirmed batting
-            # order and the starting/opener/primary pitchers (per the live slate).
-            # Anyone not in today's lineups is dropped even if the sims lag.
+            # ---- guard: restrict the pool to today's PLAYABLE players, but only
+            # if the live feed is complete enough to leave a viable roster.
+            # An incomplete/mismatched live feed (lineups not posted yet, name/
+            # team differences) must NOT strip out valid simmed players. ----
+            matched = int(dk_df["FullName"].map(
+                lambda n: normname(n) in simnames).sum())
+            applied_live = False
             if live_playable:
                 keep = pool["Name"].map(lambda n: normname(n) in live_playable)
-                drop_df = pool[~keep]
-                if len(drop_df):
+                kept = pool[keep]
+                kh = kept[kept.Pos != "P"].Name.nunique()
+                kp = kept[kept.Pos == "P"].Name.nunique()
+                if kp >= 2 and kh >= 8:
+                    drop_df = pool[~keep]
                     dh = drop_df[drop_df.Pos != "P"].Name.nunique()
                     dp = drop_df[drop_df.Pos == "P"].Name.nunique()
-                    pool = pool[keep].reset_index(drop=True)
-                    st.write(f"⛔ Restricted to projected/confirmed lineups + starting "
-                             f"pitchers — excluded **{dh} hitter(s)** and **{dp} "
-                             f"pitcher(s)** not in today's lineups"
-                             + ("" if sims_changed else " (sims may be a build behind; "
-                                "they'll catch up on the next refresh)") + ".")
+                    pool = kept.reset_index(drop=True)
+                    applied_live = True
+                    if dh or dp:
+                        st.write(f"⛔ Restricted to today's projected/confirmed "
+                                 f"lineups + starters — excluded **{dh} hitter(s)** "
+                                 f"and **{dp} pitcher(s)**.")
+                else:
+                    st.warning(f"Live lineups look incomplete — only {kh} hitters / "
+                               f"{kp} starters in your pool match today's live feed "
+                               "(not a full roster). Keeping all simmed players for "
+                               "this run rather than over-filtering; re-run once "
+                               "lineups are posted to tighten it.")
 
             nh = pool[pool.Pos != "P"].Name.nunique()
             npi = pool[pool.Pos == "P"].Name.nunique()
             nt = pool.Team.nunique()
-            st.write(f"Pool: **{nh} hitters + {npi} starters** across **{nt} teams** "
-                     "— only players in today's projected/confirmed lineups (+ starting "
-                     "pitchers) with sims. Ownership is renormalized over this pool for "
-                     "the field. Both the field and candidate lineups use only these.")
-            dropped = len(dk_df) - int(dk_df["FullName"].map(
-                lambda n: normname(n) in simnames).sum())
+            st.write(f"Pool: **{nh} hitters + {npi} starters** across **{nt} teams**"
+                     + (" — restricted to today's posted lineups + starters."
+                        if applied_live else " — from your slate ∩ sims."))
+            dropped = len(dk_df) - matched
             if dropped:
-                st.caption(f"{dropped} player(s) in your slate had no sim and were "
-                           "excluded (they can't be scored).")
+                st.caption(f"{dropped} of {len(dk_df)} slate players had no sim and "
+                           "were excluded (they can't be scored).")
             if npi < 2 or nh < 8:
                 status.update(label="Pool too small to build lineups", state="error")
-                st.error("Need at least 2 starting pitchers and 8 hitters in the "
-                         "matched pool to fill a roster. Check your slate file.")
+                st.error(
+                    f"Pool too small ({npi} starters, {nh} hitters; need ≥2 and ≥8). "
+                    f"Your slate matched {matched} of {len(dk_df)} players to the "
+                    "sims. If your slate is normal and lineups are posted, the sims "
+                    "are likely **stale for today's slate** — tick **Force full "
+                    "refresh** and run again to rebuild them; otherwise check that "
+                    "the slate file's player names/teams match the slate.")
                 st.stop()
 
             # ---- candidate lineups: players tilted to projected value (effective,
