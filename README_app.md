@@ -215,9 +215,11 @@ to see its outcome histogram. It reflects the latest refreshed sims.
 - **Inspect a lineup** — pick one to see a clean, player-focused table (slot,
   player, team, position, salary) plus its rates and best/avg/worst place, and a
   one-click mark/unmark.
-- **📊 Finishing-position distribution** — a compact, wide-bucket histogram of
-  where that lineup finished across *all* sim runs, with dashed markers at 1st,
-  Top-10, Top-100 and the lineup's mean place.
+- **📊 Finishing-position detail** — click a lineup row in the picker to see a
+  solid, full-height histogram of where it finished across *all* sim runs (with
+  dashed markers at 1st, Top-10, Top-100 and the lineup's mean place) alongside
+  the actual lineup it's built on (slot, player, team) and its best/avg/worst
+  place, with a one-click mark/unmark.
 - Downloads: filtered results, all candidate lineups, and the field — each CSV.
 
 ## Advanced (optional)
