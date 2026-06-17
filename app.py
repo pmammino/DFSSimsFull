@@ -404,16 +404,19 @@ def ids_from_clean(df):
     return {}, None
 
 
-def build_dk_upload(res_df, dkid, n_select, sort_by, player_cap=1.0, team_cap=1.0):
+def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
+                    pitcher_cap=1.0, team_cap=1.0):
     """Greedily pick n_select lineups from the ranked candidate results under
-    exposure caps, map players to DK IDs, and emit a ready-to-upload CSV
-    (header P,P,C,1B,2B,3B,SS,OF,OF,OF + one ID row per lineup)."""
+    separate hitter / pitcher / stack-team exposure caps, map players to DK IDs,
+    and emit a ready-to-upload CSV (P,P,C,1B,2B,3B,SS,OF,OF,OF + one ID row each).
+    COLS[0:2] are the two pitcher slots; COLS[2:] are the 8 hitters."""
     keymap = {"Win%": ["Wins", "Top10", "Top100"],
               "Top10 Rate": ["Top10", "Top100", "Wins"],
               "Top100 Rate": ["Top100", "Top10", "Wins"]}[sort_by]
     rdf = res_df.sort_values(keymap, ascending=False).reset_index(drop=True)
     N = int(n_select)
-    pcap = max(1, int(round(player_cap * N)))
+    hcap = max(1, int(round(hitter_cap * N)))
+    pcap = max(1, int(round(pitcher_cap * N)))
     tcap = max(1, int(round(team_cap * N)))
 
     def names_of(row):
@@ -424,16 +427,20 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, player_cap=1.0, team_cap=1.
                     for x in HITC if " (" in str(row[x]))
         return c.most_common(1)[0][0]
 
-    expo, teamc, chosen, skipped = Counter(), Counter(), [], 0
+    expo, teamc, chosen, skipped, pitchers = Counter(), Counter(), [], 0, set()
     for _, row in rdf.iterrows():
         nms = names_of(row)
         if any(normname(n) not in dkid for n in nms):
             skipped += 1
             continue
-        if all(expo[n] < pcap for n in nms) and teamc[prim(row)] < tcap:
+        caps_ok = all(expo[n] < (pcap if i < 2 else hcap)
+                      for i, n in enumerate(nms))
+        if caps_ok and teamc[prim(row)] < tcap:
             chosen.append(row)
-            for n in nms:
+            for i, n in enumerate(nms):
                 expo[n] += 1
+                if i < 2:
+                    pitchers.add(n)
             teamc[prim(row)] += 1
         if len(chosen) == N:
             break
@@ -444,7 +451,8 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, player_cap=1.0, team_cap=1.
     for row in chosen:
         w.writerow([dkid[normname(n)] for n in names_of(row)])
     info = {"chosen": len(chosen), "requested": N, "skipped_unmapped": skipped,
-            "max_player": max(expo.values()) if expo else 0,
+            "max_pitcher": max((expo[n] for n in pitchers), default=0),
+            "max_hitter": max((expo[n] for n in expo if n not in pitchers), default=0),
             "max_team": max(teamc.values()) if teamc else 0}
     return out.getvalue(), info
 
@@ -894,27 +902,20 @@ def ensure_fresh(status, force=False, totals_path=None):
 # Contest scoring that also captures each candidate's finishing-place
 # distribution (compact per-candidate histogram + exact best/mean/worst)
 # --------------------------------------------------------------------------- #
-def run_contest_dist(field_mat, cand_mat, n_sim, n_field, max_cells=40_000_000):
+def run_contest_dist(field_mat, cand_mat, n_sim, n_field, nbins=24):
     """Score each candidate against the field per sim and capture its
-    finishing-place distribution at PER-POSITION resolution (one bin per place)
-    when feasible. To bound memory the bin count adapts so N_candidates × bins
-    stays under `max_cells`; for typical runs that still means one bin per place.
-    Returns (wins, t10, t100, avg, dist)."""
+    finishing-place distribution as a compact ~`nbins`-bucket histogram (wider
+    buckets read more clearly than per-position). Returns (wins, t10, t100, avg,
+    dist) with exact best/mean/worst places."""
     N = cand_mat.shape[1]
     wins = np.zeros(N, np.int64); t10 = np.zeros(N, np.int64)
     t100 = np.zeros(N, np.int64); ps = np.zeros(N, np.int64)
     best = np.full(N, n_field + 1, np.int64); worst = np.zeros(N, np.int64)
 
-    # one bin per finishing place when feasible; cap at 6000 so the chart stays
-    # renderable (and N×bins memory stays bounded) on very large fields
-    bins = min(int(n_field), max(120, min(6000, max_cells // max(1, N))))
-    if bins >= n_field:                      # one bin per finishing place
-        edges = np.arange(1, n_field + 2, dtype=np.int64)
-    else:
-        edges = np.unique(np.linspace(1, n_field + 1, bins + 1).astype(np.int64))
+    nb_target = max(6, min(int(nbins), int(n_field)))
+    edges = np.unique(np.linspace(1, n_field + 1, nb_target + 1).astype(np.int64))
     nb = len(edges) - 1
-    cdt = np.int16 if n_sim < 32767 else np.int32
-    counts = np.zeros((N, nb), cdt)
+    counts = np.zeros((N, nb), np.int32)
     idx = np.arange(N)
     for s in range(n_sim):
         fs = np.sort(field_mat[s]); cv = cand_mat[s]
@@ -924,49 +925,43 @@ def run_contest_dist(field_mat, cand_mat, n_sim, n_field, max_cells=40_000_000):
         b = np.clip(np.searchsorted(edges, pl, side="right") - 1, 0, nb - 1)
         np.add.at(counts, (idx, b), 1)
     dist = {"edges": edges, "counts": counts, "best": best, "worst": worst,
-            "mean": ps / n_sim, "per_place": bool(bins >= n_field)}
+            "mean": ps / n_sim}
     return wins, t10, t100, ps / n_sim, dist
 
 
 def place_distribution_chart(dist, i, n_field, n_sim):
-    """Per-finishing-position distribution for candidate i. Each x value is an
-    actual finishing place (1 = win); the y value is the share of sims that
-    finished at that place. Rendered as a faithful step so no detail is hidden
-    by smoothing, and the x-axis is clamped to valid places (never below 1)."""
-    edges = dist["edges"].astype(np.int64)
+    """Compact histogram of candidate i's finishing place — wide buckets, each
+    bar spanning its [lo, hi) place range, y = % of sims in that bucket."""
+    edges = dist["edges"].astype(float)
     counts = dist["counts"][i].astype(float)
-    place = edges[:-1]                     # the (left) finishing place of each bin
-    width = np.maximum(1, np.diff(edges))  # places covered by each bin (1 when per-place)
-    pct = 100 * counts / max(1, n_sim) / width   # density: % of sims per place
-    df = pd.DataFrame({"place": place, "pct": pct,
+    pct = 100 * counts / max(1, n_sim)
+    df = pd.DataFrame({"lo": edges[:-1], "hi": edges[1:], "pct": pct,
                        "sims": counts.astype(np.int64)})
     xmax = max(2, int(n_field))
     xscale = alt.Scale(domain=[1, xmax], nice=False, zero=False, clamp=True)
-    per_place = dist.get("per_place", False)
 
-    area = alt.Chart(df).mark_area(
-        interpolate="step-after", color=BRAND, opacity=0.35,
-        line={"color": BRAND, "strokeWidth": 1}).encode(
-        x=alt.X("place:Q", title="Finishing place  (1 = win)", scale=xscale,
+    bars = alt.Chart(df).mark_bar(color=BRAND, opacity=0.85).encode(
+        x=alt.X("lo:Q", title="Finishing place  (1 = win)", scale=xscale,
                 axis=alt.Axis(format="~s")),
-        y=alt.Y("pct:Q", title=("% of sims at each place" if per_place
-                                else "% of sims (per place)")),
-        tooltip=[alt.Tooltip("place:Q", title="place", format=",.0f"),
-                 alt.Tooltip("sims:Q", title="sims here", format=","),
-                 alt.Tooltip("pct:Q", title="% per place", format=".3f")])
+        x2="hi:Q",
+        y=alt.Y("pct:Q", title="% of sims"),
+        tooltip=[alt.Tooltip("lo:Q", title="place ≥", format=",.0f"),
+                 alt.Tooltip("hi:Q", title="< place", format=",.0f"),
+                 alt.Tooltip("sims:Q", title="sims", format=","),
+                 alt.Tooltip("pct:Q", title="% of sims", format=".2f")])
 
     rules = []
-    for x, label, color in [(1, "1st", "#000000"), (10, "Top-10", "#7a13c4"),
-                            (100, "Top-100", "#c08bff"),
-                            (float(dist["mean"][i]), "Mean", BRAND)]:
+    for x, label, color in [(1, "1st", "#ffffff"), (10, "Top-10", "#d398ff"),
+                            (100, "Top-100", "#7a13c4"),
+                            (float(dist["mean"][i]), "Mean", "#00e657")]:
         if 1 <= x <= xmax:
             rdf = pd.DataFrame({"x": [x], "label": [label]})
             rules.append(alt.Chart(rdf).mark_rule(
-                color=color, strokeDash=[4, 3], size=1.5, opacity=0.85).encode(
+                color=color, strokeDash=[4, 3], size=1.5, opacity=0.9).encode(
                 x=alt.X("x:Q", scale=xscale),
                 tooltip=[alt.Tooltip("label:N", title="marker"),
                          alt.Tooltip("x:Q", title="place", format=",.0f")]))
-    return alt.layer(area, *rules).properties(height=220).configure_view(
+    return alt.layer(bars, *rules).properties(height=150).configure_view(
         strokeOpacity=0)
 
 
@@ -1385,39 +1380,54 @@ with tabs[0]:
             finally:
                 os.unlink(tmp_csv)
 
-            # ---- hard guard: restrict the pool to today's PLAYABLE players only ----
-            # Field + candidates may only use hitters in a projected/confirmed batting
-            # order and the starting/opener/primary pitchers (per the live slate).
-            # Anyone not in today's lineups is dropped even if the sims lag.
+            # ---- guard: restrict the pool to today's PLAYABLE players, but only
+            # if the live feed is complete enough to leave a viable roster.
+            # An incomplete/mismatched live feed (lineups not posted yet, name/
+            # team differences) must NOT strip out valid simmed players. ----
+            matched = int(dk_df["FullName"].map(
+                lambda n: normname(n) in simnames).sum())
+            applied_live = False
             if live_playable:
                 keep = pool["Name"].map(lambda n: normname(n) in live_playable)
-                drop_df = pool[~keep]
-                if len(drop_df):
+                kept = pool[keep]
+                kh = kept[kept.Pos != "P"].Name.nunique()
+                kp = kept[kept.Pos == "P"].Name.nunique()
+                if kp >= 2 and kh >= 8:
+                    drop_df = pool[~keep]
                     dh = drop_df[drop_df.Pos != "P"].Name.nunique()
                     dp = drop_df[drop_df.Pos == "P"].Name.nunique()
-                    pool = pool[keep].reset_index(drop=True)
-                    st.write(f"⛔ Restricted to projected/confirmed lineups + starting "
-                             f"pitchers — excluded **{dh} hitter(s)** and **{dp} "
-                             f"pitcher(s)** not in today's lineups"
-                             + ("" if sims_changed else " (sims may be a build behind; "
-                                "they'll catch up on the next refresh)") + ".")
+                    pool = kept.reset_index(drop=True)
+                    applied_live = True
+                    if dh or dp:
+                        st.write(f"⛔ Restricted to today's projected/confirmed "
+                                 f"lineups + starters — excluded **{dh} hitter(s)** "
+                                 f"and **{dp} pitcher(s)**.")
+                else:
+                    st.warning(f"Live lineups look incomplete — only {kh} hitters / "
+                               f"{kp} starters in your pool match today's live feed "
+                               "(not a full roster). Keeping all simmed players for "
+                               "this run rather than over-filtering; re-run once "
+                               "lineups are posted to tighten it.")
 
             nh = pool[pool.Pos != "P"].Name.nunique()
             npi = pool[pool.Pos == "P"].Name.nunique()
             nt = pool.Team.nunique()
-            st.write(f"Pool: **{nh} hitters + {npi} starters** across **{nt} teams** "
-                     "— only players in today's projected/confirmed lineups (+ starting "
-                     "pitchers) with sims. Ownership is renormalized over this pool for "
-                     "the field. Both the field and candidate lineups use only these.")
-            dropped = len(dk_df) - int(dk_df["FullName"].map(
-                lambda n: normname(n) in simnames).sum())
+            st.write(f"Pool: **{nh} hitters + {npi} starters** across **{nt} teams**"
+                     + (" — restricted to today's posted lineups + starters."
+                        if applied_live else " — from your slate ∩ sims."))
+            dropped = len(dk_df) - matched
             if dropped:
-                st.caption(f"{dropped} player(s) in your slate had no sim and were "
-                           "excluded (they can't be scored).")
+                st.caption(f"{dropped} of {len(dk_df)} slate players had no sim and "
+                           "were excluded (they can't be scored).")
             if npi < 2 or nh < 8:
                 status.update(label="Pool too small to build lineups", state="error")
-                st.error("Need at least 2 starting pitchers and 8 hitters in the "
-                         "matched pool to fill a roster. Check your slate file.")
+                st.error(
+                    f"Pool too small ({npi} starters, {nh} hitters; need ≥2 and ≥8). "
+                    f"Your slate matched {matched} of {len(dk_df)} players to the "
+                    "sims. If your slate is normal and lineups are posted, the sims "
+                    "are likely **stale for today's slate** — tick **Force full "
+                    "refresh** and run again to rebuild them; otherwise check that "
+                    "the slate file's player names/teams match the slate.")
                 st.stop()
 
             # ---- candidate lineups: players tilted to projected value (effective,
@@ -1741,33 +1751,6 @@ with tabs[2]:
                                file_name=f"field_{sim['field_n']}.csv",
                                mime="text/csv", use_container_width=True)
 
-            # ---- quick export: top N of the CURRENT filter, no marking needed ----
-            st.markdown("**⚡ Quick export — top lineups from the current filter**")
-            qe1, qe2, qe3 = st.columns([1, 1.2, 2.2])
-            q_n = qe1.number_input("Top N", min_value=1, max_value=int(len(fres)),
-                                   value=min(20, int(len(fres))), step=1, key="qe_n")
-            q_sort = qe2.selectbox("by", ["Win%", "Top10 Rate", "Top100 Rate"],
-                                   index=0, key="qe_sort")
-            dkid_q = dict(sim.get("id_map") or {})
-            with qe3:
-                if dkid_q:
-                    qtext, qinfo = build_dk_upload(fres, dkid_q, int(q_n), q_sort)
-                    if qinfo["chosen"] == 0:
-                        st.caption("No DK-mappable lineups in this filter.")
-                    else:
-                        skip = (f" ({qinfo['skipped_unmapped']} skipped — no ID)"
-                                if qinfo["skipped_unmapped"] else "")
-                        st.download_button(
-                            f"⬇ Export top {qinfo['chosen']} by {q_sort} "
-                            f"(of {len(fres):,} filtered){skip}",
-                            qtext.encode(),
-                            file_name=f"DK_upload_filtered_{qinfo['chosen']}.csv",
-                            mime="text/csv", type="primary", use_container_width=True,
-                            key="qe_dl")
-                else:
-                    st.caption("Add player IDs (slate file, or a template in the "
-                               "export section below) to enable quick export.")
-
             # ---- secondary: finishing-position detail (de-emphasized) ----
             with st.expander("📊 Finishing-position detail — pick a lineup",
                              expanded=False):
@@ -1871,22 +1854,28 @@ with tabs[3]:
                                         help="Win% favors tournament-winning ceiling; the "
                                              "Top10/Top100 rates favor consistent cashing.")
                 with st.expander("Exposure caps (optional)"):
-                    pc1, pc2 = st.columns(2)
-                    player_cap = pc1.slider("Max player exposure", 0.05, 1.0, 1.0, 0.05,
-                                            help="Cap the share of exported lineups any "
-                                                 "one player can appear in (1.0 = no cap).")
-                    team_cap = pc2.slider("Max primary-stack-team exposure", 0.05, 1.0,
-                                          1.0, 0.05, help="Cap the share sharing the same "
-                                                          "primary stack team.")
+                    pc1, pc2, pc3 = st.columns(3)
+                    hitter_cap = pc1.slider(
+                        "Max hitter exposure", 0.05, 1.0, 1.0, 0.05,
+                        help="Cap the share of exported lineups any one HITTER "
+                             "can appear in (1.0 = no cap).")
+                    pitcher_cap = pc2.slider(
+                        "Max pitcher exposure", 0.05, 1.0, 1.0, 0.05,
+                        help="Cap the share of exported lineups any one PITCHER "
+                             "can appear in (1.0 = no cap).")
+                    team_cap = pc3.slider(
+                        "Max stack-team exposure", 0.05, 1.0, 1.0, 0.05,
+                        help="Cap the share sharing the same primary stack team.")
                 csv_text, info = build_dk_upload(src, dkid, n_up, sort_by,
-                                                 player_cap, team_cap)
+                                                 hitter_cap, pitcher_cap, team_cap)
                 if info["chosen"] == 0:
                     st.error("No exportable lineups — players had no DK ID, or the caps "
                              "are too strict.")
                 else:
                     msg = (f"Selected **{info['chosen']} of {n_up}** lineups by "
-                           f"**{sort_by}**. Max single-player exposure "
-                           f"{info['max_player']}/{info['chosen']}, max stack-team "
+                           f"**{sort_by}**. Max hitter exposure "
+                           f"{info['max_hitter']}/{info['chosen']}, max pitcher "
+                           f"{info['max_pitcher']}/{info['chosen']}, max stack-team "
                            f"{info['max_team']}/{info['chosen']}.")
                     if info["skipped_unmapped"]:
                         msg += (f" ({info['skipped_unmapped']} skipped: a player had no "

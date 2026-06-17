@@ -171,8 +171,9 @@ After a run, you can export a ready-to-upload DK file:
    - **My marked selections** — exactly the lineups you ticked above, in rank
      order; or
    - **Top N by ranking** — choose how many and rank by **Win%**, **Top10
-     Rate**, or **Top100 Rate**, with optional per-player / stack-team exposure
-     caps. Ranks from the **current filter** by default (or all candidates).
+     Rate**, or **Top100 Rate**, with optional separate **hitter / pitcher /
+     stack-team** exposure caps. Ranks from the **current filter** by default
+     (or all candidates).
 3. Download `DK_upload_<N>.csv` — header `P,P,C,1B,2B,3B,SS,OF,OF,OF` followed by
    one row of DraftKings player IDs per lineup.
 
@@ -211,15 +212,12 @@ to see its outcome histogram. It reflects the latest refreshed sims.
   Win% / Top10% / Top100%.
 - **Mark off lineups** — tick the ✓ column on any rows (or **Mark all** the
   filtered set); marks persist across filtering and feed the export below.
-- **⚡ Quick export** — under the table, export the **top N by Win% / Top10 /
-  Top100 from the current filter** in one click (no marking needed). E.g. filter
-  to 5 primary-stack teams, then export the top 20 by Win% directly.
 - **Inspect a lineup** — pick one to see a clean, player-focused table (slot,
   player, team, position, salary) plus its rates and best/avg/worst place, and a
   one-click mark/unmark.
-- **📊 Show finishing-position distribution** — a histogram of where that lineup
-  finished across *all* sim runs, with dashed markers at 1st, Top-10, Top-100
-  and the lineup's mean place.
+- **📊 Finishing-position distribution** — a compact, wide-bucket histogram of
+  where that lineup finished across *all* sim runs, with dashed markers at 1st,
+  Top-10, Top-100 and the lineup's mean place.
 - Downloads: filtered results, all candidate lineups, and the field — each CSV.
 
 ## Advanced (optional)
