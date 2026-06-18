@@ -930,21 +930,25 @@ def run_contest_dist(field_mat, cand_mat, n_sim, n_field, nbins=24):
 
 
 def place_distribution_chart(dist, i, n_field, n_sim):
-    """Compact histogram of candidate i's finishing place — wide buckets, each
-    bar spanning its [lo, hi) place range, y = % of sims in that bucket."""
+    """Histogram of candidate i's finishing place — solid, full-height bars
+    spanning each [lo, hi) place range, filled from the baseline up to the
+    % of sims that landed in that bucket."""
     edges = dist["edges"].astype(float)
     counts = dist["counts"][i].astype(float)
     pct = 100 * counts / max(1, n_sim)
     df = pd.DataFrame({"lo": edges[:-1], "hi": edges[1:], "pct": pct,
-                       "sims": counts.astype(np.int64)})
+                       "zero": 0.0, "sims": counts.astype(np.int64)})
     xmax = max(2, int(n_field))
     xscale = alt.Scale(domain=[1, xmax], nice=False, zero=False, clamp=True)
 
-    bars = alt.Chart(df).mark_bar(color=BRAND, opacity=0.85).encode(
+    # x + x2 makes a ranged bar; pairing it with y + y2=0 fills each bar solidly
+    # from the baseline (without y2 Vega-Lite only draws the thin top edge).
+    bars = alt.Chart(df).mark_bar(color=BRAND, opacity=0.95).encode(
         x=alt.X("lo:Q", title="Finishing place  (1 = win)", scale=xscale,
                 axis=alt.Axis(format="~s")),
         x2="hi:Q",
-        y=alt.Y("pct:Q", title="% of sims"),
+        y=alt.Y("pct:Q", title="% of sims", scale=alt.Scale(zero=True)),
+        y2="zero:Q",
         tooltip=[alt.Tooltip("lo:Q", title="place ≥", format=",.0f"),
                  alt.Tooltip("hi:Q", title="< place", format=",.0f"),
                  alt.Tooltip("sims:Q", title="sims", format=","),
@@ -961,7 +965,7 @@ def place_distribution_chart(dist, i, n_field, n_sim):
                 x=alt.X("x:Q", scale=xscale),
                 tooltip=[alt.Tooltip("label:N", title="marker"),
                          alt.Tooltip("x:Q", title="place", format=",.0f")]))
-    return alt.layer(bars, *rules).properties(height=150).configure_view(
+    return alt.layer(bars, *rules).properties(height=230).configure_view(
         strokeOpacity=0)
 
 
@@ -1752,22 +1756,46 @@ with tabs[2]:
                                mime="text/csv", use_container_width=True)
 
             # ---- secondary: finishing-position detail (de-emphasized) ----
-            with st.expander("📊 Finishing-position detail — pick a lineup",
+            with st.expander("📊 Finishing-position detail — click a lineup",
                              expanded=False):
-                labels = {int(c): f"Rank {int(rk)} · {stk} · Win {w:.2f}%"
-                          for c, rk, stk, w in zip(fres["Candidate"], fres["Rank"],
-                                                   fres["Stack"], fres["Win%"])}
-                chosen_cand = st.selectbox("Lineup", list(fres["Candidate"]),
-                                           format_func=lambda c: labels[int(c)],
-                                           label_visibility="collapsed")
-                cand_idx = int(chosen_cand) - 1
+                st.caption("Click a lineup row below to see its finishing-place "
+                           "distribution and the players it's built on.")
+
+                # Click-to-select picker: a single-row selection drives the detail.
+                pick_df = pd.DataFrame({
+                    "Rank": fres["Rank"], "Stack": fres["Stack"],
+                    "Win%": fres["Win%"], "Top10%": fres["Top10%"],
+                    "Top100%": fres["Top100%"], "Salary": fres["Salary"]})
+                pick_evt = st.dataframe(
+                    pick_df, hide_index=True, use_container_width=True, height=200,
+                    on_select="rerun", selection_mode="single-row",
+                    key="finish_pick",
+                    column_config={
+                        "Rank": st.column_config.NumberColumn(width="small"),
+                        "Win%": st.column_config.NumberColumn(format="%.2f%%",
+                                                              width="small"),
+                        "Top10%": st.column_config.NumberColumn(format="%.1f%%",
+                                                                width="small"),
+                        "Top100%": st.column_config.NumberColumn(format="%.1f%%",
+                                                                 width="small"),
+                        "Salary": st.column_config.NumberColumn(format="$%d",
+                                                                width="small")})
+                sel_rows = pick_evt.selection["rows"] if pick_evt.selection else []
+                pos = sel_rows[0] if sel_rows else 0
+                chosen_cand = int(fres["Candidate"].iloc[pos])
+                cand_idx = chosen_cand - 1
                 r = res[res["Candidate"] == chosen_cand].iloc[0]
-                cc1, cc2 = st.columns([3, 2])
+
+                # Narrower chart on the left; the freed space shows the lineup.
+                cc1, cc2 = st.columns([3, 4])
                 with cc1:
                     st.altair_chart(
                         place_distribution_chart(sim["dist"], cand_idx,
                                                  sim["field_n"], K),
                         use_container_width=True)
+                    st.caption("Dashed lines mark 1st, Top-10, Top-100, and the "
+                               "lineup's mean place. The x-axis covers valid "
+                               "places (1 … field).")
                 with cc2:
                     st.caption(f"Rank #{int(r['Rank'])} · {r['Stack']} · "
                                f"${int(r['Salary']):,}")
@@ -1775,13 +1803,25 @@ with tabs[2]:
                     q1.metric("Best", f"{int(r['BestPlace']):,}")
                     q2.metric("Avg", f"{r['AvgPlace']:,.0f}")
                     q3.metric("Worst", f"{int(r['WorstPlace']):,}")
+
+                    lu_rows = []
+                    for slot, c in zip(SLOT, COLS):
+                        v = str(r[c])
+                        nm = v.rsplit(" (", 1)[0]
+                        tm = v.rsplit(" (", 1)[1][:-1] if " (" in v else ""
+                        lu_rows.append({"Slot": slot, "Player": nm, "Team": tm})
+                    st.dataframe(
+                        pd.DataFrame(lu_rows), hide_index=True,
+                        use_container_width=True, height=388,
+                        column_config={
+                            "Slot": st.column_config.TextColumn(width="small"),
+                            "Team": st.column_config.TextColumn(width="small")})
+
                     in_marks = int(chosen_cand) in picked
                     if st.button(("☑️ Unmark" if in_marks else "⬜ Mark for export"),
                                  use_container_width=True):
                         (picked.discard if in_marks else picked.add)(int(chosen_cand))
                         st.rerun()
-                st.caption("Dashed lines mark 1st, Top-10, Top-100, and the lineup's "
-                           "mean place. The x-axis covers valid places (1 … field).")
 
 with tabs[3]:
     if sim is None:
