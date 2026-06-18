@@ -36,6 +36,7 @@ from mlb_lineup_builder import Pool, Builder
 from field_simulator import (normalize_to_slots, adjust_ownership,
                              beta_for_size, tilt_structures)
 import slate_ingest
+import dk_slate_feed
 import shared_store
 
 # per-position place charts can exceed Altair's default 5000-row cap
@@ -206,6 +207,13 @@ def cached_sims(hpath, hmtime, ppath, pmtime):
     """Load + cache the sim universe. mtimes are part of the key so editing the
     .npy files busts the cache."""
     return load_sims(hpath, ppath)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_slate_catalog():
+    """Today's pickable DraftKings slates from the RotoWire feeds (salaries +
+    ownership), cached for 10 min. Returns dk_slate_feed.build_catalog()."""
+    return dk_slate_feed.build_catalog()
 
 
 @st.cache_data(show_spinner=False)
@@ -1074,109 +1082,149 @@ c3.metric("Sims available", f"{n_sim:,}")
 tabs = st.tabs(["⚙️  Setup", "📊  Players", "🏆  Results", "⬇️  Export"])
 
 with tabs[0]:
-    st.subheader("1 · Upload your slate file")
-    st.caption(
-        "Upload either a **DraftKings salaries export** (the `DKSalaries.csv` with "
-        "the player table — it already carries salary, position, team **and player "
-        "IDs**, so it powers both the simulation and the upload export), or a "
-        "**clean CSV** with columns " + ", ".join(f"`{c}`" for c in REQ_COLS) +
-        " (add an `ID` column to enable the DK upload without a separate template). "
-        "Ownership is the projected draft % (0–100).")
-    upload = st.file_uploader("Slate file", type=["csv"], label_visibility="collapsed")
+    st.subheader("1 · Choose your slate")
 
     dk_df = None
     csv_ok = False
     id_map = {}
     id_col = None
-    if upload is not None:
+
+    source = st.radio(
+        "How do you want to load players?",
+        ["Pick a slate (RotoWire feed)", "Upload your own file"],
+        horizontal=True, label_visibility="collapsed", key="slate_source")
+
+    if source == "Pick a slate (RotoWire feed)":
+        top = st.columns([6, 1])
+        if top[1].button("↻ Refresh", help="Re-fetch today's slates"):
+            _load_slate_catalog.clear()
+        catalog = None
         try:
-            raw = upload.getvalue().decode("latin-1", "replace")
-            export = parse_dk_export(raw)
-            if export is not None:
-                # raw DKSalaries export: has salary/pos/team/ID but no ownership
-                base_df, id_map = export
-                st.info(f"Detected a DraftKings salaries export — "
-                        f"{len(base_df)} players, {len(id_map)} IDs captured for the "
-                        "upload export. Now add ownership for these players.")
-                own_up = st.file_uploader(
-                    "Ownership CSV (columns: FullName, Ownership)", type=["csv"],
-                    key="ownership_for_export")
-                if own_up is None:
-                    st.warning("Upload an ownership CSV to continue.")
-                else:
-                    own = pd.read_csv(own_up, encoding="latin-1")
-                    own.columns = [c.strip() for c in own.columns]
-                    if "FullName" not in own.columns or "Ownership" not in own.columns:
-                        st.error("Ownership CSV needs `FullName` and `Ownership` columns.")
-                    else:
-                        omap = {normname(r.FullName): float(r.Ownership)
-                                for r in own.itertuples()
-                                if str(r.Ownership).strip() not in ("", "nan")}
-                        base_df["Ownership"] = base_df["FullName"].map(
-                            lambda n: omap.get(normname(n)))
-                        dk_df = base_df.dropna(subset=["Ownership"]).copy()
-            else:
-                # clean CSV — accept DK/own column-name variants via aliasing
-                raw_df = pd.read_csv(io.StringIO(raw))
-                raw_df.columns = [str(c).strip() for c in raw_df.columns]
-                dk_df = alias_columns(raw_df)
-                id_map, id_col = ids_from_clean(dk_df)
-                missing = [c for c in REQ_COLS if c not in dk_df.columns]
-                if "Ownership" in missing and len([m for m in missing if m != "Ownership"]) == 0:
-                    # everything but ownership is present (e.g. a DK salaries export)
-                    st.info("This looks like a salaries/slate file without ownership. "
-                            "Add ownership for these players below.")
+            with st.spinner("Loading today's DraftKings slates…"):
+                catalog = _load_slate_catalog()
+        except Exception as e:
+            st.error(f"Couldn't load the slate feed: {e}. Switch to "
+                     "“Upload your own file” to proceed.")
+        if catalog and catalog["slates"]:
+            slates = catalog["slates"]
+            labels = {s["slate_id"]: s["label"] for s in slates}
+            sid = top[0].selectbox(
+                "Slate", [s["slate_id"] for s in slates],
+                format_func=lambda i: labels.get(i, i), key="slate_pick")
+            slate = next(s for s in slates if s["slate_id"] == sid)
+            dk_df, id_map = dk_slate_feed.to_dk_df(slate)
+            unowned = slate["n_players"] - slate["n_owned"]
+            st.caption(
+                f"Slate **{sid}** ({catalog.get('date', '')}) — "
+                f"{slate['n_games']} games, {slate['n_players']} players, "
+                f"{slate['n_owned']} with feed ownership"
+                + (f" ({unowned} defaulted to 0%)." if unowned else "."))
+        elif catalog is not None:
+            st.warning("No Classic slates are available from the feed right now — "
+                       "switch to “Upload your own file”.")
+    else:
+        st.caption(
+            "Upload either a **DraftKings salaries export** (the `DKSalaries.csv` with "
+            "the player table — it already carries salary, position, team **and player "
+            "IDs**, so it powers both the simulation and the upload export), or a "
+            "**clean CSV** with columns " + ", ".join(f"`{c}`" for c in REQ_COLS) +
+            " (add an `ID` column to enable the DK upload without a separate template). "
+            "Ownership is the projected draft % (0–100).")
+        upload = st.file_uploader("Slate file", type=["csv"], label_visibility="collapsed")
+        if upload is not None:
+            try:
+                raw = upload.getvalue().decode("latin-1", "replace")
+                export = parse_dk_export(raw)
+                if export is not None:
+                    # raw DKSalaries export: has salary/pos/team/ID but no ownership
+                    base_df, id_map = export
+                    st.info(f"Detected a DraftKings salaries export — "
+                            f"{len(base_df)} players, {len(id_map)} IDs captured for the "
+                            "upload export. Now add ownership for these players.")
                     own_up = st.file_uploader(
                         "Ownership CSV (columns: FullName, Ownership)", type=["csv"],
-                        key="ownership_for_clean")
+                        key="ownership_for_export")
                     if own_up is None:
                         st.warning("Upload an ownership CSV to continue.")
-                        dk_df = None
                     else:
-                        own = alias_columns(pd.read_csv(own_up, encoding="latin-1"))
-                        own.columns = [str(c).strip() for c in own.columns]
-                        own = alias_columns(own)
+                        own = pd.read_csv(own_up, encoding="latin-1")
+                        own.columns = [c.strip() for c in own.columns]
                         if "FullName" not in own.columns or "Ownership" not in own.columns:
                             st.error("Ownership CSV needs `FullName` and `Ownership` columns.")
-                            dk_df = None
                         else:
                             omap = {normname(r.FullName): float(r.Ownership)
                                     for r in own.itertuples()
                                     if str(r.Ownership).strip() not in ("", "nan")}
-                            dk_df["Ownership"] = dk_df["FullName"].map(
+                            base_df["Ownership"] = base_df["FullName"].map(
                                 lambda n: omap.get(normname(n)))
-                            dk_df = dk_df.dropna(subset=["Ownership"]).copy()
-                elif missing:
-                    st.error("CSV is missing required column(s): " + ", ".join(missing)
-                             + f". Columns found: {', '.join(map(str, raw_df.columns))}")
-                    dk_df = None
-
-            if dk_df is not None:
-                simset = set(score)
-                covered = int(dk_df["FullName"].map(lambda n: normname(n) in simset).sum())
-                csv_ok = covered > 0
-                cc1, cc2, cc3 = st.columns(3)
-                cc1.metric("Players in slate", len(dk_df))
-                cc2.metric("Matched to sims", covered)
-                cc3.metric("DK IDs available", len(id_map) if id_map else 0)
-                if covered == 0:
-                    st.error("None of the players in this slate matched the sim "
-                             "universe — check names/teams. Nothing to simulate.")
+                            dk_df = base_df.dropna(subset=["Ownership"]).copy()
                 else:
-                    st.dataframe(dk_df.head(15), use_container_width=True)
-                    if id_map:
-                        src = f"column **{id_col}**" if id_col else "the slate file"
-                        st.caption(f"✓ Player IDs detected (from {src}) — "
-                                   "the DK upload export will use them automatically.")
-                    else:
-                        st.caption("No player IDs detected in this file. Columns found: "
-                                   f"`{', '.join(map(str, dk_df.columns))}`. To enable "
-                                   "the one-file DK export, include a player-ID column "
-                                   "(named e.g. `ID`, `Player ID`, `DK ID`, or a DK "
-                                   "`Name + ID` column); otherwise you can supply a "
-                                   "DKSalaries template at export time.")
-        except Exception as e:
-            st.error(f"Could not read slate file: {e}")
+                    # clean CSV — accept DK/own column-name variants via aliasing
+                    raw_df = pd.read_csv(io.StringIO(raw))
+                    raw_df.columns = [str(c).strip() for c in raw_df.columns]
+                    dk_df = alias_columns(raw_df)
+                    id_map, id_col = ids_from_clean(dk_df)
+                    missing = [c for c in REQ_COLS if c not in dk_df.columns]
+                    if "Ownership" in missing and len([m for m in missing if m != "Ownership"]) == 0:
+                        # everything but ownership is present (e.g. a DK salaries export)
+                        st.info("This looks like a salaries/slate file without ownership. "
+                                "Add ownership for these players below.")
+                        own_up = st.file_uploader(
+                            "Ownership CSV (columns: FullName, Ownership)", type=["csv"],
+                            key="ownership_for_clean")
+                        if own_up is None:
+                            st.warning("Upload an ownership CSV to continue.")
+                            dk_df = None
+                        else:
+                            own = alias_columns(pd.read_csv(own_up, encoding="latin-1"))
+                            own.columns = [str(c).strip() for c in own.columns]
+                            own = alias_columns(own)
+                            if "FullName" not in own.columns or "Ownership" not in own.columns:
+                                st.error("Ownership CSV needs `FullName` and `Ownership` columns.")
+                                dk_df = None
+                            else:
+                                omap = {normname(r.FullName): float(r.Ownership)
+                                        for r in own.itertuples()
+                                        if str(r.Ownership).strip() not in ("", "nan")}
+                                dk_df["Ownership"] = dk_df["FullName"].map(
+                                    lambda n: omap.get(normname(n)))
+                                dk_df = dk_df.dropna(subset=["Ownership"]).copy()
+                    elif missing:
+                        st.error("CSV is missing required column(s): " + ", ".join(missing)
+                                 + f". Columns found: {', '.join(map(str, raw_df.columns))}")
+                        dk_df = None
+            except Exception as e:
+                st.error(f"Could not read slate file: {e}")
+
+    if dk_df is not None:
+        simset = set(score)
+        covered = int(dk_df["FullName"].map(lambda n: normname(n) in simset).sum())
+        csv_ok = covered > 0
+        cc1, cc2, cc3 = st.columns(3)
+        cc1.metric("Players in slate", len(dk_df))
+        cc2.metric("Matched to sims", covered)
+        cc3.metric("DK IDs available", len(id_map) if id_map else 0)
+        if covered == 0:
+            st.error("None of the players in this slate matched the sim "
+                     "universe — check names/teams. Nothing to simulate.")
+        else:
+            st.dataframe(dk_df.head(15), use_container_width=True)
+            if id_map:
+                if source.startswith("Pick"):
+                    st.caption("✓ Player IDs from the RotoWire feed "
+                               "(DraftKingsDraftableID) — the DK upload export "
+                               "will use them automatically.")
+                else:
+                    src = f"column **{id_col}**" if id_col else "the slate file"
+                    st.caption(f"✓ Player IDs detected (from {src}) — "
+                               "the DK upload export will use them automatically.")
+            else:
+                st.caption("No player IDs detected in this file. Columns found: "
+                           f"`{', '.join(map(str, dk_df.columns))}`. To enable "
+                           "the one-file DK export, include a player-ID column "
+                           "(named e.g. `ID`, `Player ID`, `DK ID`, or a DK "
+                           "`Name + ID` column); otherwise you can supply a "
+                           "DKSalaries template at export time.")
 
     # --------------------------------------------------------------------------- #
     # Team totals (Vegas) — shown + editable; >=2 edits required to run.
