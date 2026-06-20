@@ -180,6 +180,33 @@ After a run, you can export a ready-to-upload DK file:
 Tweaking the selection / count / sort / caps re-selects instantly without
 re-simulating.
 
+### Portfolio diversity
+
+A ranked portfolio tends to pile onto the single best build — the same teammates
+fill every stack and the same primary team is always paired with the same
+secondary. Two places now let you spread it (all default to *no effect*, so
+behaviour is unchanged until you turn them on):
+
+- **Candidate diversity jitter** (Setup → *Advanced field model*) — adds a
+  per-pick random shock to every weighted selection while *developing*
+  candidates. Higher values let two near-equally-projected players at the same
+  price both get used, rotate a team's stack members, and pair a primary team
+  with different secondaries. This diversifies the candidate **pool at the
+  source**.
+- **Portfolio diversity** (Export → *Top N by ranking*) — diversifies the
+  **exported set** after ranking:
+  - **Max stack-pairing exposure** — caps the share of lineups sharing the same
+    *(primary, secondary)* team pair (e.g. spread a Cleveland primary across
+    several secondaries instead of always Kansas City).
+  - **Max stack-core exposure** — caps the share using the exact same set of
+    primary-stack hitters, forcing the stack to rotate teammates.
+  - **Max lineup similarity** — rejects a lineup that overlaps an
+    already-exported one by more than the chosen fraction of players (Jaccard).
+  - **Value groups** — the app auto-detects near-twin players (same position,
+    similar salary and projection) and a **Max value-group exposure** cap shares
+    the load across them, so a hair-higher projection doesn't let one player eat
+    the whole group's exposure.
+
 > A lineup is exportable only if every one of its players has a DK ID. The app
 > reports how many candidate players had IDs, so if your ownership and your DK
 > IDs cover different players you'll see it immediately.
