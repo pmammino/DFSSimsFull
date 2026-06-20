@@ -33,6 +33,7 @@ import streamlit as st
 from stage_d import (load_sims, build_pool, lineups_to_df, score_matrix,
                      norm as normname, COLS, HITC, SLOT)
 from mlb_lineup_builder import Pool, Builder
+from portfolio import select_portfolio, detect_value_groups
 from field_simulator import (normalize_to_slots, adjust_ownership,
                              beta_for_size, tilt_structures)
 import slate_ingest
@@ -413,55 +414,33 @@ def ids_from_clean(df):
 
 
 def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
-                    pitcher_cap=1.0, team_cap=1.0):
-    """Greedily pick n_select lineups from the ranked candidate results under
-    separate hitter / pitcher / stack-team exposure caps, map players to DK IDs,
-    and emit a ready-to-upload CSV (P,P,C,1B,2B,3B,SS,OF,OF,OF + one ID row each).
-    COLS[0:2] are the two pitcher slots; COLS[2:] are the 8 hitters."""
+                    pitcher_cap=1.0, team_cap=1.0, pair_cap=1.0,
+                    core_cap=1.0, max_overlap=1.0, group_of=None,
+                    group_cap=1.0):
+    """Pick n_select lineups from the ranked candidate results with the
+    diversity-aware portfolio selector (per-player / stack-team / pairing /
+    stack-core / value-group exposure caps + an overlap ceiling), map players to
+    DK IDs, and emit a ready-to-upload CSV (P,P,C,1B,2B,3B,SS,OF,OF,OF + one ID
+    row each). COLS[0:2] are the two pitcher slots; COLS[2:] are the 8 hitters."""
     keymap = {"Win%": ["Wins", "Top10", "Top100"],
               "Top10 Rate": ["Top10", "Top100", "Wins"],
               "Top100 Rate": ["Top100", "Top10", "Wins"]}[sort_by]
-    rdf = res_df.sort_values(keymap, ascending=False).reset_index(drop=True)
-    N = int(n_select)
-    hcap = max(1, int(round(hitter_cap * N)))
-    pcap = max(1, int(round(pitcher_cap * N)))
-    tcap = max(1, int(round(team_cap * N)))
 
-    def names_of(row):
-        return [str(row[c]).rsplit(" (", 1)[0] for c in COLS]
+    def eligible(nms):
+        return all(normname(n) in dkid for n in nms)
 
-    def prim(row):
-        c = Counter(str(row[x]).rsplit(" (", 1)[1][:-1]
-                    for x in HITC if " (" in str(row[x]))
-        return c.most_common(1)[0][0]
-
-    expo, teamc, chosen, skipped, pitchers = Counter(), Counter(), [], 0, set()
-    for _, row in rdf.iterrows():
-        nms = names_of(row)
-        if any(normname(n) not in dkid for n in nms):
-            skipped += 1
-            continue
-        caps_ok = all(expo[n] < (pcap if i < 2 else hcap)
-                      for i, n in enumerate(nms))
-        if caps_ok and teamc[prim(row)] < tcap:
-            chosen.append(row)
-            for i, n in enumerate(nms):
-                expo[n] += 1
-                if i < 2:
-                    pitchers.add(n)
-            teamc[prim(row)] += 1
-        if len(chosen) == N:
-            break
+    chosen, info = select_portfolio(
+        res_df, n_select, keymap, cols=COLS, hitc=HITC, eligible=eligible,
+        hitter_cap=hitter_cap, pitcher_cap=pitcher_cap, team_cap=team_cap,
+        pair_cap=pair_cap, core_cap=core_cap, max_overlap=max_overlap,
+        group_of=group_of, group_cap=group_cap)
 
     out = io.StringIO()
     w = csv.writer(out)
     w.writerow(SLOT)
     for row in chosen:
-        w.writerow([dkid[normname(n)] for n in names_of(row)])
-    info = {"chosen": len(chosen), "requested": N, "skipped_unmapped": skipped,
-            "max_pitcher": max((expo[n] for n in pitchers), default=0),
-            "max_hitter": max((expo[n] for n in expo if n not in pitchers), default=0),
-            "max_team": max(teamc.values()) if teamc else 0}
+        nms = [str(row[c]).rsplit(" (", 1)[0] for c in COLS]
+        w.writerow([dkid[normname(n)] for n in nms])
     return out.getvalue(), info
 
 
@@ -1346,6 +1325,18 @@ with tabs[0]:
                      "0 (default) = every team equally likely to be stacked, so teams "
                      "stay diverse; higher = concentrate stacks on the best offenses. "
                      "Separate from the player tilt above.")
+            cand_jitter = st.slider(
+                "Candidate diversity jitter", min_value=0.0, max_value=1.5,
+                value=0.0, step=0.1,
+                help="Adds a per-pick random shock to every weighted selection "
+                     "(stack team, stack members, one-off bats, pitchers) when "
+                     "developing candidates. 0 (default) = deterministic weighting. "
+                     "Higher = near-equally-projected options trade places between "
+                     "lineups, so two similar players at the same price both get "
+                     "used, a team's stack rotates its members, and the same "
+                     "primary team pairs with different secondaries. Diversifies "
+                     "the candidate POOL at the source (complements the export-time "
+                     "exposure caps).")
 
         force_refresh = st.checkbox(
             "Force full refresh (rebuild projections + sims now)", value=False,
@@ -1530,7 +1521,7 @@ with tabs[0]:
                        f"stack-team tilt={team_tilt:g} "
                        f"({'teams favor better offenses' if team_tilt > 0 else 'teams uniform'}).")
             cb = Builder(Pool(cdf), params, seed=int(seed_cand), uniform=True,
-                         team_weights=team_weights)
+                         team_weights=team_weights, jitter=float(cand_jitter))
             cands, c_att = build_many(cb, int(num_candidates), "Candidates")
             if not cands:
                 status.update(label="Could not build candidate lineups", state="error")
@@ -1592,6 +1583,19 @@ with tabs[0]:
         res = res.sort_values(["Wins", "Top10", "Top100", "AvgPlace"],
                               ascending=[False, False, False, True]).reset_index(drop=True)
 
+        # per-player metadata (position / salary / projected value) so the export
+        # step can auto-detect near-twin value groups without re-simulating.
+        players_meta = {}
+        for r in pool.itertuples():
+            nm = r.Name
+            if nm in players_meta:
+                continue
+            players_meta[nm] = {
+                "pos": "P" if r.Pos == "P" else r.Pos,
+                "salary": int(r.Salary), "team": r.Team,
+                "proj": float(tal[nm]) if nm in tal else None,
+            }
+
         # persist so the filter/export controls below can change without re-simulating
         st.session_state["sim"] = {
             "res": res, "cands": cands, "field_df": lineups_to_df(field),
@@ -1599,6 +1603,7 @@ with tabs[0]:
             "dist": dist, "id_map": id_map,
             "cand_to_players": {i + 1: cand_players[i] for i in range(len(cands))},
             "pool_players": sorted({pl.Name for lu in cands for pl in lu["players"]}),
+            "players_meta": players_meta,
         }
         # fresh run -> clear prior marks / inspection state
         st.session_state["picked"] = set()
@@ -1954,8 +1959,76 @@ with tabs[3]:
                     team_cap = pc3.slider(
                         "Max stack-team exposure", 0.05, 1.0, 1.0, 0.05,
                         help="Cap the share sharing the same primary stack team.")
-                csv_text, info = build_dk_upload(src, dkid, n_up, sort_by,
-                                                 hitter_cap, pitcher_cap, team_cap)
+
+                with st.expander("Portfolio diversity (optional)"):
+                    st.caption("Spread the exported set so the lineups work "
+                               "together instead of piling onto the single "
+                               "best build. All default to no effect.")
+                    dc1, dc2, dc3 = st.columns(3)
+                    pair_cap = dc1.slider(
+                        "Max stack-pairing exposure", 0.05, 1.0, 1.0, 0.05,
+                        help="Cap the share of lineups sharing the SAME "
+                             "(primary, secondary) team pair — so e.g. a Cleveland "
+                             "primary gets paired with several different secondary "
+                             "stacks instead of always Kansas City. 1.0 = no cap.")
+                    core_cap = dc2.slider(
+                        "Max stack-core exposure", 0.05, 1.0, 1.0, 0.05,
+                        help="Cap the share of lineups using the exact SAME set of "
+                             "hitters for the primary stack — forces a team's stack "
+                             "to rotate its teammates across the portfolio. "
+                             "1.0 = no cap.")
+                    max_overlap = dc3.slider(
+                        "Max lineup similarity", 0.30, 1.0, 1.0, 0.05,
+                        help="Reject a lineup if it shares more than this fraction "
+                             "of players with one already exported (Jaccard "
+                             "overlap). 1.0 = allow near-duplicates; ~0.8 keeps "
+                             "every exported lineup meaningfully distinct.")
+
+                    meta = sim.get("players_meta") or {}
+                    group_of, groups = ({}, [])
+                    group_cap = 1.0
+                    if meta:
+                        gc1, gc2 = st.columns(2)
+                        sal_tol = gc1.number_input(
+                            "Value-group salary tolerance ($)", min_value=0,
+                            max_value=2000, value=300, step=100,
+                            help="Players at the same position within this salary "
+                                 "gap and a close projection are treated as "
+                                 "near-twins.")
+                        proj_tol = gc2.number_input(
+                            "Value-group projection tolerance (pts)",
+                            min_value=0.0, max_value=10.0, value=1.5, step=0.5,
+                            help="Max projected-point gap for two same-position, "
+                                 "similar-salary players to count as near-twins.")
+                        group_of, groups = detect_value_groups(
+                            meta, salary_tol=int(sal_tol), proj_tol=float(proj_tol))
+                        if groups:
+                            group_cap = st.slider(
+                                "Max value-group exposure", 0.05, 1.0, 1.0, 0.05,
+                                help="Cap the combined share of lineups using ANY "
+                                     "member of a near-twin group, so a slightly "
+                                     "higher projection doesn't let one player eat "
+                                     "the whole group's exposure. 1.0 = no cap.")
+                            st.caption(f"{len(groups)} near-twin value group(s) "
+                                       "detected (capped together):")
+                            gdf = pd.DataFrame([{
+                                "Pos": g["pos"],
+                                "Players": ", ".join(g["players"]),
+                                "Salary": (f"${g['salary_lo']:,}" if
+                                           g['salary_lo'] == g['salary_hi'] else
+                                           f"${g['salary_lo']:,}–${g['salary_hi']:,}"),
+                                "Proj": f"{g['proj_lo']:.1f}–{g['proj_hi']:.1f}",
+                            } for g in groups])
+                            st.dataframe(gdf, use_container_width=True,
+                                         hide_index=True)
+                        else:
+                            st.caption("No near-twin value groups at these "
+                                       "tolerances.")
+
+                csv_text, info = build_dk_upload(
+                    src, dkid, n_up, sort_by, hitter_cap, pitcher_cap, team_cap,
+                    pair_cap=pair_cap, core_cap=core_cap, max_overlap=max_overlap,
+                    group_of=group_of, group_cap=group_cap)
                 if info["chosen"] == 0:
                     st.error("No exportable lineups — players had no DK ID, or the caps "
                              "are too strict.")
@@ -1965,6 +2038,11 @@ with tabs[3]:
                            f"{info['max_hitter']}/{info['chosen']}, max pitcher "
                            f"{info['max_pitcher']}/{info['chosen']}, max stack-team "
                            f"{info['max_team']}/{info['chosen']}.")
+                    if info["chosen"] < n_up:
+                        msg += (f" Diversity caps limited the set to "
+                                f"{info['chosen']} — loosen them for more.")
+                    msg += (f" Distinct stack pairings: {info['distinct_pairs']}; "
+                            f"distinct stack cores: {info['distinct_cores']}.")
                     if info["skipped_unmapped"]:
                         msg += (f" ({info['skipped_unmapped']} skipped: a player had no "
                                 "DK ID.)")

@@ -98,9 +98,14 @@ def wchoice(rng, items, weights):
     return items[rng.choice(len(items), p=w / w.sum())]
 
 
-def fill_team_stack(rng, pool, team, k, open_slots, used_names):
+def fill_team_stack(rng, pool, team, k, open_slots, used_names, jitter=0.0):
     """Pick k hitters from `team` filling k distinct still-open slots,
-    weighted by ownership, never reusing a player name. Returns list or None."""
+    weighted by ownership, never reusing a player name. Returns list or None.
+
+    `jitter` (>=0) multiplies each candidate's weight by a per-draw lognormal
+    shock exp(jitter * N(0,1)); >0 lets near-equally-weighted teammates trade
+    places between lineups, so a team's stack uses varied members across the
+    portfolio instead of the same highest-weighted bats every time."""
     slots = dict(open_slots)
     avail = {p: [r for r in rows if r.Name not in used_names]
              for p, rows in pool.team_pos[team].items()}
@@ -113,6 +118,9 @@ def fill_team_stack(rng, pool, team, k, open_slots, used_names):
         if not cand:
             return False
         weights = [r.Ownership for _, r in cand]
+        if jitter:
+            noise = np.exp(jitter * rng.standard_normal(len(weights)))
+            weights = [wv * float(nz) for wv, nz in zip(weights, noise)]
         for _ in range(len(cand)):
             idx = rng.choice(len(cand), p=np.array(weights)/sum(weights))
             p, r = cand[idx]
@@ -133,7 +141,8 @@ def fill_team_stack(rng, pool, team, k, open_slots, used_names):
 # Core builder
 # ----------------------------------------------------------------------------- 
 class Builder:
-    def __init__(self, pool, params, seed=None, uniform=False, team_weights=None):
+    def __init__(self, pool, params, seed=None, uniform=False, team_weights=None,
+                 jitter=0.0):
         self.pool = pool
         self.rng = np.random.default_rng(seed)
         self.uniform = uniform   # if True, pick stack TEAMS uniformly (ignore ownership)
@@ -142,6 +151,12 @@ class Builder:
         # candidates favor higher-projected/Vegas teams while player picks stay
         # governed by the pool's Ownership column.
         self.team_weights = team_weights
+        # per-draw lognormal shock applied to every weighted selection (stack
+        # team, stack members, one-off bats, pitchers). 0 = deterministic
+        # weighting (prior behaviour); >0 diversifies the portfolio by letting
+        # near-equally-ranked options trade places between lineups, which spreads
+        # near-twin players, stack composition, and primary/secondary pairings.
+        self.jitter = float(jitter)
         structs = params["stack_structures"]
         self.struct_shapes = [tuple(s) for s, _ in structs]
         p = np.array([w for _, w in structs], float); self.struct_probs = p / p.sum()
@@ -187,8 +202,12 @@ class Builder:
                         wt *= self.rules["secondary_is_game_stack_prob"] / \
                               (1 - self.rules["secondary_is_game_stack_prob"])
                 w.append(max(wt, 1e-6))
+            if self.jitter:
+                noise = np.exp(self.jitter * rng.standard_normal(len(w)))
+                w = [wi * float(nz) for wi, nz in zip(w, noise)]
             team = wchoice(rng, cands, w)
-            picked = fill_team_stack(rng, pool, team, k, open_slots, used_names)
+            picked = fill_team_stack(rng, pool, team, k, open_slots, used_names,
+                                     self.jitter)
             if picked is None:
                 return None
             for p, r in picked:
@@ -205,6 +224,8 @@ class Builder:
             if not elig:
                 return None
             weights = np.array([r.Ownership for r in elig], float)
+            if self.jitter:
+                weights = weights * np.exp(self.jitter * rng.standard_normal(len(weights)))
             r = elig[rng.choice(len(elig), p=weights/weights.sum())]
             hitters.append((r.Pos, r)); open_slots[r.Pos] -= 1; used_names.add(r.Name)
 
@@ -227,6 +248,8 @@ class Builder:
         if len(cand) < 2:
             return None
         w1 = np.array([p.Ownership for p in cand], float)
+        if self.jitter:
+            w1 = w1 * np.exp(self.jitter * rng.standard_normal(len(w1)))
         p1 = cand[rng.choice(len(cand), p=w1/w1.sum())]
         rest = [p for p in cand if p.Name != p1.Name]
         if rng.random() > self.rules["two_pitchers_same_game_prob"]:
@@ -236,6 +259,8 @@ class Builder:
         if not rest:
             return None
         w2 = np.array([p.Ownership for p in rest], float)
+        if self.jitter:
+            w2 = w2 * np.exp(self.jitter * rng.standard_normal(len(w2)))
         p2 = rest[rng.choice(len(rest), p=w2/w2.sum())]
         pitchers = [p1, p2]
 
