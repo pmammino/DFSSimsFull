@@ -34,6 +34,7 @@ from collections import Counter
 from mlb_lineup_builder import Pool, Builder
 from field_simulator import (normalize_to_slots, adjust_ownership,
                              beta_for_size, tilt_structures)
+from stack_signal import team_stack_ownership, apply_stack_ownership_boost
 
 COLS = ['P1','P2','C','1B','2B','3B','SS','OF1','OF2','OF3']
 HITC = ['C','1B','2B','3B','SS','OF1','OF2','OF3']
@@ -125,6 +126,10 @@ def main():
     ap.add_argument('--medium', type=int, default=6000)
     ap.add_argument('--chalk-sensitivity', type=float, default=0.35)
     ap.add_argument('--stack-tilt', type=float, default=0.15)
+    ap.add_argument('--stack-boost', type=float, default=0.05,
+                    help='Stack-ownership ceiling boost: in each team\'s high-end '
+                         'sims, scale its hitters\' DK points up by a factor that '
+                         'grows with projected stack ownership (0 = off).')
     ap.add_argument('--params', default='field_params.json')
     ap.add_argument('--seed-field', type=int, default=101)
     ap.add_argument('--seed-candidates', type=int, default=2025)
@@ -144,6 +149,22 @@ def main():
     pool = build_pool(a.dk, H, P, score)
     nh = pool[pool.Pos!='P'].Name.nunique(); npi = pool[pool.Pos=='P'].Name.nunique()
     print(f"pool: {nh} hitters + {npi} starters, {pool.Team.nunique()} teams, {n_sim} sims")
+
+    # stack-ownership upside signal: nudge popular stacks' high-end outcomes up.
+    # The same boosted sims score both the field and the candidates.
+    if a.stack_boost > 0:
+        hp = pool[pool.Pos != 'P']
+        names_by_team, own_by_name = {}, {}
+        for r in hp.itertuples():
+            nn = norm(r.Name)
+            names_by_team.setdefault(r.Team, set()).add(nn)
+            own_by_name[nn] = float(r.Ownership)
+        names_by_team = {t: sorted(ns) for t, ns in names_by_team.items()}
+        stack_own = team_stack_ownership(names_by_team, own_by_name)
+        score = apply_stack_ownership_boost(score, names_by_team, stack_own, n_sim,
+                                            strength=a.stack_boost, quantile=0.80)
+        print(f"stack-ownership ceiling boost={a.stack_boost:g} applied to "
+              f"{len(names_by_team)} teams")
 
     # candidates once (uniform, starters only)
     cdf = pool[(pool.Pos!='P') | (pool.Role=='SP')].copy(); cdf['Ownership'] = 1.0
