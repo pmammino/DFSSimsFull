@@ -62,6 +62,46 @@ def write_csv(path, rows, fields):
         w.writeheader(); w.writerows(rows)
 
 
+def apply_vegas_scaling(slate, overrides=None, baseline=0.0, lo=0.5, hi=2.0):
+    """Scale every team's offense by its Vegas implied total relative to the
+    slate average, so the day's run environment powers the sim even with no
+    manual edits. `total_scale[side] = clip(implied/baseline, lo, hi)`.
+
+    - `overrides`: optional {team_code: implied_runs} that REPLACE a team's
+      implied total before scaling (a user edit). The baseline is taken from the
+      LOADED (pre-override) totals, so an edit moves only the edited teams, not
+      the reference everyone is measured against.
+    - `baseline`: >0 pins an absolute league-average reference; 0 (default) uses
+      the slate's own average implied total (the typical team -> ~1.0, unchanged).
+
+    Mutates `slate` in place (sets g['total_scale'] and applies overrides to
+    g['implied']). Returns (baseline_used, n_overridden_sides).
+    """
+    overrides = overrides or {}
+    games = slate['games'].values()
+    loaded = [float(g['implied'].get(s) or 0.0)
+              for g in games for s in ('away', 'home')
+              if float(g['implied'].get(s) or 0.0) > 0]
+    base = baseline if baseline > 0 else (sum(loaded) / len(loaded) if loaded else 4.4)
+
+    for g in games:
+        for side in ('away', 'home'):
+            if g[side] in overrides:
+                g['implied'][side] = float(overrides[g[side]])
+        g['implied']['total'] = (float(g['implied'].get('away') or 0.0)
+                                 + float(g['implied'].get('home') or 0.0))
+
+    n_ov = 0
+    for g in games:
+        g.setdefault('total_scale', {'away': 1.0, 'home': 1.0})
+        for side in ('away', 'home'):
+            imp = float(g['implied'].get(side) or 0.0) or base
+            g['total_scale'][side] = max(lo, min(hi, imp / base))
+            if g[side] in overrides:
+                n_ov += 1
+    return base, n_ov
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--confirmed'); ap.add_argument('--expected'); ap.add_argument('--vegas')
@@ -69,8 +109,13 @@ def main():
     ap.add_argument('--n-sims', type=int, default=10000)
     ap.add_argument('--seed', type=int, default=20260610)
     ap.add_argument('--team-totals', help='JSON {team_code: implied_runs} to '
-                    'override the slate Vegas team totals (scales that team\'s '
-                    'offense by edited/original).')
+                    'override the slate Vegas team totals (replaces that team\'s '
+                    'implied total before the Vegas-vs-slate-average scaling).')
+    ap.add_argument('--total-baseline', type=float, default=0.0,
+                    help='Implied-total that maps to a neutral 1.0 offense scale. '
+                         '0 (default) = use the slate average, so the typical team '
+                         'is unchanged and teams spread around it by their Vegas '
+                         'total. >0 pins an absolute league-average reference.')
     args = ap.parse_args()
 
     os.makedirs(DELIV_DIR, exist_ok=True)
@@ -88,23 +133,13 @@ def main():
     slate = slate_ingest.build_slate(cx, ex, vegas_json=vj)
     print(f"   date={slate['date']} games={len(slate['games'])}")
 
-    # 2b) optional user override of team Vegas totals -> rescale team offense
-    if args.team_totals:
-        ov = json.load(open(args.team_totals))
-        n_ov = 0
-        for g in slate['games'].values():
-            g.setdefault('total_scale', {'away': 1.0, 'home': 1.0})
-            for side in ('away', 'home'):
-                team = g[side]
-                if team in ov:
-                    orig = float(g['implied'].get(side) or 0.0) or 4.4
-                    new = float(ov[team])
-                    g['implied'][side] = new
-                    g['total_scale'][side] = max(0.2, min(2.5, new / orig))
-                    n_ov += 1
-            g['implied']['total'] = (float(g['implied'].get('away') or 0.0)
-                                     + float(g['implied'].get('home') or 0.0))
-        print(f"   applied team-total overrides for {n_ov} team(s)")
+    # 2b) drive every team's offense from its Vegas implied total (see
+    #     apply_vegas_scaling) so the day's run environment powers the sim even
+    #     with NO manual edits.
+    ov = json.load(open(args.team_totals)) if args.team_totals else None
+    baseline, n_ov = apply_vegas_scaling(slate, ov, args.total_baseline)
+    print(f"   offense scaled by Vegas vs slate baseline {baseline:.2f} "
+          f"({n_ov} user-overridden)")
 
     # 3) matchup
     print("[3/6] Building matchup-specific per-PA inputs (vL/vR + park)...")
