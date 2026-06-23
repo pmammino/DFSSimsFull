@@ -266,5 +266,15 @@ The "Advanced field model" expander exposes:
   sims, applied as a z-score softmax). **0 = default** (every team equally likely
   to be stacked); raise it to concentrate stacks on the top offenses (e.g. ~0.8
   puts ~half the primary stacks on the top-5 offenses).
+- **Stack-ownership ceiling boost** — uses projected **stack ownership** (sum of
+  a team's hitter ownership) as a small *upside* signal. In each team's high-end
+  sims (its top ~20% of games) that team's hitters' DK points are scaled up by a
+  factor that grows with the team's stack ownership — the lowest-owned stack gets
+  no bump, the chalkiest gets the full slider value. The same boosted sims score
+  **both** the field and your candidates, so popular stacks hit their ceiling a
+  touch more often and the **top projected stacks surface a bit higher** in the
+  results, without the optimizer being driven entirely onto contrarian, low-owned
+  stacks. **0.05 = default** (a gentle nudge); 0 turns it off (pure projection).
+  Correlation is preserved — a stack still booms together, just slightly bigger.
 
 All default to sensible values and don't change the four required inputs.

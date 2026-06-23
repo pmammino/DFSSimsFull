@@ -36,6 +36,7 @@ from mlb_lineup_builder import Pool, Builder
 from portfolio import select_portfolio, detect_value_groups
 from field_simulator import (normalize_to_slots, adjust_ownership,
                              beta_for_size, tilt_structures)
+from stack_signal import team_stack_ownership, apply_stack_ownership_boost
 import slate_ingest
 import dk_slate_feed
 import shared_store
@@ -1337,6 +1338,20 @@ with tabs[0]:
                      "primary team pairs with different secondaries. Diversifies "
                      "the candidate POOL at the source (complements the export-time "
                      "exposure caps).")
+            stack_boost = st.slider(
+                "Stack-ownership ceiling boost", min_value=0.0, max_value=0.25,
+                value=0.05, step=0.01,
+                help="Uses projected STACK ownership (sum of a team's hitter "
+                     "ownership) as a small upside signal: in each team's high-end "
+                     "sims (its top ~20% of games), that team's hitters' DK points "
+                     "are scaled up by a factor that grows with the team's stack "
+                     "ownership — the lowest-owned stack gets no bump, the chalkiest "
+                     "gets the full value here. The same boosted sims score BOTH the "
+                     "field and your candidates, so popular stacks hit their ceiling "
+                     "a touch more often and the top projected stacks surface a bit "
+                     "higher. 0 = off (pure projection); 0.05 (default) = a gentle "
+                     "nudge, never a driver. Correlation is preserved (a stack still "
+                     "booms together).")
 
         force_refresh = st.checkbox(
             "Force full refresh (rebuild projections + sims now)", value=False,
@@ -1473,6 +1488,33 @@ with tabs[0]:
                     "the slate file's player names/teams match the slate.")
                 st.stop()
 
+            # ---- stack-ownership upside signal: give popular stacks a small bump
+            #      to their high-end (ceiling) outcomes, tied to projected stack
+            #      ownership. The SAME boosted sims score both the field and the
+            #      candidates below, so it's a coherent re-weighting (not a thumb on
+            #      the candidate scale). Raw `score_k` still drives candidate talent
+            #      tilt — construction stays projection-honest. ----
+            score_b = score_k
+            if float(stack_boost) > 0:
+                hit_pool = pool[pool.Pos != "P"]
+                names_by_team, own_by_name = {}, {}
+                for r in hit_pool.itertuples():
+                    nn = normname(r.Name)
+                    names_by_team.setdefault(r.Team, set()).add(nn)
+                    own_by_name[nn] = float(r.Ownership)
+                names_by_team = {t: sorted(ns) for t, ns in names_by_team.items()}
+                stack_own = team_stack_ownership(names_by_team, own_by_name)
+                score_b = apply_stack_ownership_boost(
+                    score_k, names_by_team, stack_own, K,
+                    strength=float(stack_boost), quantile=0.80)
+                top_stacks = sorted(stack_own.items(), key=lambda kv: kv[1],
+                                    reverse=True)[:3]
+                st.caption(
+                    f"Stack-ownership ceiling boost = {float(stack_boost):g}: "
+                    "popular stacks' high-end games nudged up "
+                    + "(top projected: "
+                    + ", ".join(f"{t} {o:.0f}%" for t, o in top_stacks) + ").")
+
             # ---- candidate lineups: players tilted to projected value (effective,
             #      via a z-score softmax); stack TEAMS uniform unless team tilt > 0 ----
             st.write(f"Developing {int(num_candidates):,} candidate lineups…")
@@ -1527,7 +1569,7 @@ with tabs[0]:
                 status.update(label="Could not build candidate lineups", state="error")
                 st.error("Failed to construct any valid candidate lineup from this pool.")
                 st.stop()
-            cand_mat = score_matrix(cands, score_k, K)
+            cand_mat = score_matrix(cands, score_b, K)
 
             # ---- field for the chosen contest size ----
             st.write(f"Building an ownership-weighted field of {contest_size:,}…")
@@ -1544,7 +1586,7 @@ with tabs[0]:
                 st.warning(f"Built {len(field):,} of {contest_size:,} requested field "
                            "lineups (pool constrained); simulating against the field "
                            "that could be built.")
-            field_mat = score_matrix(field, score_k, K)
+            field_mat = score_matrix(field, score_b, K)
 
             # ---- the contest (captures each candidate's finishing-place distro) ----
             st.write(f"Simulating the contest over {K:,} runs…")
