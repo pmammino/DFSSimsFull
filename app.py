@@ -511,9 +511,11 @@ def projections_built_date():
 
 def slate_change_signature(slate):
     """A comparable fingerprint of the slate that captures everything a refresh
-    cares about: the game date, each team's batting order (lineups/players), and
-    each team's starting pitcher (matchups). A change in any of these means the
-    correlated sims are stale."""
+    cares about: the game date, each team's batting order (lineups/players), each
+    team's starting pitcher (matchups), and its Vegas implied total (which now
+    drives offense scaling). A change in any of these means the correlated sims
+    are stale. The total is rounded to 0.25 so genuine line moves trigger a
+    rebuild but feed jitter doesn't thrash."""
     if not slate:
         return None
     teams = {}
@@ -525,7 +527,9 @@ def slate_change_signature(slate):
             order = [p.get("name") for p in g.get("lineups", {}).get(side, [])]
             pit = g.get("pitchers", {}).get(side, {}) or {}
             sp = pit.get("starter") or pit.get("primary") or pit.get("opener")
-            teams[tcode] = {"order": order, "sp": sp}
+            imp = (g.get("implied", {}) or {}).get(side)
+            total = round(float(imp) * 4) / 4 if imp not in (None, "") else None
+            teams[tcode] = {"order": order, "sp": sp, "total": total}
     return {"date": slate.get("date"), "teams": teams}
 
 
@@ -543,6 +547,10 @@ def diff_slate(stored_sig, live_sig):
             continue
         if ta and tb and ta.get("sp") != tb.get("sp"):
             out.append(f"{t} SP {ta.get('sp')}→{tb.get('sp')}")
+        elif ta and tb and ta.get("order") != tb.get("order"):
+            out.append(f"{t} lineup")
+        elif ta and tb and ta.get("total") != tb.get("total"):
+            out.append(f"{t} total {ta.get('total')}→{tb.get('total')}")
         else:
             out.append(f"{t} lineup")
     return out
@@ -1207,8 +1215,10 @@ with tabs[0]:
                            "DKSalaries template at export time.")
 
     # --------------------------------------------------------------------------- #
-    # Team totals (Vegas) — shown + editable; >=2 edits required to run.
-    # Edited teams override the sim's implied total (rescaling that team's offense).
+    # Team totals (Vegas) — shown + editable. The loaded Vegas totals DRIVE the
+    # sim by default (offense scaled by total vs a fixed 4.2-run league average);
+    # editing is optional and just replaces a team's total before that scaling.
+    # Only a flat/failed feed forces >=2 manual edits before a run can proceed.
     # --------------------------------------------------------------------------- #
     st.subheader("Team totals (Vegas) — adjust before running")
     if "_tt_fetched" not in st.session_state:
@@ -1217,22 +1227,27 @@ with tabs[0]:
     fetched = st.session_state["_tt_fetched"]
     tt_override = {}
     n_tt_edits = 0
+    feed_flat = False
     if not fetched:
         st.info("Couldn't read today's team totals (live feed unavailable and no "
-                "slate on disk). The 2-edit gate is skipped; sims use the "
-                "pipeline's Vegas totals.")
-        n_tt_edits = 2
+                "slate on disk). Sims use the pipeline's Vegas totals as-is.")
     else:
         fetched_map = {r["Team"]: r["Vegas total"] for r in fetched}
         vals = list(fetched_map.values())
         if len(set(round(v, 2) for v in vals)) <= 1:
+            feed_flat = True
             st.warning(f"⚠️ The live Vegas feed looks unavailable — every team "
-                       f"defaulted to **{vals[0]:.1f}** runs. Use the diagnostic "
-                       "below to see why, or edit the totals manually.")
+                       f"defaulted to **{vals[0]:.1f}** runs, so Vegas can't drive "
+                       "the sim. Edit at least 2 totals manually (or use the "
+                       "diagnostic below) before running.")
         else:
-            st.caption("Today's Vegas implied run totals. **Edit at least 2** "
-                       "(each change rescales that team's offense by your value ÷ "
-                       "Vegas).")
+            st.caption("Today's Vegas implied run totals **drive the sim by "
+                       "default** — each team's offense is scaled by its total vs a "
+                       "4.2-run league average (higher total → higher mean **and** "
+                       "fatter ceiling, and a tougher night for the pitcher it "
+                       "faces). Editing is **optional**: any change replaces that "
+                       "team's total before the same scaling, rebuilds the sims, and "
+                       "reshapes its player projections.")
 
         with st.expander("🔬 Diagnose the live Vegas feed"):
             st.caption("Probes www.fantasylabs.com live (from this host) and "
@@ -1260,9 +1275,17 @@ with tabs[0]:
             if abs(val - float(fetched_map.get(rr["Team"], val))) > 1e-6:
                 tt_override[rr["Team"]] = val      # only edited teams override
                 n_tt_edits += 1
-        st.caption(f"✏️ {n_tt_edits} team total(s) changed"
-                   + (" — run enabled." if n_tt_edits >= 2 else
-                      f" · change **{2 - n_tt_edits} more** to enable the run."))
+        if feed_flat:
+            st.caption(f"✏️ {n_tt_edits} team total(s) changed"
+                       + (" — run enabled." if n_tt_edits >= 2 else
+                          f" · change **{2 - n_tt_edits} more** to enable the run "
+                          "(the live feed is flat)."))
+        elif n_tt_edits:
+            st.caption(f"✏️ {n_tt_edits} team total(s) overridden; the rest use the "
+                       "live Vegas totals.")
+
+    # Vegas drives the sim by default; only a flat/failed feed needs manual edits.
+    tt_ready = (n_tt_edits >= 2) if feed_flat else True
 
     # --------------------------------------------------------------------------- #
     # Step 2 — forced decisions, gated behind a Run button
@@ -1360,9 +1383,10 @@ with tabs[0]:
                  "Use after fixing a data/connection issue.")
         submitted = st.form_submit_button(
             "▶ Run simulation", type="primary", use_container_width=True,
-            disabled=(n_tt_edits < 2),
-            help=None if n_tt_edits >= 2 else
-            "Adjust at least 2 team totals above to enable the run.")
+            disabled=(not tt_ready),
+            help=None if tt_ready else
+            "The live Vegas feed is flat — adjust at least 2 team totals above to "
+            "enable the run.")
 
     contest_size = int(size_custom) if size_custom else (int(size_sel) if size_sel else None)
 

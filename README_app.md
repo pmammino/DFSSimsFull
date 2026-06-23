@@ -29,12 +29,18 @@ pill badges, tabs (purple active underline), buttons, and tables.
 
 The flow is organized as a **Tabbed Workspace** (design Option C):
 
-- **⚙️ Setup** — upload the slate file; review & **edit the day's Vegas team
-  totals** (you must change **≥2** before Run enables — each edit overrides that
-  team's implied total and rescales its offense by your value ÷ Vegas). A
-  **🔬 Diagnose the live Vegas feed** expander shows what the feed returns if the
-  totals look flat. Then configure contest size / sim runs / candidates / tilts,
-  and Run.
+- **⚙️ Setup** — upload the slate file; review the day's **Vegas team totals**.
+  The loaded totals **drive the sim by default**: each team's offense is scaled
+  by its implied total vs a fixed 4.2-run league average, so a high-total team
+  gets a higher **mean and a fatter ceiling** (its lineup booms together more on
+  its big days)
+  and **tanks the opposing starter** (more hits/HR/runs allowed), while a
+  low-total team is suppressed — no editing required. Editing is **optional** and
+  just replaces a team's total before that same scaling (it rebuilds the sims and
+  visibly reshapes that team's player projections). Only a flat/failed feed
+  forces ≥2 manual edits before Run enables; a **🔬 Diagnose the live Vegas feed**
+  expander shows what the feed returns if the totals look flat. Then configure
+  contest size / sim runs / candidates / tilts, and Run.
 - **📊 Players** — per-player projected ranges & thresholds. (The app jumps here
   automatically when a run finishes, as a "done" indicator.)
 - **🏆 Results** — candidate lineups: metrics, filter/search, quick export.
