@@ -1216,9 +1216,9 @@ with tabs[0]:
 
     # --------------------------------------------------------------------------- #
     # Team totals (Vegas) — shown + editable. The loaded Vegas totals DRIVE the
-    # sim by default (offense scaled by total vs slate average); editing is
-    # optional and just replaces a team's total before that scaling. Only a flat/
-    # failed feed forces >=2 manual edits before a run can proceed.
+    # sim by default (offense scaled by total vs a fixed 4.2-run league average);
+    # editing is optional and just replaces a team's total before that scaling.
+    # Only a flat/failed feed forces >=2 manual edits before a run can proceed.
     # --------------------------------------------------------------------------- #
     st.subheader("Team totals (Vegas) — adjust before running")
     if "_tt_fetched" not in st.session_state:
@@ -1242,11 +1242,11 @@ with tabs[0]:
                        "diagnostic below) before running.")
         else:
             st.caption("Today's Vegas implied run totals **drive the sim by "
-                       "default** — each team's offense is scaled by its total vs "
-                       "the slate average (higher total → higher mean **and** fatter "
-                       "ceiling, and a tougher night for the pitcher it faces). "
-                       "Editing is **optional**: any change replaces that team's "
-                       "total before the same scaling, rebuilds the sims, and "
+                       "default** — each team's offense is scaled by its total vs a "
+                       "4.2-run league average (higher total → higher mean **and** "
+                       "fatter ceiling, and a tougher night for the pitcher it "
+                       "faces). Editing is **optional**: any change replaces that "
+                       "team's total before the same scaling, rebuilds the sims, and "
                        "reshapes its player projections.")
 
         with st.expander("🔬 Diagnose the live Vegas feed"):

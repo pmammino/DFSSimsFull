@@ -32,6 +32,10 @@ import validate
 TARGET_YEAR = 2027
 OUT_DIR = "out"
 DELIV_DIR = "deliverables"
+# Implied total that maps to a neutral 1.0 offense scale (MLB league-average
+# per-team runs). A team's Vegas total is scaled against this fixed anchor, so
+# the run environment powers the sim consistently across slates.
+LEAGUE_AVG_RUNS = 4.2
 HFIELDS = ['player','pos','slot','bat','team','side','game','datetime','lineup_source',
            'opp_sp','team_total','proj','floor_p25','median_p50','ceil_p75','p10','p90',
            'ceiling_p99','std','mean_hr','mean_r','mean_rbi','mean_bb','mean_sb','p_2x','p_30']
@@ -111,11 +115,11 @@ def main():
     ap.add_argument('--team-totals', help='JSON {team_code: implied_runs} to '
                     'override the slate Vegas team totals (replaces that team\'s '
                     'implied total before the Vegas-vs-slate-average scaling).')
-    ap.add_argument('--total-baseline', type=float, default=0.0,
-                    help='Implied-total that maps to a neutral 1.0 offense scale. '
-                         '0 (default) = use the slate average, so the typical team '
-                         'is unchanged and teams spread around it by their Vegas '
-                         'total. >0 pins an absolute league-average reference.')
+    ap.add_argument('--total-baseline', type=float, default=LEAGUE_AVG_RUNS,
+                    help=f'Implied-total that maps to a neutral 1.0 offense scale '
+                         f'(default {LEAGUE_AVG_RUNS}, the league average). Each '
+                         f'team\'s Vegas total is scaled against this fixed anchor; '
+                         f'pass 0 to use the slate average instead.')
     args = ap.parse_args()
 
     os.makedirs(DELIV_DIR, exist_ok=True)
@@ -138,7 +142,7 @@ def main():
     #     with NO manual edits.
     ov = json.load(open(args.team_totals)) if args.team_totals else None
     baseline, n_ov = apply_vegas_scaling(slate, ov, args.total_baseline)
-    print(f"   offense scaled by Vegas vs slate baseline {baseline:.2f} "
+    print(f"   offense scaled by Vegas vs league-average baseline {baseline:.2f} "
           f"({n_ov} user-overridden)")
 
     # 3) matchup
