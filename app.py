@@ -1230,9 +1230,12 @@ with tabs[0]:
                        f"defaulted to **{vals[0]:.1f}** runs. Use the diagnostic "
                        "below to see why, or edit the totals manually.")
         else:
-            st.caption("Today's Vegas implied run totals. **Edit at least 2** "
-                       "(each change rescales that team's offense by your value ÷ "
-                       "Vegas).")
+            st.caption("Today's Vegas implied run totals. **Edit at least 2** — "
+                       "each change rescales that team's offense by your value ÷ "
+                       "Vegas, which rebuilds the sims and reshapes that team's "
+                       "player projections: a higher total lifts their mean **and** "
+                       "fattens their ceiling, and tanks the pitcher they face "
+                       "(lower for a lower total).")
 
         with st.expander("🔬 Diagnose the live Vegas feed"):
             st.caption("Probes www.fantasylabs.com live (from this host) and "

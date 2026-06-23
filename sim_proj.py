@@ -9,6 +9,19 @@ pitcher innings, and DraftKings scoring.
 
 Correlation design is unchanged and still validates to:
   teammate H-H ~ +0.24 | unrelated ~0 | hitter vs opposing SP ~ -0.37
+
+TEAM-TOTAL OVERRIDES (total_scale)
+----------------------------------
+A per-side `total_scale` (from a user team-total override; 1.0 = none) reshapes
+that side's offense three ways:
+  1. MEAN   — m_off / m_hr / r / rbi scale linearly with the total.
+  2. CEILING— the side's shared latent is widened by TOTAL_CEIL_GAIN·(scale-1),
+              so a higher total fattens the whole lineup's upside (it booms
+              together more on its big days), not just its average.
+  3. PITCHER— the opposing starter's hits/HR/runs allowed carry the offense's
+              scale, so boosting a lineup also tanks the arm it faces.
+scale == 1.0 reproduces the validated baseline above exactly, so the defaults
+(and the published correlations) are untouched when no total is overridden.
 """
 import numpy as np
 
@@ -22,6 +35,14 @@ def dk_pitcher(outs, k, win, er, h, bb, hbp, cg, cgs, nh):
 # correlation loadings (validated)
 SG, ST, SI, SG_HR_EXTRA = 0.20, 0.50, 0.30, 0.12
 OPENER_BF_MEAN, OPENER_BF_SD = 4.6, 1.3
+
+# How much a team-total override reshapes UPSIDE on top of shifting the mean.
+# An above-average total (scale > 1) widens that team's shared latent so the
+# whole lineup booms together on its big days — a higher total buys a fatter
+# CEILING, not just a higher average; a below-average total compresses it. The
+# per-side team loading becomes ST·clip(1 + TOTAL_CEIL_GAIN·(scale-1), 0.5, 2.0),
+# so scale == 1.0 (no override) reproduces the validated baseline exactly.
+TOTAL_CEIL_GAIN = 0.75
 
 
 def _pa_per_game(slot):
@@ -68,14 +89,25 @@ def simulate(matchup, n_sims=10000, seed=20260610):
         label = f"{away}@{home}"
         Lg = rng.standard_normal(n)
         Lt = {'away': rng.standard_normal(n), 'home': rng.standard_normal(n)}
-        shared = {'away': SG*Lg + ST*Lt['away'], 'home': SG*Lg + ST*Lt['home']}
+        # per-side team-total scale (1.0 = no override). It drives the MEAN
+        # (applied at m_off / m_opp below) AND, via TOTAL_CEIL_GAIN, the width of
+        # the team's shared latent so a higher total fattens the whole lineup's
+        # ceiling. shvar is the analytic variance of that latent (Lg, Lt are
+        # independent unit normals), used for the lognormal mean-correction so the
+        # mean stays exactly `scale` regardless of how wide the upside gets.
+        tscale = g.get('total_scale', {}) or {}
+        ts_side = {s: float(tscale.get(s, 1.0) or 1.0) for s in ('away', 'home')}
+        shared, shvar = {}, {}
+        for s in ('away', 'home'):
+            st_eff = ST * min(2.0, max(0.5, 1.0 + TOTAL_CEIL_GAIN * (ts_side[s] - 1.0)))
+            shared[s] = SG*Lg + st_eff*Lt[s]
+            shvar[s] = SG**2 + st_eff**2
 
         # ---- hitters ----
         for side in ('away', 'home'):
-            sh = shared[side]; sh_var = float(np.var(sh))
+            sh = shared[side]; sh_var = shvar[side]
             implied = g['implied'][side]
-            # user team-total override rescales this team's offense (1.0 = none)
-            ts = float(g.get('total_scale', {}).get(side, 1.0) or 1.0)
+            ts = ts_side[side]
             for p in g['lineups'][side]:
                 vec = p['vec']
                 if vec is None:
@@ -125,7 +157,11 @@ def simulate(matchup, n_sims=10000, seed=20260610):
         # ---- pitchers ----
         for side in ('away','home'):
             opp_side = 'home' if side=='away' else 'away'
-            sho = shared[opp_side]; m_opp = np.exp(sho - 0.5*float(np.var(sho)))
+            sho = shared[opp_side]
+            # the offense this pitcher faces carries its own total scale: a boosted
+            # opposing lineup puts proportionally more hits/HR (and runs) on him,
+            # and a wider latent (high total) gives him a fatter blow-up tail.
+            m_opp = ts_side[opp_side] * np.exp(sho - 0.5*shvar[opp_side])
             z = (sho - sho.mean())/(sho.std()+1e-9)
             implied = g['implied'][side]; opp_implied = g['implied'][opp_side]
             ps = g['pitchers'][side]
