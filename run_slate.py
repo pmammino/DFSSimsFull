@@ -109,6 +109,9 @@ def apply_vegas_scaling(slate, overrides=None, baseline=0.0, lo=0.5, hi=2.0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--confirmed'); ap.add_argument('--expected'); ap.add_argument('--vegas')
+    ap.add_argument('--date', help='Rebuild a historical slate for this date '
+                    '(YYYY-MM-DD): fetch that day\'s lineups/matchups/Vegas from '
+                    'the feeds and simulate it as if it were that slate.')
     ap.add_argument('--refresh-proj', action='store_true')
     ap.add_argument('--n-sims', type=int, default=10000)
     ap.add_argument('--seed', type=int, default=20260610)
@@ -130,12 +133,19 @@ def main():
     print(f"   projections: {len(hproj)} hitters, {len(pproj)} pitchers")
 
     # 2) slate
-    print("[2/6] Ingesting slate (confirmed + expected + Vegas)...")
+    if args.date:
+        print(f"[2/6] Ingesting HISTORICAL slate for {args.date} "
+              "(confirmed + expected + Vegas)...")
+    else:
+        print("[2/6] Ingesting slate (confirmed + expected + Vegas)...")
     cx = open(args.confirmed).read() if args.confirmed else None
     ex = open(args.expected).read() if args.expected else None
     vj = open(args.vegas).read() if args.vegas else None
-    slate = slate_ingest.build_slate(cx, ex, vegas_json=vj)
+    slate = slate_ingest.build_slate(cx, ex, vegas_json=vj, date=args.date)
     print(f"   date={slate['date']} games={len(slate['games'])}")
+    if args.date and not slate['games']:
+        print(f"   WARNING: no games returned for {args.date} — the feed may not "
+              "have historical lineups for that date.", file=sys.stderr)
 
     # 2b) drive every team's offense from its Vegas implied total (see
     #     apply_vegas_scaling) so the day's run environment powers the sim even

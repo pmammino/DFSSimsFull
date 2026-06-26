@@ -153,8 +153,23 @@ def fetch_vegas(date, vegas_json=None):
     return out
 
 
-def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=True):
+def _with_date(url, date):
+    """Append a &date=YYYY-MM-DD parameter to a feed URL (for historical slates).
+    The rotowire proxy returns the slate for that date instead of today's."""
+    if not date:
+        return url
+    sep = '&' if '?' in url else '?'
+    return f"{url}{sep}date={date}"
+
+
+def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=True,
+                date=None):
     """Merge everything into one normalized slate.
+
+    `date` (YYYY-MM-DD, optional): rebuild a *historical* slate. When given and
+    the lineup feeds aren't passed in directly, the confirmed/expected feeds are
+    fetched with a &date= parameter and Vegas totals are fetched for that date,
+    so the pipeline reproduces a past day's slate (lineups + matchups + Vegas).
 
     Returns slate = {
         'date': 'YYYY-MM-DD',
@@ -167,12 +182,13 @@ def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=Tr
         }}
     }
     """
-    confirmed_xml = confirmed_xml or _http_get(C.FEED_CONFIRMED)
-    expected_xml  = expected_xml  or _http_get(C.FEED_EXPECTED)
+    confirmed_xml = confirmed_xml or _http_get(_with_date(C.FEED_CONFIRMED, date))
+    expected_xml  = expected_xml  or _http_get(_with_date(C.FEED_EXPECTED, date))
 
     conf = parse_confirmed(confirmed_xml)
     exp  = parse_expected(expected_xml)
-    date = next(iter(conf.values()))['date'] if conf else None
+    # Prefer the feed's own date; fall back to the requested historical date.
+    date = (next(iter(conf.values()))['date'] if conf else None) or date
 
     # Build an index of expected lineups by (team_code) for fallback matching,
     # since expected gids won't match confirmed gids on different dates.
