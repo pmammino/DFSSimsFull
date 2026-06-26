@@ -2132,34 +2132,12 @@ with tabs[4]:
         "using the pre-slate projection sims to show the full distribution of expected outcomes."
     )
 
-    _rv_col1, _rv_col2 = st.columns([2, 1])
-    with _rv_col1:
-        contest_file = st.file_uploader(
-            "Contest standings CSV (DK export)",
-            type=["csv"],
-            key="review_contest_csv",
-            help="DraftKings: My Contests → a past contest → Export standings.",
-        )
-
-    with _rv_col2:
-        with st.expander("Slate sim files (optional)", expanded=False):
-            st.caption(
-                "Upload the sim files generated **for this specific slate**. "
-                "If omitted, the tool uses whatever sims are currently in "
-                "`deliverables/` — which may be from a different date."
-            )
-            _rv_h_up = st.file_uploader(
-                "hitter_dk_sims.npy",
-                type=["npy"],
-                key="review_hitter_sims",
-                help="From your slate's deliverables/ folder.",
-            )
-            _rv_p_up = st.file_uploader(
-                "pitcher_dk_sims.npy",
-                type=["npy"],
-                key="review_pitcher_sims",
-                help="From your slate's deliverables/ folder.",
-            )
+    contest_file = st.file_uploader(
+        "Contest standings CSV (DK export)",
+        type=["csv"],
+        key="review_contest_csv",
+        help="DraftKings: My Contests → a past contest → Export standings.",
+    )
 
     if contest_file is None:
         st.info("Upload a contest standings CSV above to begin the review.")
@@ -2218,29 +2196,93 @@ with tabs[4]:
                 else:
                     st.success(f"Found **{len(_user_entries)}** entr{'y' if len(_user_entries) == 1 else 'ies'} for **{_uname}**.")
 
+            # ---- rebuild sims for this slate date -----------------------
+            # Reproduce the slate as if it were that day: fetch that date's
+            # lineups + matchups + Vegas from the feeds and run the full
+            # projection sim, so the portfolio is evaluated against the sims
+            # that *would* have driven the slate — not whatever happens to be
+            # sitting in deliverables/.
+            st.divider()
+            st.markdown("**Slate simulation**")
+            _rd1, _rd2 = st.columns([1, 2])
+            with _rd1:
+                _slate_date = st.text_input(
+                    "Slate date (YYYY-MM-DD)",
+                    value=st.session_state.get("_rv_slate_date", ""),
+                    key="rv_slate_date_input",
+                    placeholder="2026-06-25",
+                    help="The date this contest was played. The tool fetches that "
+                         "day's lineups/matchups/Vegas and re-runs the sim for it.",
+                )
+            with _rd2:
+                st.caption(
+                    "Rebuilds the correlated projection sims **as if running that "
+                    "day's slate** — same pipeline as a live slate, but for the "
+                    "contest date. Reuses the current player projections (skill "
+                    "models are season-level) and only re-ingests the slate + "
+                    "re-simulates. Takes a minute or two."
+                )
+                _do_rebuild = st.button(
+                    "🔄 Rebuild sims for this slate",
+                    key="rv_rebuild_btn",
+                    type="primary",
+                    disabled=not _slate_date.strip(),
+                )
+
+            if _do_rebuild and _slate_date.strip():
+                _dt = _slate_date.strip()
+                with st.status(f"Rebuilding sims for {_dt}…", expanded=True) as _stat:
+                    _ok, _out = run_script(
+                        ["run_slate.py", "--date", _dt],
+                        f"Historical slate sim ({_dt})", _stat)
+                    if _ok:
+                        _h3 = os.path.join(DELIV, "hitter_dk_sims.npy")
+                        _p3 = os.path.join(DELIV, "pitcher_dk_sims.npy")
+                        try:
+                            _Hd = np.load(_h3, allow_pickle=True).item()
+                            _Pd = np.load(_p3, allow_pickle=True).item()
+                            st.session_state["_rv_sims"] = {
+                                "date": _dt, "H": _Hd, "P": _Pd}
+                            st.session_state["_rv_slate_date"] = _dt
+                            # bust the cached portfolio sim so it recomputes
+                            st.session_state.pop("_port_sim_key", None)
+                            _stat.update(label=f"Rebuilt sims for {_dt} "
+                                         f"({len(_Hd) + len(_Pd):,} players).",
+                                         state="complete")
+                        except Exception as _e:
+                            _stat.update(label="Rebuild ran but sims failed to "
+                                         f"load: {_e}", state="error")
+                    else:
+                        _stat.update(label="Rebuild failed.", state="error")
+                        st.error("Slate rebuild failed — see the log below. The "
+                                 "feed may not have lineups for that date, or a "
+                                 "pipeline step errored.\n\n"
+                                 f"```\n{_tail(_out)}\n```")
+
             # ---- load sim scores ----------------------------------------
-            # Priority: 1) uploaded slate sims  2) in-session sim run
-            #           3) deliverables/ on disk
+            # Priority: 1) sims rebuilt for THIS slate date (most correct)
+            #           2) in-session sim run
+            #           3) deliverables/ on disk (fallback — may be a different slate)
             _sim_scores_dict: dict[str, np.ndarray] = {}
             _proj_pts: dict[str, float] = {}
             _proj_own: dict[str, float] = {}
             _sim_loaded = False
-            _sim_source = ""  # human-readable provenance label
+            _sim_source = ""        # human-readable provenance label
+            _sim_is_rebuilt = False
+            _sim_is_fallback = False
 
             _raw_H: dict = {}
             _raw_P: dict = {}
 
-            if _rv_h_up is not None and _rv_p_up is not None:
-                # 1) Uploaded sim files take highest priority
-                try:
-                    import io
-                    _raw_H = np.load(io.BytesIO(_rv_h_up.getvalue()), allow_pickle=True).item()
-                    _raw_P = np.load(io.BytesIO(_rv_p_up.getvalue()), allow_pickle=True).item()
-                    _sim_source = f"uploaded files ({_rv_h_up.name} / {_rv_p_up.name})"
-                except Exception as _e:
-                    st.error(f"Could not load uploaded sim files: {_e}")
+            _rebuilt = st.session_state.get("_rv_sims")
+            if _rebuilt:
+                # 1) Sims rebuilt for a slate date in this session
+                _raw_H = _rebuilt.get("H", {})
+                _raw_P = _rebuilt.get("P", {})
+                _sim_source = f"rebuilt slate sim for {_rebuilt.get('date', '?')}"
+                _sim_is_rebuilt = True
             elif sim is not None:
-                # 2) In-session sim run
+                # 2) In-session sim run (Setup tab)
                 _raw_H = sim.get("H", {})
                 _raw_P = sim.get("P", {})
                 _sim_source = "current session sim"
@@ -2252,7 +2294,6 @@ with tabs[4]:
                     try:
                         _raw_H = np.load(_h2, allow_pickle=True).item()
                         _raw_P = np.load(_p2, allow_pickle=True).item()
-                        # Read manifest date for provenance label
                         _deliv_date = ""
                         for _mf in glob.glob(os.path.join(DELIV, "sim_manifest_*.json")):
                             try:
@@ -2261,8 +2302,8 @@ with tabs[4]:
                                 pass
                         _sim_source = (
                             f"deliverables/ (from {_deliv_date})" if _deliv_date
-                            else "deliverables/"
-                        )
+                            else "deliverables/")
+                        _sim_is_fallback = True
                     except Exception:
                         pass
 
@@ -2292,26 +2333,21 @@ with tabs[4]:
                             pass
 
             if _sim_loaded:
-                _is_uploaded = _rv_h_up is not None and _rv_p_up is not None
-                _is_deliverables = not _is_uploaded and sim is None
+                _icon = "✅" if _sim_is_rebuilt else ("⚠️" if _sim_is_fallback else "ℹ️")
                 _cov_note = (
-                    f"{'✅' if _is_uploaded else '⚠️' if _is_deliverables else 'ℹ️'} "
-                    f"Projection sims: **{len(_sim_scores_dict):,} players** "
-                    f"from {_sim_source}."
-                )
-                if _is_deliverables:
+                    f"{_icon} Projection sims: **{len(_sim_scores_dict):,} players** "
+                    f"from {_sim_source}.")
+                if _sim_is_fallback:
                     _cov_note += (
-                        "  \n_These may be from a different slate. Upload the "
-                        "correct `hitter_dk_sims.npy` / `pitcher_dk_sims.npy` "
-                        "in the expander above for accurate results._"
-                    )
+                        "  \n_These may be from a different slate. Enter the contest "
+                        "date above and click **Rebuild sims for this slate** for an "
+                        "accurate evaluation._")
                 st.caption(_cov_note)
             else:
                 st.warning(
-                    "No projection sims found. Either run a simulation on the Setup tab, "
-                    "or upload the slate's `hitter_dk_sims.npy` / `pitcher_dk_sims.npy` "
-                    "using the **Slate sim files** expander above."
-                )
+                    "No projection sims available. Enter the contest's slate date "
+                    "above and click **Rebuild sims for this slate**, or run a "
+                    "simulation on the Setup tab.")
 
             # ---- grade user entries (actual results) ----
             _graded_result = None
@@ -2512,7 +2548,7 @@ with tabs[4]:
 
                     _psim_cache_key = (
                         f"port_sim_{_rv_key}_{_uname}_{len(_user_entries)}"
-                        f"_{len(_sim_scores_dict)}"
+                        f"_{len(_sim_scores_dict)}_{_sim_source}"
                     )
                     if st.session_state.get("_port_sim_key") != _psim_cache_key:
                         with st.spinner(
