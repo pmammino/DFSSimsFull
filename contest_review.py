@@ -2,14 +2,19 @@
 contest_review.py  —  Post-slate grading and performance analysis
 =================================================================
 Parses a DraftKings contest-standings CSV (the dual-column format DK exports),
-scores any candidate lineups against the actual field, and generates a
-diagnostic report flagging systematic issues in the original candidate set.
+finds a user's entries by username, scores them against the actual field, and
+runs the projection sims against the actual field composition to understand
+how the portfolio should have performed across all simulated outcomes.
 
 Public API
 ----------
-    parse_contest_csv(bytes_or_str)  ->  ContestData
-    grade_lineups(contest, your_lineups) -> GradedResult
-    build_diagnosis(contest, graded)  -> list[DiagnosticInsight]
+    parse_contest_csv(bytes_or_str)              ->  ContestData
+    find_user_entries(contest, username)          ->  list[ContestEntry]
+    list_usernames(contest)                       ->  list[str]
+    grade_user_entries(contest, user_entries)     ->  GradedResult
+    simulate_portfolio_vs_field(contest,
+        sim_scores, user_entries)                 ->  PortfolioSimResult
+    build_player_sim_table(contest, sim_scores)   ->  pd.DataFrame
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ from __future__ import annotations
 import io
 import re
 import unicodedata
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -25,10 +30,10 @@ import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# helpers
+# internal helpers
 # ---------------------------------------------------------------------------
-_POS_RE = re.compile(r"\b(1B|2B|3B|C|OF|P|SS)\b")
 _POSITIONS = {"1B", "2B", "3B", "C", "OF", "P", "SS"}
+_ENTRY_SUFFIX = re.compile(r"\s*\(\d+/\d+\)\s*$")
 
 
 def _norm(n: str) -> str:
@@ -40,8 +45,11 @@ def _norm(n: str) -> str:
     return n.strip()
 
 
+def _extract_username(entry_name: str) -> str:
+    return _ENTRY_SUFFIX.sub("", entry_name).strip()
+
+
 def _parse_lineup(lineup_str: str) -> list[tuple[str, str]]:
-    """Return [(position, player_name), ...] from a DK lineup string."""
     tokens = lineup_str.split()
     out: list[tuple[str, str]] = []
     i = 0
@@ -68,8 +76,8 @@ class PlayerActual:
     name: str
     norm_name: str
     position: str
-    pct_drafted: float      # actual contest ownership %
-    fpts: float             # actual DK fantasy points scored
+    pct_drafted: float
+    fpts: float
 
 
 @dataclass
@@ -77,10 +85,9 @@ class ContestEntry:
     rank: int
     entry_id: str
     entry_name: str
+    username: str
     points: float
-    # list of (position, player_name) pairs
     players: list[tuple[str, str]]
-    # normalized player names for fast lookup
     norm_players: list[str] = field(default_factory=list)
 
     def __post_init__(self):
@@ -89,11 +96,10 @@ class ContestEntry:
 
 @dataclass
 class ContestData:
-    entries: list[ContestEntry]          # all field entries, sorted by rank
-    player_actuals: dict[str, PlayerActual]  # norm_name -> PlayerActual
+    entries: list[ContestEntry]
+    player_actuals: dict[str, PlayerActual]
     date: Optional[str] = None
 
-    # derived convenience properties -------------------------------------------
     @property
     def scores(self) -> np.ndarray:
         return np.array([e.points for e in self.entries], dtype=float)
@@ -103,7 +109,6 @@ class ContestData:
         return len(self.entries)
 
     def percentile_score(self, pct: float) -> float:
-        """Score that beats pct% of the field (e.g. pct=0.9 → top 10%)."""
         return float(np.percentile(self.scores, pct * 100))
 
     def player_actual(self, name: str) -> Optional[PlayerActual]:
@@ -112,13 +117,13 @@ class ContestData:
 
 @dataclass
 class GradedLineup:
-    lineup_id: int                       # 1-based index
-    players: list[tuple[str, str]]       # [(pos, name), ...]
+    lineup_id: int
+    entry_name: str
+    players: list[tuple[str, str]]
     actual_score: float
-    field_rank: int                      # 1-based rank among ALL entries
-    field_pct: float                     # percentile beaten (0–1)
-    # per-player breakdown
-    player_scores: dict[str, float]      # norm_name -> fpts
+    field_rank: int
+    field_pct: float
+    player_scores: dict[str, float]
 
 
 @dataclass
@@ -127,12 +132,50 @@ class GradedResult:
     contest: ContestData
 
 
+# ---- portfolio simulation results ----------------------------------------
+
 @dataclass
-class DiagnosticInsight:
-    category: str   # e.g. "Pitcher", "Stack", "Ownership", "Value"
-    severity: str   # "high" | "medium" | "low"
-    headline: str
-    detail: str
+class LineupPortfolioStats:
+    lineup_id: int
+    entry_name: str
+    players: list[tuple[str, str]]
+    # per-sim aggregates (fraction of sims)
+    win_pct: float
+    top10_pct: float
+    top1pct_pct: float     # top 1% of field
+    top10pct_pct: float    # top 10% of field (typical GPP cash line)
+    avg_place: float
+    # projected score distribution
+    proj_mean: float
+    proj_p10: float
+    proj_p25: float
+    proj_p50: float
+    proj_p75: float
+    proj_p90: float
+    # coverage: fraction of players found in sim dict
+    sim_coverage: float
+
+
+@dataclass
+class PortfolioSimResult:
+    lineup_stats: list[LineupPortfolioStats]
+    n_sim: int
+    n_field: int
+    n_user_lineups: int
+    # portfolio-level (any lineup achieves the outcome)
+    portfolio_win_pct: float
+    portfolio_top10_pct: float
+    portfolio_top1pct_pct: float
+    portfolio_top10pct_pct: float
+    # field score distribution summary (from sims)
+    field_proj_mean: float
+    field_proj_p90: float    # ≈ top-10% line
+    field_proj_p99: float    # ≈ winner range
+    # fraction of field lineups that had full sim coverage
+    field_sim_coverage: float
+    # expected cash/gpp lines from sim
+    sim_cash_line: float     # median of field score distribution
+    sim_top10_line: float    # 90th pct of field score distribution
 
 
 # ---------------------------------------------------------------------------
@@ -140,13 +183,9 @@ class DiagnosticInsight:
 # ---------------------------------------------------------------------------
 def parse_contest_csv(raw: bytes | str) -> ContestData:
     """
-    Parse a DraftKings contest-standings CSV.
-
-    The file has a dual-column layout where the left block carries contest
-    entries (Rank, EntryId, EntryName, TimeRemaining, Points, Lineup) and the
-    right block carries per-player scoring (Player, Roster Position, %Drafted,
-    FPTS), with a blank separator column in between.  Not every row has both
-    halves populated.
+    Parse the DK contest-standings dual-column CSV.
+    Left block:  Rank, EntryId, EntryName, TimeRemaining, Points, Lineup
+    Right block: Player, Roster Position, %Drafted, FPTS
     """
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8-sig", errors="replace")
@@ -154,7 +193,6 @@ def parse_contest_csv(raw: bytes | str) -> ContestData:
     df = pd.read_csv(io.StringIO(raw), dtype=str, keep_default_na=False)
     df.columns = [c.strip() for c in df.columns]
 
-    # Rename the blank separator column if present
     cols = list(df.columns)
     blank_idx = [i for i, c in enumerate(cols) if c == ""]
     if blank_idx:
@@ -164,10 +202,10 @@ def parse_contest_csv(raw: bytes | str) -> ContestData:
     player_actuals: dict[str, PlayerActual] = {}
 
     for _, row in df.iterrows():
-        # --- left block: contest entry ---
         rank_raw = str(row.get("Rank", "")).strip()
         points_raw = str(row.get("Points", "")).strip()
         lineup_raw = str(row.get("Lineup", "")).strip()
+        entry_name = str(row.get("EntryName", "")).strip()
 
         if rank_raw.lstrip("-").isdigit() and lineup_raw:
             try:
@@ -178,14 +216,14 @@ def parse_contest_csv(raw: bytes | str) -> ContestData:
                     entries.append(ContestEntry(
                         rank=rank,
                         entry_id=str(row.get("EntryId", "")).strip(),
-                        entry_name=str(row.get("EntryName", "")).strip(),
+                        entry_name=entry_name,
+                        username=_extract_username(entry_name),
                         points=points,
                         players=players,
                     ))
             except (ValueError, TypeError):
                 pass
 
-        # --- right block: player actuals ---
         player_raw = str(row.get("Player", "")).strip()
         fpts_raw = str(row.get("FPTS", "")).strip()
         pos_raw = str(row.get("Roster Position", "")).strip()
@@ -205,375 +243,260 @@ def parse_contest_csv(raw: bytes | str) -> ContestData:
             except (ValueError, TypeError):
                 pass
 
-    # Sort entries by rank
     entries.sort(key=lambda e: e.rank)
-
     return ContestData(entries=entries, player_actuals=player_actuals)
 
 
 # ---------------------------------------------------------------------------
-# grade
+# username lookup
 # ---------------------------------------------------------------------------
-def grade_lineups(contest: ContestData,
-                  your_lineups: list[list[tuple[str, str]]]) -> GradedResult:
-    """
-    Score each of your lineups against actual player FPTS and place them
-    in the contest field.
+def find_user_entries(contest: ContestData, username: str) -> list[ContestEntry]:
+    target = username.strip().lower()
+    return [e for e in contest.entries if e.username.lower() == target]
 
-    your_lineups: list of [(position, player_name), ...] — one per lineup.
-    """
-    all_scores = np.sort(contest.scores)[::-1]   # descending
 
+def list_usernames(contest: ContestData) -> list[str]:
+    seen: dict[str, str] = {}
+    for e in contest.entries:
+        lc = e.username.lower()
+        if lc not in seen:
+            seen[lc] = e.username
+    return sorted(seen.values(), key=str.lower)
+
+
+# ---------------------------------------------------------------------------
+# actual-results grading (tab 3 — "Your Lineups" actual outcome)
+# ---------------------------------------------------------------------------
+def grade_user_entries(contest: ContestData,
+                       user_entries: list[ContestEntry]) -> GradedResult:
+    """Score user entries using actual player FPTS; rank from the standings."""
     graded: list[GradedLineup] = []
-    for idx, lp in enumerate(your_lineups, 1):
+    n = contest.n_entries
+    for idx, entry in enumerate(user_entries, 1):
         total = 0.0
         pscores: dict[str, float] = {}
-        for pos, name in lp:
+        for pos, name in entry.players:
             pa = contest.player_actual(name)
             pts = pa.fpts if pa else 0.0
             total += pts
             pscores[_norm(name)] = pts
 
-        # field_rank: 1-based position after inserting your score
-        field_rank = int(np.searchsorted(-all_scores, -total, side="left")) + 1
-        field_pct = 1.0 - (field_rank - 1) / max(1, len(all_scores))
+        field_rank = entry.rank
+        field_pct = 1.0 - (field_rank - 1) / max(1, n)
 
         graded.append(GradedLineup(
             lineup_id=idx,
-            players=lp,
+            entry_name=entry.entry_name,
+            players=entry.players,
             actual_score=total,
             field_rank=field_rank,
             field_pct=field_pct,
             player_scores=pscores,
         ))
-
     return GradedResult(graded=graded, contest=contest)
 
 
 # ---------------------------------------------------------------------------
-# diagnosis
+# portfolio simulation against actual field
 # ---------------------------------------------------------------------------
-_SEV_ORDER = {"high": 0, "medium": 1, "low": 2}
-
-
-def build_diagnosis(contest: ContestData,
-                    graded: Optional[GradedResult] = None,
-                    projected: Optional[dict[str, float]] = None,
-                    proj_own: Optional[dict[str, float]] = None) -> list[DiagnosticInsight]:
+def _build_score_matrix(entries: list[ContestEntry],
+                        sim_scores: dict[str, np.ndarray],
+                        n_sim: int) -> tuple[np.ndarray, np.ndarray]:
     """
-    Generate diagnostic insights about the slate.
-
-    Parameters
-    ----------
-    contest   : parsed actual contest data
-    graded    : (optional) your graded lineups
-    projected : (optional) dict of norm_name -> projected_fpts from the sim
-    proj_own  : (optional) dict of norm_name -> projected_ownership%
+    Build a (n_entries, n_sim) score matrix by summing per-player sim arrays.
+    Also returns a (n_entries,) coverage array: fraction of players found.
     """
-    insights: list[DiagnosticInsight] = []
-    actuals = contest.player_actuals
-    scores = contest.scores
-    n = contest.n_entries
-    top10_score = contest.percentile_score(0.90)
-    cash_score = contest.percentile_score(0.50)
+    n = len(entries)
+    mat = np.zeros((n, n_sim), dtype=np.float32)
+    coverage = np.zeros(n, dtype=np.float32)
 
-    # ---- 1. Field score summary (always shown) ----------------------------
-    insights.append(DiagnosticInsight(
-        category="Field",
-        severity="low",
-        headline="Contest score distribution",
-        detail=(
-            f"{n:,} entries · "
-            f"Winner: **{scores.max():.2f} pts** · "
-            f"Top 10% line: **{top10_score:.2f} pts** · "
-            f"Median (cash line): **{cash_score:.2f} pts**"
-        ),
-    ))
+    for i, entry in enumerate(entries):
+        found = 0
+        for _, name in entry.players:
+            arr = sim_scores.get(_norm(name))
+            if arr is not None:
+                mat[i] += arr[:n_sim]
+                found += 1
+        coverage[i] = found / max(1, len(entry.players))
 
-    # ---- 2. Pitcher analysis ---------------------------------------------
-    pitchers = [pa for pa in actuals.values() if pa.position == "P"]
-    pitchers.sort(key=lambda p: -p.fpts)
+    return mat, coverage
 
-    if pitchers:
-        best_p = pitchers[0]
-        # Count pitcher ownership in the top 10%
-        top_entries = [e for e in contest.entries if e.points >= top10_score]
-        p_counter: Counter[str] = Counter()
-        for e in top_entries:
-            for pos, name in e.players:
-                if pos == "P":
-                    p_counter[_norm(name)] += 1
 
-        if p_counter:
-            top_p_norm, top_p_cnt = p_counter.most_common(1)[0]
-            top_p_pct_in_top = top_p_cnt / max(1, len(top_entries)) * 100
-            top_p_pa = actuals.get(top_p_norm)
-            top_p_name = top_p_pa.name if top_p_pa else top_p_norm
-            top_p_fpts = top_p_pa.fpts if top_p_pa else 0.0
+def simulate_portfolio_vs_field(
+        contest: ContestData,
+        sim_scores: dict[str, np.ndarray],
+        user_entries: list[ContestEntry],
+        progress_cb=None,
+) -> PortfolioSimResult:
+    """
+    Score the user's submitted lineups against the actual contest field using
+    the projection sim distributions, producing Win%/Top10%/Top10pct%/AvgPlace
+    for each lineup and at the portfolio level.
 
-            # Pitcher was highly correlated with top finishes
-            if top_p_pct_in_top > 50:
-                insights.append(DiagnosticInsight(
-                    category="Pitcher",
-                    severity="high",
-                    headline=f"{top_p_name} appeared in {top_p_pct_in_top:.0f}% of top-10% lineups",
-                    detail=(
-                        f"**{top_p_name}** scored **{top_p_fpts:.2f} pts** and was "
-                        f"the dominant pitcher in winning lineups. "
-                        + (_pitcher_proj_note(top_p_norm, projected, top_p_fpts) if projected else "")
-                    ),
-                ))
+    All scoring uses the projected sim arrays — not the actual slate outcome —
+    so the results show the *distribution* of expected performance across all
+    simulated universes, not just the one that happened.
 
-        # Pitchers who scored big but were low-owned
-        for p in pitchers[:5]:
-            if p.pct_drafted < 25 and p.fpts > 20:
-                insights.append(DiagnosticInsight(
-                    category="Pitcher",
-                    severity="medium",
-                    headline=f"Low-owned pitcher {p.name} scored {p.fpts:.2f} pts at {p.pct_drafted:.1f}% ownership",
-                    detail=(
-                        f"**{p.name}** was drafted by only {p.pct_drafted:.1f}% of the field "
-                        f"yet scored {p.fpts:.2f} DK points — a significant leverage "
-                        f"opportunity that was largely missed."
-                    ),
-                ))
+    progress_cb: optional callable(step, total) for progress reporting
+    """
+    # Determine n_sim from the sim dict
+    sample_arr = next(iter(sim_scores.values()))
+    n_sim = len(sample_arr)
+    n_field = contest.n_entries
 
-    # ---- 3. Ownership accuracy (if projected ownership supplied) ----------
-    if proj_own:
-        over_owned: list[tuple[str, float, float]] = []
-        under_owned: list[tuple[str, float, float]] = []
-        for pa in actuals.values():
-            p_own = proj_own.get(pa.norm_name)
-            if p_own is None:
-                continue
-            delta = pa.pct_drafted - p_own
-            if delta > 15:
-                over_owned.append((pa.name, p_own, pa.pct_drafted))
-            elif delta < -15:
-                under_owned.append((pa.name, p_own, pa.pct_drafted))
+    if progress_cb:
+        progress_cb(0, 3)
 
-        if over_owned:
-            over_owned.sort(key=lambda x: -(x[2] - x[1]))
-            names = ", ".join(f"**{n}** ({p:.0f}%→{a:.0f}%)"
-                              for n, p, a in over_owned[:3])
-            insights.append(DiagnosticInsight(
-                category="Ownership",
-                severity="medium",
-                headline=f"{len(over_owned)} player(s) came in significantly over projected ownership",
-                detail=f"Underestimated chalk creates unnecessary duplicate risk. Notable: {names}.",
-            ))
+    # 1. Build field score matrix (n_field × n_sim)
+    field_mat, field_cov = _build_score_matrix(contest.entries, sim_scores, n_sim)
 
-        if under_owned:
-            under_owned.sort(key=lambda x: x[2] - x[1])
-            names = ", ".join(f"**{n}** ({p:.0f}%→{a:.0f}%)"
-                              for n, p, a in under_owned[:3])
-            insights.append(DiagnosticInsight(
-                category="Ownership",
-                severity="medium",
-                headline=f"{len(under_owned)} player(s) came in significantly under projected ownership",
-                detail=f"Overestimated chalk leads to false leverage assumptions. Notable: {names}.",
-            ))
+    if progress_cb:
+        progress_cb(1, 3)
 
-    # ---- 4. Projection accuracy (if projected FPTS supplied) ---------------
-    if projected:
-        busts: list[tuple[str, float, float]] = []   # (name, proj, actual)
-        booms: list[tuple[str, float, float]] = []
-        for pa in actuals.values():
-            p_pts = projected.get(pa.norm_name)
-            if p_pts is None:
-                continue
-            err = pa.fpts - p_pts
-            if err < -8:
-                busts.append((pa.name, p_pts, pa.fpts))
-            elif err > 10:
-                booms.append((pa.name, p_pts, pa.fpts))
+    # 2. Build user score matrix (n_user × n_sim)
+    user_mat, user_cov = _build_score_matrix(user_entries, sim_scores, n_sim)
+    n_user = len(user_entries)
 
-        if busts:
-            busts.sort(key=lambda x: x[2] - x[1])
-            names = ", ".join(f"**{n}** (proj {p:.1f}, actual {a:.1f})"
-                              for n, p, a in busts[:3])
-            insights.append(DiagnosticInsight(
-                category="Projection",
-                severity="high",
-                headline=f"{len(busts)} player(s) significantly underperformed projections",
-                detail=f"Large busts hurt lineup scores: {names}.",
-            ))
+    if progress_cb:
+        progress_cb(2, 3)
 
-        if booms:
-            booms.sort(key=lambda x: -(x[2] - x[1]))
-            names = ", ".join(f"**{n}** (proj {p:.1f}, actual {a:.1f})"
-                              for n, p, a in booms[:3])
-            insights.append(DiagnosticInsight(
-                category="Projection",
-                severity="medium",
-                headline=f"{len(booms)} value player(s) far exceeded projections",
-                detail=f"Missed upside opportunities: {names}.",
-            ))
+    # 3. Compute field distribution summary
+    # field_mean_per_sim: (n_sim,) — mean field score each sim
+    # We want percentiles of the *per-sim field max* for expected winner range
+    field_max_per_sim = field_mat.max(axis=0)      # (n_sim,)
+    field_p50_per_sim = np.percentile(field_mat, 50, axis=0)  # median field per sim
+    field_p90_per_sim = np.percentile(field_mat, 90, axis=0)  # top-10% line per sim
 
-    # ---- 5. Stack analysis -----------------------------------------------
-    # Find teams most represented in top-10% lineups
-    top_entries = [e for e in contest.entries if e.points >= top10_score]
-    if top_entries:
-        # Build team -> how often in top-10% entries
-        team_counter: Counter[str] = Counter()
-        for e in top_entries:
-            team_counts: Counter[str] = Counter()
-            for pos, name in e.players:
-                pa = actuals.get(_norm(name))
-                # we don't have team in ContestData; use first two chars of lineup position as proxy
-                # Instead, count player co-occurrences in top lineups
-                pass
+    # Expected cash/gpp lines: mean across sims of the per-sim percentile
+    sim_cash_line = float(field_p50_per_sim.mean())
+    sim_top10_line = float(field_p90_per_sim.mean())
+    field_proj_mean = float(field_mat.mean())
+    field_proj_p90 = float(np.percentile(field_mat, 90))
+    field_proj_p99 = float(np.percentile(field_mat, 99))
 
-        # Player co-occurrence in top-10% entries
-        pair_counter: Counter[frozenset] = Counter()
-        player_top_count: Counter[str] = Counter()
-        for e in top_entries:
-            norm_names = e.norm_players
-            for nm in norm_names:
-                player_top_count[nm] += 1
-            for i in range(len(norm_names)):
-                for j in range(i + 1, len(norm_names)):
-                    pair_counter[frozenset([norm_names[i], norm_names[j]])] += 1
+    # 4. Per-lineup and portfolio stats
+    n1pct = max(1, int(n_field * 0.01))   # top-1% count
+    n10pct = max(1, int(n_field * 0.10))  # top-10% count
 
-        # Top players in top-10% lineups
-        top_players_in_top: list[tuple[str, int]] = player_top_count.most_common(5)
-        if top_players_in_top:
-            parts = []
-            for norm_nm, cnt in top_players_in_top:
-                pa = actuals.get(norm_nm)
-                display = pa.name if pa else norm_nm
-                pct_top = cnt / len(top_entries) * 100
-                parts.append(f"**{display}** ({pct_top:.0f}%)")
-            insights.append(DiagnosticInsight(
-                category="Stack",
-                severity="low",
-                headline="Players most common in top-10% finishes",
-                detail="Appearance rate in top-10% lineups: " + ", ".join(parts),
-            ))
+    # Vectorized placement via chunked broadcasting.
+    # For each (j, s): place[j, s] = #field_entries_beating_user[j,s] + 1
+    #   = (field_mat[:, s] > user_mat[j, s]).sum() + 1  over all j,s
+    #
+    # Full broadcast (n_user, n_field, n_sim) is too large (~900 M entries).
+    # Instead chunk over sims: process SIM_CHUNK sims at a time so the
+    # working tensor is (n_user, n_field, SIM_CHUNK) ≈ 50 MB per chunk.
+    SIM_CHUNK = 500
+    beaten_by_mat = np.zeros((n_user, n_sim), dtype=np.int32)
 
-    # ---- 6. Your lineup grading (if provided) ----------------------------
-    if graded:
-        gl = graded.graded
-        n_gl = len(gl)
-        avg_score = np.mean([g.actual_score for g in gl])
-        avg_pct = np.mean([g.field_pct for g in gl]) * 100
-        best = max(gl, key=lambda g: g.actual_score)
-        worst = min(gl, key=lambda g: g.actual_score)
+    for s0 in range(0, n_sim, SIM_CHUNK):
+        s1 = min(s0 + SIM_CHUNK, n_sim)
+        # field_chunk: (n_field, chunk)   user_chunk: (n_user, chunk)
+        fc = field_mat[:, s0:s1]          # (n_field, chunk)
+        uc = user_mat[:, s0:s1]           # (n_user,  chunk)
+        # Broadcast to (n_user, n_field, chunk): field beats user when > user
+        # sum over axis=1 gives # field entries that beat each user lineup
+        beaten_by_mat[:, s0:s1] = (
+            fc[np.newaxis, :, :] > uc[:, np.newaxis, :]
+        ).sum(axis=1, dtype=np.int32)     # (n_user, chunk)
 
-        insights.append(DiagnosticInsight(
-            category="Your Lineups",
-            severity="low",
-            headline=f"{n_gl} candidate lineup(s) graded",
-            detail=(
-                f"Average actual score: **{avg_score:.2f} pts** "
-                f"(beat **{avg_pct:.1f}%** of the field on average). "
-                f"Best lineup: **#{best.lineup_id}** at **{best.actual_score:.2f} pts** "
-                f"(rank {best.field_rank:,}/{contest.n_entries:,}). "
-                f"Weakest: **#{worst.lineup_id}** at **{worst.actual_score:.2f} pts**."
-            ),
+    place_mat = beaten_by_mat + 1   # (n_user, n_sim)
+
+    win_mat    = place_mat == 1
+    top10_mat  = place_mat <= 10
+    top1p_mat  = place_mat <= n1pct
+    top10p_mat = place_mat <= n10pct
+
+    wins_any    = win_mat.any(axis=0)
+    top10_any   = top10_mat.any(axis=0)
+    top1pct_any = top1p_mat.any(axis=0)
+    top10pct_any = top10p_mat.any(axis=0)
+
+    lineup_stats: list[LineupPortfolioStats] = []
+    for j in range(n_user):
+        u_arr = user_mat[j]
+        lineup_stats.append(LineupPortfolioStats(
+            lineup_id=j + 1,
+            entry_name=user_entries[j].entry_name,
+            players=user_entries[j].players,
+            win_pct=float(win_mat[j].mean() * 100),
+            top10_pct=float(top10_mat[j].mean() * 100),
+            top1pct_pct=float(top1p_mat[j].mean() * 100),
+            top10pct_pct=float(top10p_mat[j].mean() * 100),
+            avg_place=float(place_mat[j].mean()),
+            proj_mean=float(u_arr.mean()),
+            proj_p10=float(np.percentile(u_arr, 10)),
+            proj_p25=float(np.percentile(u_arr, 25)),
+            proj_p50=float(np.percentile(u_arr, 50)),
+            proj_p75=float(np.percentile(u_arr, 75)),
+            proj_p90=float(np.percentile(u_arr, 90)),
+            sim_coverage=float(user_cov[j]),
         ))
 
-        # Identify players that were in your lineups but busted
-        if n_gl > 0:
-            your_player_scores: dict[str, list[float]] = defaultdict(list)
-            for g in gl:
-                for pos, name in g.players:
-                    nm = _norm(name)
-                    pa = actuals.get(nm)
-                    your_player_scores[nm].append(pa.fpts if pa else 0.0)
+    if progress_cb:
+        progress_cb(3, 3)
 
-            worst_your_players = []
-            for nm, pts_list in your_player_scores.items():
-                pa = actuals.get(nm)
-                if pa is None:
-                    continue
-                avg_pts = np.mean(pts_list)
-                n_lineups = len(pts_list)
-                if avg_pts < 5 and n_lineups >= max(1, n_gl // 4):
-                    worst_your_players.append((pa.name, avg_pts, n_lineups))
-
-            if worst_your_players:
-                worst_your_players.sort(key=lambda x: x[1])
-                parts = [f"**{n}** ({a:.1f} pts, {c} lineup{'s' if c > 1 else ''})"
-                         for n, a, c in worst_your_players[:4]]
-                insights.append(DiagnosticInsight(
-                    category="Your Lineups",
-                    severity="high" if len(worst_your_players) >= 2 else "medium",
-                    headline="Heavy exposure to low-scoring players dragged down your set",
-                    detail=", ".join(parts) + " underperformed while appearing frequently in your lineups.",
-                ))
-
-    # Sort by severity
-    insights.sort(key=lambda i: _SEV_ORDER.get(i.severity, 9))
-    return insights
-
-
-def _pitcher_proj_note(norm_name: str, projected: dict[str, float], actual: float) -> str:
-    p_pts = projected.get(norm_name)
-    if p_pts is None:
-        return ""
-    diff = actual - p_pts
-    direction = "exceeded" if diff > 0 else "missed"
-    return f"Projection {direction} by {abs(diff):.1f} pts (proj: {p_pts:.1f}, actual: {actual:.1f})."
+    return PortfolioSimResult(
+        lineup_stats=lineup_stats,
+        n_sim=n_sim,
+        n_field=n_field,
+        n_user_lineups=n_user,
+        portfolio_win_pct=float(wins_any.mean() * 100),
+        portfolio_top10_pct=float(top10_any.mean() * 100),
+        portfolio_top1pct_pct=float(top1pct_any.mean() * 100),
+        portfolio_top10pct_pct=float(top10pct_any.mean() * 100),
+        field_proj_mean=field_proj_mean,
+        field_proj_p90=field_proj_p90,
+        field_proj_p99=field_proj_p99,
+        field_sim_coverage=float(field_cov.mean()),
+        sim_cash_line=sim_cash_line,
+        sim_top10_line=sim_top10_line,
+    )
 
 
 # ---------------------------------------------------------------------------
-# helpers for Streamlit tab
+# player actuals table (used by the Player Actuals sub-tab)
 # ---------------------------------------------------------------------------
-def parse_your_lineups_csv(raw: bytes | str) -> list[list[tuple[str, str]]]:
-    """
-    Parse a DK upload CSV (the format the Export tab produces) or a simple
-    lineup CSV where each row is a lineup with player names in columns.
-
-    Returns list of [(pos, player_name), ...] per lineup.
-    """
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8-sig", errors="replace")
-
-    df = pd.read_csv(io.StringIO(raw), dtype=str, keep_default_na=False)
-    df.columns = [c.strip() for c in df.columns]
-
-    lineups: list[list[tuple[str, str]]] = []
-
-    # DK upload format: columns like P, P, C, 1B, 2B, 3B, SS, OF, OF, OF
-    dk_upload_pos = ["P", "P", "C", "1B", "2B", "3B", "SS", "OF", "OF", "OF"]
-    if all(c in df.columns for c in dk_upload_pos):
-        for _, row in df.iterrows():
-            lp = [(pos, str(row[pos]).strip()) for pos in dk_upload_pos
-                  if str(row[pos]).strip()]
-            if lp:
-                lineups.append(lp)
-        return lineups
-
-    # Fallback: try parsing each row as a DK lineup string in first column
-    first_col = df.columns[0]
-    for _, row in df.iterrows():
-        val = str(row[first_col]).strip()
-        if val:
-            parsed = _parse_lineup(val)
-            if parsed:
-                lineups.append(parsed)
-
-    return lineups
-
-
-def actuals_to_df(contest: ContestData) -> pd.DataFrame:
-    """Return a DataFrame of player actuals sorted by FPTS desc."""
+def build_player_sim_table(contest: ContestData,
+                           sim_scores: Optional[dict[str, np.ndarray]] = None,
+                           projected: Optional[dict[str, float]] = None,
+                           proj_own: Optional[dict[str, float]] = None) -> pd.DataFrame:
     rows = []
     for pa in sorted(contest.player_actuals.values(), key=lambda p: -p.fpts):
-        rows.append({
+        row: dict = {
             "Player": pa.name,
             "Position": pa.position,
             "Actual FPTS": pa.fpts,
             "Ownership %": pa.pct_drafted,
-        })
+        }
+        if projected:
+            pv = projected.get(pa.norm_name)
+            if pv is not None:
+                row["Proj Mean"] = round(pv, 2)
+                row["vs Proj"] = round(pa.fpts - pv, 2)
+        if proj_own:
+            po = proj_own.get(pa.norm_name)
+            if po is not None:
+                row["Proj Own%"] = round(po, 1)
+                row["Own Delta"] = round(pa.pct_drafted - po, 1)
+        if sim_scores:
+            arr = sim_scores.get(pa.norm_name)
+            if arr is not None:
+                arr = np.asarray(arr, dtype=float)
+                row["Sim Mean"] = round(float(arr.mean()), 2)
+                row["Sim P10"] = round(float(np.percentile(arr, 10)), 1)
+                row["Sim P50"] = round(float(np.percentile(arr, 50)), 1)
+                row["Sim P90"] = round(float(np.percentile(arr, 90)), 1)
+                row["Actual %ile"] = round(float(np.mean(arr <= pa.fpts) * 100), 1)
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
-def entries_to_df(contest: ContestData) -> pd.DataFrame:
-    """Return a DataFrame of all contest entries."""
+# ---------------------------------------------------------------------------
+# helper DataFrames for the UI
+# ---------------------------------------------------------------------------
+def entries_to_df(contest: ContestData, top_n: int = 50) -> pd.DataFrame:
     rows = []
-    for e in contest.entries:
+    for e in contest.entries[:top_n]:
         rows.append({
             "Rank": e.rank,
             "Entry": e.entry_name,
@@ -584,14 +507,32 @@ def entries_to_df(contest: ContestData) -> pd.DataFrame:
 
 
 def graded_to_df(graded: GradedResult) -> pd.DataFrame:
-    """Return a DataFrame of your graded lineups."""
     rows = []
-    for g in graded.graded:
+    for g in sorted(graded.graded, key=lambda x: x.field_rank):
         rows.append({
-            "Lineup #": g.lineup_id,
+            "Entry": g.entry_name,
             "Actual Score": round(g.actual_score, 2),
             "Field Rank": g.field_rank,
             "Field %ile": f"{g.field_pct * 100:.1f}%",
             "Players": ", ".join(p for _, p in g.players),
+        })
+    return pd.DataFrame(rows)
+
+
+def portfolio_sim_to_df(result: PortfolioSimResult) -> pd.DataFrame:
+    rows = []
+    for ls in sorted(result.lineup_stats, key=lambda x: -x.top10pct_pct):
+        rows.append({
+            "Entry": ls.entry_name,
+            "Win%": round(ls.win_pct, 3),
+            "Top-10%": round(ls.top10_pct, 2),
+            "Top-1%": round(ls.top1pct_pct, 2),
+            "Top-10% field": round(ls.top10pct_pct, 1),
+            "Avg Place": round(ls.avg_place, 0),
+            "Proj Mean": round(ls.proj_mean, 1),
+            "Proj P10": round(ls.proj_p10, 1),
+            "Proj P50": round(ls.proj_p50, 1),
+            "Proj P90": round(ls.proj_p90, 1),
+            "Sim Coverage": f"{ls.sim_coverage * 100:.0f}%",
         })
     return pd.DataFrame(rows)
