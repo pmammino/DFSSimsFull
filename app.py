@@ -2126,39 +2126,35 @@ with tabs[3]:
 with tabs[4]:
     st.subheader("4 · Post-Slate Review")
     st.caption(
-        "The day after a slate, upload the DraftKings contest standings CSV to "
-        "see how the field actually scored, grade your own candidate lineups, "
-        "and get a diagnostic report on what worked and what didn't."
+        "Upload the DraftKings contest-standings CSV (available the day after a slate), "
+        "enter your DraftKings username, and the tool will find all your entries, "
+        "score them against actual results, and compare them to the projected sim distributions."
     )
 
-    rv_c1, rv_c2 = st.columns(2)
-
-    contest_file = rv_c1.file_uploader(
+    contest_file = st.file_uploader(
         "Contest standings CSV (DK export)",
         type=["csv"],
         key="review_contest_csv",
-        help="Download from DraftKings: My Contests → Contest Results → Export.",
-    )
-
-    your_lineups_file = rv_c2.file_uploader(
-        "Your lineups CSV (optional — DK upload format or Export tab output)",
-        type=["csv"],
-        key="review_your_lineups",
-        help="Upload the lineup file you submitted so it can be scored and ranked in the actual field.",
+        help="DraftKings: My Contests → a past contest → Export standings.",
     )
 
     if contest_file is None:
         st.info("Upload a contest standings CSV above to begin the review.")
     else:
-        # Parse contest
-        try:
-            contest_data = cr.parse_contest_csv(contest_file.getvalue())
-        except Exception as _e:
-            st.error(f"Could not parse the contest CSV: {_e}")
-            contest_data = None
+        # Parse & cache contest data in session state so username changes don't re-parse
+        _rv_key = f"review_contest_{contest_file.name}_{contest_file.size}"
+        if st.session_state.get("_rv_key") != _rv_key:
+            try:
+                st.session_state["_rv_contest"] = cr.parse_contest_csv(contest_file.getvalue())
+                st.session_state["_rv_key"] = _rv_key
+            except Exception as _e:
+                st.error(f"Could not parse the contest CSV: {_e}")
+                st.session_state.pop("_rv_contest", None)
+
+        contest_data = st.session_state.get("_rv_contest")
 
         if contest_data is not None and contest_data.n_entries == 0:
-            st.error("No contest entries found in the CSV — check that it's a DK standings export.")
+            st.error("No contest entries found — check that this is a DK standings export.")
             contest_data = None
 
         if contest_data is not None:
@@ -2173,83 +2169,121 @@ with tabs[4]:
             m3.metric("Top-10% line", f"{_top10_line:.2f}")
             m4.metric("Median / cash line", f"{_cash_line:.2f}")
 
+            # ---- username lookup ----
             st.divider()
+            _all_users = cr.list_usernames(contest_data)
+            _uname = st.text_input(
+                "Your DraftKings username",
+                placeholder="e.g. JD1230",
+                key="rv_username",
+                help="Finds all of your entries in the standings (e.g. 'JD1230' matches 'JD1230 (1/5)').",
+            )
 
+            _user_entries: list = []
+            if _uname.strip():
+                _user_entries = cr.find_user_entries(contest_data, _uname.strip())
+                if not _user_entries:
+                    # Fuzzy hint: show closest-matching usernames
+                    _suggestions = [u for u in _all_users
+                                    if _uname.strip().lower() in u.lower()][:5]
+                    if _suggestions:
+                        st.warning(
+                            f"No entries found for **{_uname}**. "
+                            f"Did you mean: {', '.join(_suggestions)}?"
+                        )
+                    else:
+                        st.warning(f"No entries found for **{_uname}** in this contest.")
+                else:
+                    st.success(
+                        f"Found **{len(_user_entries)}** entry/entries for **{_uname}**."
+                    )
+
+            # ---- build projected dicts from current sim (if loaded) --------
+            _proj_pts: dict[str, float] = {}
+            _proj_own: dict[str, float] = {}
+            _sim_scores_dict: dict[str, "np.ndarray"] = {}
+
+            if sim is not None:
+                # Ownership from the slate file
+                sim_dk = sim.get("dk_df")
+                if sim_dk is not None and isinstance(sim_dk, pd.DataFrame):
+                    for _, _row in sim_dk.iterrows():
+                        _nn = normname(str(_row.get("FullName", "")))
+                        try:
+                            _proj_own[_nn] = float(_row.get("Ownership", 0) or 0)
+                        except Exception:
+                            pass
+
+                # Mean projections from the player table
+                try:
+                    _hpath2 = os.path.join(DELIV, "hitter_dk_sims.npy")
+                    _ppath2 = os.path.join(DELIV, "pitcher_dk_sims.npy")
+                    if os.path.exists(_hpath2) and os.path.exists(_ppath2):
+                        _ptbl2 = cached_player_table(
+                            _hpath2, os.path.getmtime(_hpath2),
+                            _ppath2, os.path.getmtime(_ppath2))
+                        if _ptbl2 is not None and "Player" in _ptbl2.columns and "Mean" in _ptbl2.columns:
+                            for _, _row in _ptbl2.iterrows():
+                                _nn = normname(str(_row.get("Player", "")))
+                                try:
+                                    _proj_pts[_nn] = float(_row["Mean"])
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+
+                # Full sim distributions for percentile comparisons
+                _raw_H = sim.get("H", {})
+                _raw_P = sim.get("P", {})
+                for _d in (_raw_H, _raw_P):
+                    for _k, _v in _d.items():
+                        _sim_scores_dict[normname(_k)] = np.asarray(_v, dtype=float)
+
+            # ---- grade user entries ----------------------------------------
+            _graded_result = None
+            _sim_comparison = None
+
+            if _user_entries:
+                _graded_result = cr.grade_user_entries(contest_data, _user_entries)
+                if _sim_scores_dict:
+                    _sim_comparison = cr.compare_sim_vs_actual(
+                        contest_data, _sim_scores_dict, _graded_result)
+
+            # ---- sub-tabs --------------------------------------------------
             rv_tab1, rv_tab2, rv_tab3, rv_tab4 = st.tabs(
                 ["📈 Player Actuals", "🗂 Field Scores", "🏅 Your Lineups", "🩺 Diagnosis"]
             )
 
             # ---- Player Actuals ----
             with rv_tab1:
-                actuals_df = cr.actuals_to_df(contest_data)
+                actuals_df = cr.actuals_to_df(
+                    contest_data,
+                    sim_comparison=_sim_comparison,
+                    projected=_proj_pts if _proj_pts else None,
+                    proj_own=_proj_own if _proj_own else None,
+                )
 
-                # Merge projected FPTS and projected ownership if sim has been run
-                if sim is not None:
-                    _proj_pts: dict[str, float] = {}
-                    _proj_own: dict[str, float] = {}
-                    # Gather from the dk_df used in the sim run
-                    sim_dk = sim.get("dk_df")
-                    if sim_dk is not None and isinstance(sim_dk, pd.DataFrame):
-                        for _, _row in sim_dk.iterrows():
-                            _nn = normname(str(_row.get("FullName", "")))
-                            if "ProjectedPts" in sim_dk.columns:
-                                try:
-                                    _proj_pts[_nn] = float(_row.get("ProjectedPts", 0) or 0)
-                                except Exception:
-                                    pass
-                            try:
-                                _proj_own[_nn] = float(_row.get("Ownership", 0) or 0)
-                            except Exception:
-                                pass
-
-                    # Try player table from cached_player_table
-                    try:
-                        _hpath = os.path.join(DELIV, "hitter_dk_sims.npy")
-                        _ppath = os.path.join(DELIV, "pitcher_dk_sims.npy")
-                        if os.path.exists(_hpath) and os.path.exists(_ppath):
-                            _ptbl = cached_player_table(
-                                _hpath, os.path.getmtime(_hpath),
-                                _ppath, os.path.getmtime(_ppath))
-                            if _ptbl is not None and "Player" in _ptbl.columns:
-                                for _, _row in _ptbl.iterrows():
-                                    _nn = normname(str(_row.get("Player", "")))
-                                    if "Mean" in _ptbl.columns:
-                                        try:
-                                            _proj_pts[_nn] = float(_row["Mean"])
-                                        except Exception:
-                                            pass
-                    except Exception:
-                        pass
-                else:
-                    _proj_pts = {}
-                    _proj_own = {}
-
-                # Add projected columns where available
-                if _proj_pts:
-                    actuals_df["Proj FPTS"] = actuals_df["Player"].apply(
-                        lambda n: _proj_pts.get(normname(n)))
-                    actuals_df["FPTS vs Proj"] = actuals_df.apply(
-                        lambda r: round(r["Actual FPTS"] - r["Proj FPTS"], 2)
-                        if pd.notna(r.get("Proj FPTS")) else None, axis=1)
-
-                if _proj_own:
-                    actuals_df["Proj Own%"] = actuals_df["Player"].apply(
-                        lambda n: _proj_own.get(normname(n)))
-                    actuals_df["Own% Delta"] = actuals_df.apply(
-                        lambda r: round(r["Ownership %"] - r["Proj Own%"], 1)
-                        if pd.notna(r.get("Proj Own%")) else None, axis=1)
-
-                pos_filter = st.multiselect(
+                _pos_filter = st.multiselect(
                     "Filter by position", ["P", "C", "1B", "2B", "3B", "SS", "OF"],
                     default=[], key="rv_pos_filter")
                 _adf = actuals_df
-                if pos_filter:
-                    _adf = _adf[_adf["Position"].isin(pos_filter)]
+                if _pos_filter:
+                    _adf = _adf[_adf["Position"].isin(_pos_filter)]
 
+                # Choose gradient column — prefer sim percentile when available
+                _grad_col = "Actual %ile in Sim" if "Actual %ile in Sim" in _adf.columns else "Actual FPTS"
                 st.dataframe(
-                    _adf.style.background_gradient(
-                        subset=["Actual FPTS"], cmap="YlGn"),
+                    _adf.style.background_gradient(subset=[_grad_col], cmap="RdYlGn"),
                     use_container_width=True, hide_index=True)
+
+                if _sim_comparison and _sim_comparison.avg_player_pct:
+                    st.caption(
+                        f"Slate-wide average player percentile vs sim: "
+                        f"**{_sim_comparison.avg_player_pct:.0f}th %ile** — "
+                        + ("slate ran cold vs projections." if _sim_comparison.avg_player_pct < 45
+                           else "slate ran hot vs projections." if _sim_comparison.avg_player_pct > 55
+                           else "slate ran close to projected median.")
+                    )
 
                 st.download_button(
                     "⬇ Download player actuals CSV",
@@ -2281,85 +2315,134 @@ with tabs[4]:
                     .encode(x="x:Q")
                 )
 
-                st.altair_chart(_hist + _cash_rule + _top10_rule,
-                                use_container_width=True)
-                st.caption(
-                    f"🟢 Green dashed = cash line ({_cash_line:.2f}) · "
-                    f"🟠 Orange dashed = top-10% line ({_top10_line:.2f})"
-                )
-
-                # Top-N entries table
-                top_n = st.slider("Show top N lineups", 5, 100, 20, key="rv_top_n")
-                _top_df = cr.entries_to_df(contest_data).head(top_n)
-                st.dataframe(_top_df, use_container_width=True, hide_index=True)
-
-            # ---- Your Lineups Grader ----
-            with rv_tab3:
-                _graded_result = None
-
-                if your_lineups_file is not None:
-                    try:
-                        _your_lps = cr.parse_your_lineups_csv(your_lineups_file.getvalue())
-                        if not _your_lps:
-                            st.error("No lineups found in your file — check the format.")
-                        else:
-                            _graded_result = cr.grade_lineups(contest_data, _your_lps)
-                            _graded_df = cr.graded_to_df(_graded_result)
-
-                            gc1, gc2, gc3 = st.columns(3)
-                            _avg_score = _graded_df["Actual Score"].mean()
-                            _best_score = _graded_df["Actual Score"].max()
-                            _avg_pct = _graded_result.graded[0].field_pct if _graded_result.graded else 0
-                            _avg_pct = sum(g.field_pct for g in _graded_result.graded) / max(1, len(_graded_result.graded))
-                            gc1.metric("Lineups graded", len(_graded_df))
-                            gc2.metric("Avg actual score", f"{_avg_score:.2f}")
-                            gc3.metric("Avg field %ile beaten", f"{_avg_pct * 100:.1f}%")
-
-                            st.dataframe(
-                                _graded_df.style.background_gradient(
-                                    subset=["Actual Score"], cmap="YlGn"),
-                                use_container_width=True, hide_index=True)
-
-                            # Scatter: lineup score vs field rank
-                            _scatter_df = pd.DataFrame([{
-                                "Lineup": f"#{g.lineup_id}",
-                                "Score": g.actual_score,
-                                "Field Rank": g.field_rank,
-                                "Field %ile": round(g.field_pct * 100, 1),
-                            } for g in _graded_result.graded])
-                            _sc = (
-                                alt.Chart(_scatter_df)
-                                .mark_circle(size=80, color="#A020FE")
-                                .encode(
-                                    x=alt.X("Score:Q", title="Actual Score"),
-                                    y=alt.Y("Field Rank:Q", title="Field Rank",
-                                            scale=alt.Scale(reverse=True)),
-                                    tooltip=["Lineup", "Score", "Field Rank", "Field %ile"],
-                                )
-                            )
-                            _cash_h = (
-                                alt.Chart(pd.DataFrame({"y": [_cash_line]}))
-                                .mark_rule(color="#00c853", strokeWidth=2, strokeDash=[4, 4])
-                                .encode(x="y:Q")
-                            )
-                            st.altair_chart(_sc + _cash_h, use_container_width=True)
-                    except Exception as _ex:
-                        st.error(f"Error grading lineups: {_ex}")
-                else:
-                    st.info(
-                        "Upload your lineups CSV in the panel at the top of this tab. "
-                        "Use the **Export** tab's downloaded file or a DK upload CSV."
+                # Overlay user's lineup scores if available
+                _user_rules = alt.layer()
+                if _graded_result:
+                    _user_pts = pd.DataFrame(
+                        {"x": [g.actual_score for g in _graded_result.graded]})
+                    _user_rules = (
+                        alt.Chart(_user_pts)
+                        .mark_rule(color="#00bcd4", strokeWidth=1.5, opacity=0.8)
+                        .encode(x="x:Q")
                     )
+
+                st.altair_chart(
+                    _hist + _cash_rule + _top10_rule + _user_rules,
+                    use_container_width=True)
+                _legend = (
+                    f"🟢 Cash line ({_cash_line:.2f}) · "
+                    f"🟠 Top-10% line ({_top10_line:.2f})"
+                )
+                if _graded_result:
+                    _legend += " · 🔵 Your lineups"
+                st.caption(_legend)
+
+                _top_n = st.slider("Show top N lineups", 5, 100, 20, key="rv_top_n")
+                st.dataframe(cr.entries_to_df(contest_data, _top_n),
+                             use_container_width=True, hide_index=True)
+
+            # ---- Your Lineups ----
+            with rv_tab3:
+                if not _user_entries:
+                    st.info(
+                        "Enter your DraftKings username above to load and grade your lineups."
+                    )
+                elif _graded_result is None:
+                    st.error("Could not grade lineups — no contest data available.")
+                else:
+                    _gl = _graded_result.graded
+                    _avg_score = np.mean([g.actual_score for g in _gl])
+                    _avg_pct = np.mean([g.field_pct for g in _gl]) * 100
+                    _best = max(_gl, key=lambda g: g.actual_score)
+
+                    gc1, gc2, gc3, gc4 = st.columns(4)
+                    gc1.metric("Lineups", len(_gl))
+                    gc2.metric("Avg score", f"{_avg_score:.2f}")
+                    gc3.metric("Avg %ile beaten", f"{_avg_pct:.1f}%")
+                    gc4.metric("Best rank", f"{_best.field_rank:,}")
+
+                    # Show sim percentile summary if available
+                    if _sim_comparison and _sim_comparison.lineups:
+                        _avg_lc_pct = np.mean(
+                            [lc.actual_percentile for lc in _sim_comparison.lineups])
+                        st.caption(
+                            f"Your lineups averaged the **{_avg_lc_pct:.0f}th percentile** "
+                            f"of their own projected score distributions — "
+                            + ("ran cold vs model." if _avg_lc_pct < 40
+                               else "ran hot vs model." if _avg_lc_pct > 60
+                               else "performed close to projection.")
+                        )
+
+                    _graded_df = cr.graded_to_df(_graded_result, _sim_comparison)
+                    st.dataframe(
+                        _graded_df.style.background_gradient(
+                            subset=["Actual Score"], cmap="YlGn"),
+                        use_container_width=True, hide_index=True)
+
+                    # Scatter: actual score vs field rank, with sim IQR band per lineup
+                    _scatter_df = pd.DataFrame([{
+                        "Entry": g.entry_name,
+                        "Score": g.actual_score,
+                        "Field Rank": g.field_rank,
+                        "Field %ile": round(g.field_pct * 100, 1),
+                    } for g in _gl])
+
+                    _sc = (
+                        alt.Chart(_scatter_df)
+                        .mark_circle(size=90, color="#A020FE")
+                        .encode(
+                            x=alt.X("Score:Q", title="Actual Score"),
+                            y=alt.Y("Field Rank:Q", title="Field Rank",
+                                    scale=alt.Scale(reverse=True)),
+                            tooltip=["Entry", "Score", "Field Rank", "Field %ile"],
+                        )
+                    )
+                    _cash_line_rule = (
+                        alt.Chart(pd.DataFrame({"v": [_cash_line]}))
+                        .mark_rule(color="#00c853", strokeWidth=2, strokeDash=[4, 4])
+                        .encode(x="v:Q")
+                    )
+                    st.altair_chart(_sc + _cash_line_rule, use_container_width=True)
+
+                    # Per-lineup player breakdown
+                    if len(_gl) <= 20:
+                        _sel_entry = st.selectbox(
+                            "Inspect a lineup",
+                            [g.entry_name for g in _gl],
+                            key="rv_lineup_inspect")
+                        _sel_g = next(g for g in _gl if g.entry_name == _sel_entry)
+                        _breakdown_rows = []
+                        for _pos, _pname in _sel_g.players:
+                            _pa = contest_data.player_actual(_pname)
+                            _sc_row: dict = {
+                                "Position": _pos,
+                                "Player": _pname,
+                                "Actual FPTS": _pa.fpts if _pa else "—",
+                            }
+                            # sim stats for this player
+                            _sim_arr = _sim_scores_dict.get(normname(_pname))
+                            if _sim_arr is not None and _pa is not None:
+                                _sc_row["Sim Mean"] = round(float(_sim_arr.mean()), 1)
+                                _sc_row["Sim P10"] = round(float(np.percentile(_sim_arr, 10)), 1)
+                                _sc_row["Sim P90"] = round(float(np.percentile(_sim_arr, 90)), 1)
+                                _sc_row["Actual %ile"] = round(
+                                    float(np.mean(_sim_arr <= _pa.fpts) * 100), 0)
+                            _breakdown_rows.append(_sc_row)
+                        _bd_df = pd.DataFrame(_breakdown_rows)
+                        _bd_style = _bd_df.style
+                        if "Actual %ile" in _bd_df.columns:
+                            _bd_style = _bd_style.background_gradient(
+                                subset=["Actual %ile"], cmap="RdYlGn", vmin=0, vmax=100)
+                        st.dataframe(_bd_style, use_container_width=True, hide_index=True)
 
             # ---- Diagnosis ----
             with rv_tab4:
-                _diag_proj = _proj_pts if (_proj_pts and sim is not None) else None
-                _diag_own = _proj_own if (_proj_own and sim is not None) else None
                 _insights = cr.build_diagnosis(
                     contest_data,
                     graded=_graded_result,
-                    projected=_diag_proj,
-                    proj_own=_diag_own,
+                    sim_comparison=_sim_comparison,
+                    projected=_proj_pts if _proj_pts else None,
+                    proj_own=_proj_own if _proj_own else None,
                 )
 
                 _sev_color = {"high": "🔴", "medium": "🟡", "low": "🟢"}
@@ -2372,7 +2455,7 @@ with tabs[4]:
                         st.markdown(_ins.detail)
 
                 if not _insights:
-                    st.success("No issues detected — the analysis found nothing notable to flag.")
+                    st.success("No issues detected.")
 
 
 # --------------------------------------------------------------------------- #
