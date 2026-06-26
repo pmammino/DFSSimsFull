@@ -2132,12 +2132,34 @@ with tabs[4]:
         "using the pre-slate projection sims to show the full distribution of expected outcomes."
     )
 
-    contest_file = st.file_uploader(
-        "Contest standings CSV (DK export)",
-        type=["csv"],
-        key="review_contest_csv",
-        help="DraftKings: My Contests → a past contest → Export standings.",
-    )
+    _rv_col1, _rv_col2 = st.columns([2, 1])
+    with _rv_col1:
+        contest_file = st.file_uploader(
+            "Contest standings CSV (DK export)",
+            type=["csv"],
+            key="review_contest_csv",
+            help="DraftKings: My Contests → a past contest → Export standings.",
+        )
+
+    with _rv_col2:
+        with st.expander("Slate sim files (optional)", expanded=False):
+            st.caption(
+                "Upload the sim files generated **for this specific slate**. "
+                "If omitted, the tool uses whatever sims are currently in "
+                "`deliverables/` — which may be from a different date."
+            )
+            _rv_h_up = st.file_uploader(
+                "hitter_dk_sims.npy",
+                type=["npy"],
+                key="review_hitter_sims",
+                help="From your slate's deliverables/ folder.",
+            )
+            _rv_p_up = st.file_uploader(
+                "pitcher_dk_sims.npy",
+                type=["npy"],
+                key="review_pitcher_sims",
+                help="From your slate's deliverables/ folder.",
+            )
 
     if contest_file is None:
         st.info("Upload a contest standings CSV above to begin the review.")
@@ -2196,27 +2218,51 @@ with tabs[4]:
                 else:
                     st.success(f"Found **{len(_user_entries)}** entr{'y' if len(_user_entries) == 1 else 'ies'} for **{_uname}**.")
 
-            # ---- load sim scores from the deliverables folder --------
-            # Use the stored sim arrays directly — they don't require a sim
-            # to have been run in this session.
+            # ---- load sim scores ----------------------------------------
+            # Priority: 1) uploaded slate sims  2) in-session sim run
+            #           3) deliverables/ on disk
             _sim_scores_dict: dict[str, np.ndarray] = {}
             _proj_pts: dict[str, float] = {}
             _proj_own: dict[str, float] = {}
             _sim_loaded = False
+            _sim_source = ""  # human-readable provenance label
 
-            # Prefer arrays from an in-session sim run; fall back to .npy files
             _raw_H: dict = {}
             _raw_P: dict = {}
-            if sim is not None:
+
+            if _rv_h_up is not None and _rv_p_up is not None:
+                # 1) Uploaded sim files take highest priority
+                try:
+                    import io
+                    _raw_H = np.load(io.BytesIO(_rv_h_up.getvalue()), allow_pickle=True).item()
+                    _raw_P = np.load(io.BytesIO(_rv_p_up.getvalue()), allow_pickle=True).item()
+                    _sim_source = f"uploaded files ({_rv_h_up.name} / {_rv_p_up.name})"
+                except Exception as _e:
+                    st.error(f"Could not load uploaded sim files: {_e}")
+            elif sim is not None:
+                # 2) In-session sim run
                 _raw_H = sim.get("H", {})
                 _raw_P = sim.get("P", {})
+                _sim_source = "current session sim"
             else:
+                # 3) Deliverables folder on disk
                 _h2 = os.path.join(DELIV, "hitter_dk_sims.npy")
                 _p2 = os.path.join(DELIV, "pitcher_dk_sims.npy")
                 if os.path.exists(_h2) and os.path.exists(_p2):
                     try:
                         _raw_H = np.load(_h2, allow_pickle=True).item()
                         _raw_P = np.load(_p2, allow_pickle=True).item()
+                        # Read manifest date for provenance label
+                        _deliv_date = ""
+                        for _mf in glob.glob(os.path.join(DELIV, "sim_manifest_*.json")):
+                            try:
+                                _deliv_date = json.load(open(_mf)).get("date", "")
+                            except Exception:
+                                pass
+                        _sim_source = (
+                            f"deliverables/ (from {_deliv_date})" if _deliv_date
+                            else "deliverables/"
+                        )
                     except Exception:
                         pass
 
@@ -2226,24 +2272,13 @@ with tabs[4]:
 
             _sim_loaded = bool(_sim_scores_dict)
 
-            # Projected means from the player table (for Player Actuals tab)
+            # Projected means from sim arrays (for Player Actuals tab)
             if _sim_loaded:
-                try:
-                    _hpath2 = os.path.join(DELIV, "hitter_dk_sims.npy")
-                    _ppath2 = os.path.join(DELIV, "pitcher_dk_sims.npy")
-                    if os.path.exists(_hpath2) and os.path.exists(_ppath2):
-                        _ptbl2 = cached_player_table(
-                            _hpath2, os.path.getmtime(_hpath2),
-                            _ppath2, os.path.getmtime(_ppath2))
-                        if _ptbl2 is not None and "Player" in _ptbl2.columns and "Mean" in _ptbl2.columns:
-                            for _, _row in _ptbl2.iterrows():
-                                _nn = normname(str(_row.get("Player", "")))
-                                try:
-                                    _proj_pts[_nn] = float(_row["Mean"])
-                                except Exception:
-                                    pass
-                except Exception:
-                    pass
+                for _k, _arr in _sim_scores_dict.items():
+                    try:
+                        _proj_pts[_k] = float(_arr.mean())
+                    except Exception:
+                        pass
 
             # Projected ownership from the slate file used in the current sim
             if sim is not None:
@@ -2257,21 +2292,25 @@ with tabs[4]:
                             pass
 
             if _sim_loaded:
-                _sim_date = ""
-                for _mf in glob.glob(os.path.join(DELIV, "sim_manifest_*.json")):
-                    try:
-                        _sim_date = json.load(open(_mf)).get("date", "")
-                    except Exception:
-                        pass
+                _is_uploaded = _rv_h_up is not None and _rv_p_up is not None
+                _is_deliverables = not _is_uploaded and sim is None
                 _cov_note = (
-                    f"Projection sims loaded ({len(_sim_scores_dict):,} players"
-                    + (f", from {_sim_date}" if _sim_date else "") + ")."
+                    f"{'✅' if _is_uploaded else '⚠️' if _is_deliverables else 'ℹ️'} "
+                    f"Projection sims: **{len(_sim_scores_dict):,} players** "
+                    f"from {_sim_source}."
                 )
+                if _is_deliverables:
+                    _cov_note += (
+                        "  \n_These may be from a different slate. Upload the "
+                        "correct `hitter_dk_sims.npy` / `pitcher_dk_sims.npy` "
+                        "in the expander above for accurate results._"
+                    )
                 st.caption(_cov_note)
             else:
                 st.warning(
-                    "No projection sims found in `deliverables/`. Run a simulation "
-                    "on the Setup tab first to enable the Portfolio Sim analysis."
+                    "No projection sims found. Either run a simulation on the Setup tab, "
+                    "or upload the slate's `hitter_dk_sims.npy` / `pitcher_dk_sims.npy` "
+                    "using the **Slate sim files** expander above."
                 )
 
             # ---- grade user entries (actual results) ----
