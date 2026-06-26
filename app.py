@@ -1197,7 +1197,7 @@ with tabs[0]:
             st.error("None of the players in this slate matched the sim "
                      "universe — check names/teams. Nothing to simulate.")
         else:
-            st.dataframe(dk_df.head(15), use_container_width=True)
+            st.dataframe(dk_df.head(15), width="stretch")
             if id_map:
                 if source.startswith("Pick"):
                     st.caption("✓ Player IDs from the RotoWire feed "
@@ -1259,7 +1259,7 @@ with tabs[0]:
                     st.code(run_vegas_diagnostic(), language="text")
 
         _tt_edit = st.data_editor(
-            pd.DataFrame(fetched), hide_index=True, use_container_width=True,
+            pd.DataFrame(fetched), hide_index=True, width="stretch",
             height=min(460, 60 + 34 * len(fetched)), key="tt_editor",
             disabled=["Game", "Team"],
             column_config={
@@ -1383,7 +1383,7 @@ with tabs[0]:
                  "regardless of staleness — bypasses the once-a-day retry guard. "
                  "Use after fixing a data/connection issue.")
         submitted = st.form_submit_button(
-            "▶ Run simulation", type="primary", use_container_width=True,
+            "▶ Run simulation", type="primary", width="stretch",
             disabled=(not tt_ready),
             help=None if tt_ready else
             "The live Vegas feed is flat — adjust at least 2 team totals above to "
@@ -1702,7 +1702,7 @@ with tabs[1]:
             view = view[view["Player"].str.contains(psearch.strip(), case=False, na=False)]
         pct = st.column_config.NumberColumn(format="%.1f%%")
         st.dataframe(
-            view, use_container_width=True, height=420, hide_index=True,
+            view, width="stretch", height=420, hide_index=True,
             column_config={"Bust% (≤0)": pct, "2x%": pct, "30+%": pct})
         st.download_button("Download player thresholds (CSV)",
                            ptable.to_csv(index=False).encode(),
@@ -1721,7 +1721,7 @@ with tabs[1]:
                 m2.metric("Floor (p10)", f"{r['Floor (p10)']:.1f}")
                 m3.metric("Median", f"{r['Median']:.1f}")
                 m4.metric("Ceiling (p90)", f"{r['Ceiling (p90)']:.1f}")
-                st.altair_chart(player_score_chart(arr), use_container_width=True)
+                st.altair_chart(player_score_chart(arr), width="stretch")
                 st.caption(f"{psel}: min {r['Min']:.1f} · max {r['Max']:.1f} · "
                            f"std {r['Std']:.1f} · bust {r['Bust% (≤0)']:.0f}% · "
                            f"30+ {r['30+%']:.0f}%. Dashed line = mean.")
@@ -1810,9 +1810,9 @@ with tabs[2]:
         c1, c2, c3 = st.columns([1.2, 1, 3])
         c1.caption(f"**{len(fres):,}** of {len(res):,} lineups match.")
         if c2.button("Mark all", help="Mark every lineup currently shown",
-                     use_container_width=True):
+                     width="stretch"):
             picked |= {int(x) for x in fres["Candidate"]}
-        if c3.button("Clear marks", use_container_width=False):
+        if c3.button("Clear marks", width="content"):
             picked.clear()
 
         if len(fres) == 0:
@@ -1853,7 +1853,7 @@ with tabs[2]:
                        "export. Win/Top-10/Top-100/own are compact on the right; "
                        "finishing-position detail is in the panel below.")
             edited = st.data_editor(
-                disp, hide_index=True, height=460, use_container_width=True,
+                disp, hide_index=True, height=460, width="stretch",
                 disabled=[c for c in disp.columns if c != "✓"], column_config=colcfg,
                 column_order=["✓", "Rank"] + COLS +
                              ["Win%", "Top10%", "Top100%", "Salary", "Own%", "Stack"])
@@ -1865,15 +1865,15 @@ with tabs[2]:
             d1.download_button("Download filtered results (CSV)",
                                fres.to_csv(index=False).encode(),
                                file_name=f"candidate_results_{sim['contest_size']}.csv",
-                               mime="text/csv", use_container_width=True)
+                               mime="text/csv", width="stretch")
             d2.download_button("Download all candidate lineups (CSV)",
                                lineups_to_df(sim["cands"]).to_csv(index=False).encode(),
                                file_name=f"candidates_{len(sim['cands'])}.csv",
-                               mime="text/csv", use_container_width=True)
+                               mime="text/csv", width="stretch")
             d3.download_button("Download field (CSV)",
                                sim["field_df"].to_csv(index=False).encode(),
                                file_name=f"field_{sim['field_n']}.csv",
-                               mime="text/csv", use_container_width=True)
+                               mime="text/csv", width="stretch")
 
             # ---- secondary: finishing-position detail (de-emphasized) ----
             with st.expander("📊 Finishing-position detail — click a lineup",
@@ -1887,7 +1887,7 @@ with tabs[2]:
                     "Win%": fres["Win%"], "Top10%": fres["Top10%"],
                     "Top100%": fres["Top100%"], "Salary": fres["Salary"]})
                 pick_evt = st.dataframe(
-                    pick_df, hide_index=True, use_container_width=True, height=200,
+                    pick_df, hide_index=True, width="stretch", height=200,
                     on_select="rerun", selection_mode="single-row",
                     key="finish_pick",
                     column_config={
@@ -1912,7 +1912,7 @@ with tabs[2]:
                     st.altair_chart(
                         place_distribution_chart(sim["dist"], cand_idx,
                                                  sim["field_n"], K),
-                        use_container_width=True)
+                        width="stretch")
                     st.caption("Dashed lines mark 1st, Top-10, Top-100, and the "
                                "lineup's mean place. The x-axis covers valid "
                                "places (1 … field).")
@@ -1932,14 +1932,14 @@ with tabs[2]:
                         lu_rows.append({"Slot": slot, "Player": nm, "Team": tm})
                     st.dataframe(
                         pd.DataFrame(lu_rows), hide_index=True,
-                        use_container_width=True, height=388,
+                        width="stretch", height=388,
                         column_config={
                             "Slot": st.column_config.TextColumn(width="small"),
                             "Team": st.column_config.TextColumn(width="small")})
 
                     in_marks = int(chosen_cand) in picked
                     if st.button(("☑️ Unmark" if in_marks else "⬜ Mark for export"),
-                                 use_container_width=True):
+                                 width="stretch"):
                         (picked.discard if in_marks else picked.add)(int(chosen_cand))
                         st.rerun()
 
@@ -1996,7 +1996,7 @@ with tabs[3]:
                         st.download_button(
                             "⬇ Download DraftKings upload CSV", csv_text.encode(),
                             file_name=f"DK_upload_marked_{info['chosen']}.csv",
-                            mime="text/csv", type="primary", use_container_width=True)
+                            mime="text/csv", type="primary", width="stretch")
             else:
                 from_filter = st.radio(
                     "Rank from", [f"Current filter ({len(fres):,})",
@@ -2086,7 +2086,7 @@ with tabs[3]:
                                            f"${g['salary_lo']:,}–${g['salary_hi']:,}"),
                                 "Proj": f"{g['proj_lo']:.1f}–{g['proj_hi']:.1f}",
                             } for g in groups])
-                            st.dataframe(gdf, use_container_width=True,
+                            st.dataframe(gdf, width="stretch",
                                          hide_index=True)
                         else:
                             st.caption("No near-twin value groups at these "
@@ -2117,7 +2117,7 @@ with tabs[3]:
                     st.download_button(
                         "⬇ Download DraftKings upload CSV", csv_text.encode(),
                         file_name=f"DK_upload_{info['chosen']}.csv",
-                        mime="text/csv", type="primary", use_container_width=True)
+                        mime="text/csv", type="primary", width="stretch")
 
 
 # --------------------------------------------------------------------------- #
@@ -2309,7 +2309,7 @@ with tabs[4]:
                 _grad_col = "Actual %ile" if "Actual %ile" in _adf.columns else "Actual FPTS"
                 st.dataframe(
                     _adf.style.background_gradient(subset=[_grad_col], cmap="RdYlGn"),
-                    use_container_width=True, hide_index=True)
+                    width="stretch", hide_index=True)
 
                 if _sim_loaded and "Actual %ile" in actuals_df.columns:
                     _avg_pct = actuals_df["Actual %ile"].mean()
@@ -2363,7 +2363,7 @@ with tabs[4]:
 
                 st.altair_chart(
                     _hist + _cash_rule + _top10_rule + _user_rules,
-                    use_container_width=True)
+                    width="stretch")
                 _leg = (f"🟢 Cash line ({_cash_line:.2f}) · "
                         f"🟠 Top-10% line ({_top10_line:.2f})")
                 if _graded_result:
@@ -2372,7 +2372,7 @@ with tabs[4]:
 
                 _top_n = st.slider("Show top N lineups", 5, 100, 20, key="rv_top_n")
                 st.dataframe(cr.entries_to_df(contest_data, _top_n),
-                             use_container_width=True, hide_index=True)
+                             width="stretch", hide_index=True)
 
             # ================================================================
             # Tab 3 — Actual Results
@@ -2395,7 +2395,7 @@ with tabs[4]:
                     st.dataframe(
                         cr.graded_to_df(_graded_result).style.background_gradient(
                             subset=["Actual Score"], cmap="YlGn"),
-                        use_container_width=True, hide_index=True)
+                        width="stretch", hide_index=True)
 
                     # Scatter: actual score vs field rank
                     _sc_df = pd.DataFrame([{
@@ -2419,7 +2419,7 @@ with tabs[4]:
                         .mark_rule(color="#00c853", strokeWidth=2, strokeDash=[4, 4])
                         .encode(x="v:Q")
                     )
-                    st.altair_chart(_sc_chart + _cl_rule, use_container_width=True)
+                    st.altair_chart(_sc_chart + _cl_rule, width="stretch")
                     st.caption("🟢 dashed = cash line")
 
                     # Per-lineup player breakdown with sim percentiles
@@ -2449,7 +2449,7 @@ with tabs[4]:
                     if "Actual %ile" in _bd_df.columns:
                         _bd_style = _bd_style.background_gradient(
                             subset=["Actual %ile"], cmap="RdYlGn", vmin=0, vmax=100)
-                    st.dataframe(_bd_style, use_container_width=True, hide_index=True)
+                    st.dataframe(_bd_style, width="stretch", hide_index=True)
 
             # ================================================================
             # Tab 4 — Portfolio Sim
@@ -2539,7 +2539,7 @@ with tabs[4]:
                         st.dataframe(
                             _psim_df.style.background_gradient(
                                 subset=["Top-10% field"], cmap="YlGn"),
-                            use_container_width=True, hide_index=True)
+                            width="stretch", hide_index=True)
 
                         st.divider()
 
@@ -2613,7 +2613,7 @@ with tabs[4]:
 
                         st.altair_chart(
                             _fh_chart + _sim_cash_rule + _sim_top10_rule + _lu_marks,
-                            use_container_width=True)
+                            width="stretch")
                         st.caption(
                             "🟣 Field distribution · "
                             "🟢 Sim cash line · "
@@ -2677,7 +2677,7 @@ with tabs[4]:
 
                         st.altair_chart(
                             _lu_hist + _lu_mean_rule + _lu_actual_rules,
-                            use_container_width=True)
+                            width="stretch")
                         _lu_cap = (
                             f"🟠 Proj mean ({_sel_ls.proj_mean:.1f} pts) · "
                             f"P10–P90 range: {_sel_ls.proj_p10:.1f} – {_sel_ls.proj_p90:.1f}"
