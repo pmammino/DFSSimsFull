@@ -81,7 +81,8 @@ def _jaccard(a, b):
 def select_portfolio(res_df, n_select, sort_cols, *, cols, hitc,
                      eligible=None, hitter_cap=1.0, pitcher_cap=1.0,
                      team_cap=1.0, pair_cap=1.0, core_cap=1.0,
-                     max_overlap=1.0, group_of=None, group_cap=1.0):
+                     max_overlap=1.0, group_of=None, group_cap=1.0,
+                     player_caps=None, team_caps=None):
     """Rank `res_df` by `sort_cols` (descending) then greedily accept lineups
     that keep every exposure cap and the pairwise-overlap ceiling satisfied.
 
@@ -90,17 +91,42 @@ def select_portfolio(res_df, n_select, sort_cols, *, cols, hitc,
     fail it are skipped and counted. `group_of` maps player name -> value-group
     id; a lineup counts once against each group it touches.
 
+    `player_caps` ({player_name: fraction}) and `team_caps` ({team_code:
+    fraction}) give per-ENTITY maximums that OVERRIDE the global hitter/pitcher/
+    team caps for the named players/teams. A player not in `player_caps` falls
+    back to the global hitter_cap (or pitcher_cap for the two pitcher slots); a
+    team not in `team_caps` falls back to the global team_cap. This lets the
+    caller cap, say, one star hitter at 40% while leaving everyone else at the
+    global default.
+
     Returns (chosen_rows, info).
     """
     N = int(n_select)
     rdf = res_df.sort_values(list(sort_cols), ascending=False).reset_index(drop=True)
 
     def cap_n(frac):
-        return max(1, int(round(float(frac) * N)))
+        # frac<=0 means "exclude" (0 lineups); otherwise at least 1 so a tiny
+        # positive cap still admits one lineup.
+        f = float(frac)
+        return 0 if f <= 0 else max(1, int(round(f * N)))
 
     hcap, pcap, tcap = cap_n(hitter_cap), cap_n(pitcher_cap), cap_n(team_cap)
     paircap, ccap, gcap = cap_n(pair_cap), cap_n(core_cap), cap_n(group_cap)
     group_of = group_of or {}
+
+    # per-entity overrides -> precomputed cap counts
+    player_caps = player_caps or {}
+    team_caps = team_caps or {}
+    player_capn = {nm: cap_n(fr) for nm, fr in player_caps.items()}
+    team_capn = {tm: cap_n(fr) for tm, fr in team_caps.items()}
+
+    def player_cap_for(name, i):
+        if name in player_capn:
+            return player_capn[name]
+        return pcap if i < 2 else hcap
+
+    def team_cap_for(team):
+        return team_capn.get(team, tcap)
 
     expo = Counter()     # per player
     teamc = Counter()    # per primary stack team
@@ -116,10 +142,11 @@ def select_portfolio(res_df, n_select, sort_cols, *, cols, hitc,
         if eligible is not None and not eligible(names):
             skipped += 1
             continue
-        # per-player caps (first two slots are pitchers)
-        if any(expo[n] >= (pcap if i < 2 else hcap) for i, n in enumerate(names)):
+        # per-player caps (first two slots are pitchers); per-entity overrides
+        # apply where set, else the global hitter/pitcher cap.
+        if any(expo[n] >= player_cap_for(n, i) for i, n in enumerate(names)):
             continue
-        if teamc[f["primary"]] >= tcap:
+        if teamc[f["primary"]] >= team_cap_for(f["primary"]):
             continue
         if f["secondary"] and pairc[f["pair"]] >= paircap:
             continue
@@ -272,4 +299,19 @@ if __name__ == "__main__":
     g_of, groups = detect_value_groups(meta)
     assert g_of.get('s1') == g_of.get('s2') and 's1' in g_of, (g_of, groups)
     assert 'b1' not in g_of, g_of
+
+    # per-entity caps: cap one player and one team below the global default
+    many = [mk('pa', 'pb', base_h, {'Wins': 100 - i, 'Top10': 0, 'Top100': 0})
+            for i in range(10)]
+    dfm = pd.DataFrame(many)
+    _, pinfo = select_portfolio(dfm, 10, ['Wins', 'Top10', 'Top100'],
+                                cols=COLS, hitc=HITC, player_caps={'b1': 0.30})
+    assert pinfo["max_hitter"] <= 3, pinfo            # b1 limited to 3/10
+    _, tinfo = select_portfolio(dfm, 10, ['Wins', 'Top10', 'Top100'],
+                                cols=COLS, hitc=HITC, team_caps={'CLE': 0.40})
+    assert tinfo["max_team"] <= 4, tinfo              # CLE primary limited to 4/10
+    chx, _ = select_portfolio(dfm, 10, ['Wins', 'Top10', 'Top100'],
+                              cols=COLS, hitc=HITC, player_caps={'b1': 0.0})
+    assert all('b1 (' not in str(r['1B']) for r in chx)   # 0% excludes entirely
+
     print("portfolio.py self-test passed:", info)

@@ -418,7 +418,7 @@ def ids_from_clean(df):
 def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
                     pitcher_cap=1.0, team_cap=1.0, pair_cap=1.0,
                     core_cap=1.0, max_overlap=1.0, group_of=None,
-                    group_cap=1.0):
+                    group_cap=1.0, player_caps=None, team_caps=None):
     """Pick n_select lineups from the ranked candidate results with the
     diversity-aware portfolio selector (per-player / stack-team / pairing /
     stack-core / value-group exposure caps + an overlap ceiling), map players to
@@ -435,7 +435,8 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
         res_df, n_select, keymap, cols=COLS, hitc=HITC, eligible=eligible,
         hitter_cap=hitter_cap, pitcher_cap=pitcher_cap, team_cap=team_cap,
         pair_cap=pair_cap, core_cap=core_cap, max_overlap=max_overlap,
-        group_of=group_of, group_cap=group_cap)
+        group_of=group_of, group_cap=group_cap,
+        player_caps=player_caps, team_caps=team_caps)
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -2013,19 +2014,110 @@ with tabs[3]:
                                         ["Win%", "Top10 Rate", "Top100 Rate"], index=0,
                                         help="Win% favors tournament-winning ceiling; the "
                                              "Top10/Top100 rates favor consistent cashing.")
+                # global caps default to no effect; per-entity overrides start empty
+                hitter_cap = pitcher_cap = team_cap = 1.0
+                player_caps: dict[str, float] = {}
+                team_caps: dict[str, float] = {}
                 with st.expander("Exposure caps (optional)"):
-                    pc1, pc2, pc3 = st.columns(3)
-                    hitter_cap = pc1.slider(
-                        "Max hitter exposure", 0.05, 1.0, 1.0, 0.05,
-                        help="Cap the share of exported lineups any one HITTER "
-                             "can appear in (1.0 = no cap).")
-                    pitcher_cap = pc2.slider(
-                        "Max pitcher exposure", 0.05, 1.0, 1.0, 0.05,
-                        help="Cap the share of exported lineups any one PITCHER "
-                             "can appear in (1.0 = no cap).")
-                    team_cap = pc3.slider(
-                        "Max stack-team exposure", 0.05, 1.0, 1.0, 0.05,
-                        help="Cap the share sharing the same primary stack team.")
+                    _cap_mode = st.radio(
+                        "Exposure cap mode",
+                        ["Global caps", "Per-player / per-team caps"],
+                        index=0, horizontal=True, key="cap_mode",
+                        help="Global applies one cap to every hitter / pitcher / "
+                             "stack team. Per-player / per-team lets you set a "
+                             "different max exposure for specific players or "
+                             "teams.")
+
+                    if _cap_mode == "Global caps":
+                        pc1, pc2, pc3 = st.columns(3)
+                        hitter_cap = pc1.slider(
+                            "Max hitter exposure", 0.05, 1.0, 1.0, 0.05,
+                            help="Cap the share of exported lineups any one HITTER "
+                                 "can appear in (1.0 = no cap).")
+                        pitcher_cap = pc2.slider(
+                            "Max pitcher exposure", 0.05, 1.0, 1.0, 0.05,
+                            help="Cap the share of exported lineups any one PITCHER "
+                                 "can appear in (1.0 = no cap).")
+                        team_cap = pc3.slider(
+                            "Max stack-team exposure", 0.05, 1.0, 1.0, 0.05,
+                            help="Cap the share sharing the same primary stack team.")
+                    else:
+                        st.caption(
+                            "Set a **Max %** for the players and/or teams you want "
+                            "to limit. Leave a row at 100 for no cap; set 0 to "
+                            "exclude entirely. Anything not listed has no cap.")
+                        _meta = sim.get("players_meta") or {}
+                        _pool = sim.get("pool_players") or sorted(_meta.keys())
+
+                        # ---- per-player caps ----
+                        _prows = []
+                        for _nm in _pool:
+                            _m = _meta.get(_nm, {})
+                            _prows.append({
+                                "Player": _nm,
+                                "Pos": _m.get("pos", ""),
+                                "Team": _m.get("team", ""),
+                                "Proj": (round(float(_m["proj"]), 1)
+                                         if _m.get("proj") is not None else None),
+                                "Max %": 100,
+                            })
+                        # most-used (highest proj) players first so caps are handy
+                        _pdf = pd.DataFrame(_prows)
+                        if not _pdf.empty and _pdf["Proj"].notna().any():
+                            _pdf = _pdf.sort_values(
+                                "Proj", ascending=False, na_position="last"
+                            ).reset_index(drop=True)
+                        st.markdown("**Per-player max exposure**")
+                        _pedit = st.data_editor(
+                            _pdf, hide_index=True, width="stretch",
+                            key="player_caps_editor",
+                            column_config={
+                                "Player": st.column_config.TextColumn(disabled=True),
+                                "Pos": st.column_config.TextColumn(disabled=True),
+                                "Team": st.column_config.TextColumn(disabled=True),
+                                "Proj": st.column_config.NumberColumn(disabled=True),
+                                "Max %": st.column_config.NumberColumn(
+                                    min_value=0, max_value=100, step=5,
+                                    help="Max share of exported lineups this player "
+                                         "may appear in."),
+                            })
+                        for _, _r in _pedit.iterrows():
+                            try:
+                                _v = float(_r["Max %"])
+                            except (TypeError, ValueError):
+                                continue
+                            if _v < 100:
+                                player_caps[str(_r["Player"])] = _v / 100.0
+
+                        # ---- per-team caps ----
+                        _teams = sorted({_m.get("team", "") for _m in _meta.values()
+                                         if _m.get("team")})
+                        if _teams:
+                            st.markdown("**Per-team (primary stack) max exposure**")
+                            _tdf = pd.DataFrame(
+                                [{"Team": _t, "Max %": 100} for _t in _teams])
+                            _tedit = st.data_editor(
+                                _tdf, hide_index=True, width="content",
+                                key="team_caps_editor",
+                                column_config={
+                                    "Team": st.column_config.TextColumn(disabled=True),
+                                    "Max %": st.column_config.NumberColumn(
+                                        min_value=0, max_value=100, step=5,
+                                        help="Max share of exported lineups whose "
+                                             "primary stack is this team."),
+                                })
+                            for _, _r in _tedit.iterrows():
+                                try:
+                                    _v = float(_r["Max %"])
+                                except (TypeError, ValueError):
+                                    continue
+                                if _v < 100:
+                                    team_caps[str(_r["Team"])] = _v / 100.0
+
+                        _n_set = len(player_caps) + len(team_caps)
+                        if _n_set:
+                            st.caption(f"{len(player_caps)} player cap(s) and "
+                                       f"{len(team_caps)} team cap(s) active.")
 
                 with st.expander("Portfolio diversity (optional)"):
                     st.caption("Spread the exported set so the lineups work "
@@ -2095,7 +2187,8 @@ with tabs[3]:
                 csv_text, info = build_dk_upload(
                     src, dkid, n_up, sort_by, hitter_cap, pitcher_cap, team_cap,
                     pair_cap=pair_cap, core_cap=core_cap, max_overlap=max_overlap,
-                    group_of=group_of, group_cap=group_cap)
+                    group_of=group_of, group_cap=group_cap,
+                    player_caps=player_caps, team_caps=team_caps)
                 if info["chosen"] == 0:
                     st.error("No exportable lineups — players had no DK ID, or the caps "
                              "are too strict.")
