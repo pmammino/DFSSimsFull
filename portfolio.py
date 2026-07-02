@@ -26,6 +26,8 @@ this reproduces the prior top-N-by-rank behaviour exactly.
 """
 from collections import Counter, defaultdict
 
+import numpy as np
+
 
 # --------------------------------------------------------------------------- #
 # Row parsing
@@ -189,6 +191,165 @@ def select_portfolio(res_df, n_select, sort_cols, *, cols, hitc,
 
 
 # --------------------------------------------------------------------------- #
+# Payout-aware portfolio selection (maximize E[utility of $ return])
+# --------------------------------------------------------------------------- #
+def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
+                        eligible=None, hitter_cap=1.0, pitcher_cap=1.0,
+                        team_cap=1.0, pair_cap=1.0, core_cap=1.0,
+                        max_overlap=1.0, group_of=None, group_cap=1.0,
+                        player_caps=None, team_caps=None, eval_sims=None):
+    """Greedily build the export set that maximizes the expected *utility* of the
+    portfolio's per-simulation dollar return, subject to the same exposure /
+    diversity caps as :func:`select_portfolio`.
+
+    This is the portfolio-level objective: instead of ranking each lineup by its
+    standalone finish rate, we track the running portfolio winnings across every
+    simulation and, at each step, add the lineup whose payouts most improve
+    ``mean(util(total winnings))``. Because ``util`` is concave (see
+    ``portfolio_ev.utility``), a lineup that only wins in sims the set already
+    covers adds little, so the greedy naturally spreads the portfolio across
+    distinct slate outcomes. Concave-of-a-sum is submodular, so this greedy has
+    the usual (1 - 1/e) optimality guarantee.
+
+    Parameters
+    ----------
+    res_df   : candidate rows (each a lineup, cells ``"Name (TEAM)"``). Row order
+               MUST align with the columns of `pay` (row i <-> ``pay[:, i]``).
+    pay      : ``(n_sim, n_row)`` dollars each candidate wins in each sim
+               (from ``portfolio_ev.candidate_payout_matrix``).
+    util     : vectorized concave utility over winnings >= 0
+               (from ``portfolio_ev.utility``).
+    eval_sims: cap the number of sims used to RANK marginal gains (subsampled
+               evenly for speed); reported outcome stats always use all sims.
+
+    Returns ``(chosen_rows, info, W)`` where ``W`` is the chosen portfolio's
+    per-sim total winnings on the full sim set (for the coverage visualization).
+    """
+    N = int(n_select)
+    rdf = res_df.reset_index(drop=True)
+    n_row = len(rdf)
+    pay = np.asarray(pay, dtype=np.float32)
+    if pay.shape[1] != n_row:
+        raise ValueError(f"pay has {pay.shape[1]} cols but res_df has {n_row} rows")
+    n_sim = pay.shape[0]
+
+    # sims used to rank marginal gains (subsample evenly); reporting uses all
+    if eval_sims and int(eval_sims) < n_sim:
+        step = max(1, n_sim // int(eval_sims))
+        sel_idx = np.arange(0, n_sim, step)[:int(eval_sims)]
+    else:
+        sel_idx = np.arange(n_sim)
+    pay_sel = pay[sel_idx]
+
+    def cap_n(frac):
+        f = float(frac)
+        return 0 if f <= 0 else max(1, int(round(f * N)))
+
+    hcap, pcap, tcap = cap_n(hitter_cap), cap_n(pitcher_cap), cap_n(team_cap)
+    paircap, ccap, gcap = cap_n(pair_cap), cap_n(core_cap), cap_n(group_cap)
+    group_of = group_of or {}
+    player_capn = {nm: cap_n(fr) for nm, fr in (player_caps or {}).items()}
+    team_capn = {tm: cap_n(fr) for tm, fr in (team_caps or {}).items()}
+
+    def player_cap_for(name, i):
+        if name in player_capn:
+            return player_capn[name]
+        return pcap if i < 2 else hcap
+
+    def team_cap_for(team):
+        return team_capn.get(team, tcap)
+
+    # precompute lineup features + eligibility once
+    feats = [lineup_features(rdf.iloc[i], cols, hitc) for i in range(n_row)]
+    elig = np.ones(n_row, dtype=bool)
+    if eligible is not None:
+        for i in range(n_row):
+            if not eligible(feats[i]["names"]):
+                elig[i] = False
+    skipped = int((~elig).sum())
+
+    expo = Counter(); teamc = Counter(); pairc = Counter()
+    corec = Counter(); groupc = Counter(); pitchers = set()
+    chosen_pos, chosen_sets = [], []
+    taken = np.zeros(n_row, dtype=bool)
+
+    def gids_of(names):
+        return {group_of[n] for n in names if n in group_of} if group_of else set()
+
+    def fits(i):
+        f = feats[i]; names = f["names"]
+        if any(expo[n] >= player_cap_for(n, j) for j, n in enumerate(names)):
+            return False
+        if teamc[f["primary"]] >= team_cap_for(f["primary"]):
+            return False
+        if f["secondary"] and pairc[f["pair"]] >= paircap:
+            return False
+        if corec[f["core"]] >= ccap:
+            return False
+        if any(groupc[g] >= gcap for g in gids_of(names)):
+            return False
+        if max_overlap < 1.0 and chosen_sets:
+            if max(_jaccard(f["playerset"], s) for s in chosen_sets) > max_overlap:
+                return False
+        return True
+
+    W_sel = np.zeros(len(sel_idx), dtype=np.float64)
+    cur_u = float(np.mean(util(W_sel)))
+    for _ in range(N):
+        avail = elig & ~taken
+        if not avail.any():
+            break
+        avail_idx = np.where(avail)[0]
+        # marginal gain of each available candidate: mean(util(W + pay)) - cur_u
+        u_new = util(W_sel[:, None] + pay_sel[:, avail_idx])
+        gains = u_new.mean(axis=0) - cur_u
+        picked = -1
+        for li in np.argsort(-gains):
+            i = int(avail_idx[li])
+            if fits(i):
+                picked = i
+                break
+        if picked < 0:
+            break
+        i = picked; f = feats[i]
+        chosen_pos.append(i); chosen_sets.append(f["playerset"]); taken[i] = True
+        W_sel += pay_sel[:, i]
+        cur_u = float(np.mean(util(W_sel)))
+        for j, n in enumerate(f["names"]):
+            expo[n] += 1
+            if j < 2:
+                pitchers.add(n)
+        teamc[f["primary"]] += 1
+        if f["secondary"]:
+            pairc[f["pair"]] += 1
+        corec[f["core"]] += 1
+        for g in gids_of(f["names"]):
+            groupc[g] += 1
+
+    chosen = [rdf.iloc[i] for i in chosen_pos]
+    W = (pay[:, chosen_pos].sum(axis=1) if chosen_pos
+         else np.zeros(n_sim, dtype=np.float64))
+    info = {
+        "chosen": len(chosen), "requested": N, "skipped_unmapped": skipped,
+        "max_pitcher": max((expo[n] for n in pitchers), default=0),
+        "max_hitter": max((expo[n] for n in expo if n not in pitchers), default=0),
+        "max_team": max(teamc.values()) if teamc else 0,
+        "max_pair": max(pairc.values()) if pairc else 0,
+        "max_core": max(corec.values()) if corec else 0,
+        "distinct_pairs": len(pairc),
+        "distinct_cores": len(corec),
+        "distinct_primaries": len(teamc),
+        # portfolio outcome (full sims)
+        "exp_return": float(W.mean()),
+        "floor_p10": float(np.percentile(W, 10)),
+        "median": float(np.percentile(W, 50)),
+        "ceiling_p90": float(np.percentile(W, 90)),
+        "cash_rate": float(np.mean(W > 0)),
+    }
+    return chosen, info, W
+
+
+# --------------------------------------------------------------------------- #
 # Value-group detection (near-twin players)
 # --------------------------------------------------------------------------- #
 def detect_value_groups(meta, *, salary_tol=300, proj_tol=1.5, min_size=2):
@@ -313,5 +474,40 @@ if __name__ == "__main__":
     chx, _ = select_portfolio(dfm, 10, ['Wins', 'Top10', 'Top100'],
                               cols=COLS, hitc=HITC, player_caps={'b1': 0.0})
     assert all('b1 (' not in str(r['1B']) for r in chx)   # 0% excludes entirely
+
+    # ---- payout-aware EV selection: prefer decorrelated coverage ----
+    from portfolio_ev import utility
+    # four lineups; A & B win big only in sim 0, C wins only in sim 1, D never.
+    ev_rows = [
+        mk('pa', 'pb', [('C', 'a1', 'AAA'), ('1B', 'a2', 'AAA'), ('2B', 'a3', 'AAA'),
+                        ('3B', 'a4', 'AAA'), ('SS', 'a5', 'AAA'), ('OF1', 'x1', 'XXX'),
+                        ('OF2', 'x2', 'XXX'), ('OF3', 'z1', 'ZZZ')], {}),
+        mk('pa', 'pb', [('C', 'b1', 'BBB'), ('1B', 'b2', 'BBB'), ('2B', 'b3', 'BBB'),
+                        ('3B', 'b4', 'BBB'), ('SS', 'b5', 'BBB'), ('OF1', 'y1', 'YYY'),
+                        ('OF2', 'y2', 'YYY'), ('OF3', 'z2', 'ZZZ')], {}),
+        mk('pc', 'pd', [('C', 'c1', 'CCC'), ('1B', 'c2', 'CCC'), ('2B', 'c3', 'CCC'),
+                        ('3B', 'c4', 'CCC'), ('SS', 'c5', 'CCC'), ('OF1', 'w1', 'WWW'),
+                        ('OF2', 'w2', 'WWW'), ('OF3', 'z3', 'ZZZ')], {}),
+        mk('pe', 'pf', [('C', 'd1', 'DDD'), ('1B', 'd2', 'DDD'), ('2B', 'd3', 'DDD'),
+                        ('3B', 'd4', 'DDD'), ('SS', 'd5', 'DDD'), ('OF1', 'v1', 'VVV'),
+                        ('OF2', 'v2', 'VVV'), ('OF3', 'z4', 'ZZZ')], {}),
+    ]
+    ev_df = pd.DataFrame(ev_rows)
+    ev_pay = np.array([[100., 100., 0., 0.],     # sim 0: A & B cash
+                       [0.,   0.,  100., 0.]])    # sim 1: only C cashes
+
+    def core_of(rows):
+        return {tuple(sorted(str(r[c]) for c in HITC)) for r in rows}
+
+    # concave (Kelly) utility -> spread across both sims -> pick C for coverage
+    chC, iC, WC = select_portfolio_ev(ev_df, 2, ev_pay, utility("Conservative (consistent cashing)"),
+                                      cols=COLS, hitc=HITC)
+    assert iC["cash_rate"] == 1.0, iC            # cashes in every sim
+    assert list(WC) == [100.0, 100.0], WC
+    # linear utility -> chases raw EV, ends up doubling up sim 0 (A & B)
+    chL, iL, WL = select_portfolio_ev(ev_df, 2, ev_pay, utility("Aggressive (max ceiling)"),
+                                      cols=COLS, hitc=HITC)
+    assert iL["cash_rate"] == 0.5, iL
+    assert sorted(WL.tolist()) == [0.0, 200.0], WL
 
     print("portfolio.py self-test passed:", info)
