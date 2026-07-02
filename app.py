@@ -34,7 +34,8 @@ import contest_review as cr
 from stage_d import (load_sims, build_pool, lineups_to_df, score_matrix,
                      norm as normname, COLS, HITC, SLOT)
 from mlb_lineup_builder import Pool, Builder
-from portfolio import select_portfolio, detect_value_groups
+from portfolio import select_portfolio, select_portfolio_ev, detect_value_groups
+import portfolio_ev as pev
 from field_simulator import (normalize_to_slots, adjust_ownership,
                              beta_for_size, tilt_structures)
 from stack_signal import team_stack_ownership, apply_stack_ownership_boost
@@ -445,6 +446,122 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
         nms = [str(row[c]).rsplit(" (", 1)[0] for c in COLS]
         w.writerow([dkid[normname(n)] for n in nms])
     return out.getvalue(), info
+
+
+def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
+                       top_heaviness, risk, shortlist, hitter_cap=1.0,
+                       pitcher_cap=1.0, team_cap=1.0, pair_cap=1.0, core_cap=1.0,
+                       max_overlap=1.0, group_of=None, group_cap=1.0,
+                       player_caps=None, team_caps=None, eval_sims=4000):
+    """Payout-aware portfolio export. Instead of ranking each lineup by its
+    standalone finish rate, this rebuilds the candidates' correlated per-sim
+    scores, turns them into DOLLAR payouts against a parametric top-heavy curve,
+    and greedily selects the set that maximizes the expected UTILITY of the whole
+    portfolio's per-slate return (the `risk` posture picks the utility). All the
+    same exposure / diversity caps still apply as hard constraints.
+
+    Returns ``(csv_text, info, W, W_naive, extra)`` where `W` / `W_naive` are the
+    per-sim portfolio returns for the EV set and a rank-selected set of the same
+    size (for the coverage visualization), or ``None`` if the sim predates the
+    stored placement ladder (caller falls back to ranked export)."""
+    dist = sim.get("dist") or {}
+    score_pool = sim.get("score_pool")
+    if "field_cut_scores" not in dist or not score_pool:
+        return None
+
+    K = int(sim["K"])
+    field_n = int(sim["field_n"])
+    cands = sim["cands"]
+    cut_scores = dist["field_cut_scores"]        # (K, n_cut)
+    cut_places = dist["cut_places"]
+
+    # shortlist: strongest candidates by the existing ranking (src is already
+    # sorted) so the pay matrix stays small; the optimizer picks a decorrelated
+    # subset from within it.
+    short = src.head(int(shortlist)).reset_index(drop=True)
+    M = len(short)
+    if M == 0:
+        return "", {"chosen": 0, "skipped_unmapped": 0}, None, None, {}
+
+    # rebuild each shortlisted candidate's per-sim score from the pool arrays
+    # (the Candidate column indexes back into the cands list).
+    cand_scores = np.zeros((K, M), np.float32)
+    for j, cid in enumerate(short["Candidate"].to_numpy()):
+        lu = cands[int(cid) - 1]
+        for pl in lu["players"]:
+            arr = score_pool.get(normname(pl.Name))
+            if arr is not None:
+                cand_scores[:, j] += arr
+
+    # payout curve uses the SIMULATED contest size, so a finishing place (relative
+    # to that field) maps coherently onto the prize table.
+    prize = pev.make_payout_curve(field_n, entry_fee, top_heaviness=top_heaviness,
+                                  pct_paid=pct_paid, rake=rake)
+    pay = pev.candidate_payout_matrix(cand_scores, cut_scores, cut_places, prize)
+
+    def eligible(nms):
+        return all(normname(n) in dkid for n in nms)
+
+    chosen, info, W = select_portfolio_ev(
+        short, n_select, pay, pev.utility(risk), cols=COLS, hitc=HITC,
+        eligible=eligible, hitter_cap=hitter_cap, pitcher_cap=pitcher_cap,
+        team_cap=team_cap, pair_cap=pair_cap, core_cap=core_cap,
+        max_overlap=max_overlap, group_of=group_of, group_cap=group_cap,
+        player_caps=player_caps, team_caps=team_caps, eval_sims=eval_sims)
+
+    # rank-selected baseline of the SAME size (eligible only) for the comparison
+    naive_pos = []
+    for i in range(M):
+        nms = [str(short.iloc[i][c]).rsplit(" (", 1)[0] for c in COLS]
+        if eligible(nms):
+            naive_pos.append(i)
+        if len(naive_pos) >= info["chosen"]:
+            break
+    W_naive = (pay[:, naive_pos].sum(axis=1) if naive_pos
+               else np.zeros(K, np.float64))
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(SLOT)
+    for row in chosen:
+        nms = [str(row[c]).rsplit(" (", 1)[0] for c in COLS]
+        w.writerow([dkid[normname(n)] for n in nms])
+
+    extra = {"prize_summary": pev.payout_curve_summary(prize, entry_fee),
+             "cost": info["chosen"] * float(entry_fee), "shortlist": M,
+             "field_n": field_n}
+    return out.getvalue(), info, W, W_naive, extra
+
+
+def portfolio_return_chart(W, W_naive):
+    """Overlaid histograms of per-slate portfolio $ return: the payout-aware set
+    vs a rank-selected set of the same size. A ranked set piles its winning sims
+    together (tall bar at $0, thin far-right tail); the EV set shifts mass off $0
+    into the mid-range — that's the boom/bust being broken up."""
+    hi = float(max(np.percentile(W, 99), np.percentile(W_naive, 99), 1.0))
+    bins = np.linspace(0.0, hi, 31)
+
+    def hist(w, label):
+        c, _ = np.histogram(np.clip(w, 0, hi), bins=bins)
+        return pd.DataFrame({"lo": bins[:-1], "hi": bins[1:],
+                             "pct": 100.0 * c / max(1, len(w)), "which": label})
+
+    df = pd.concat([hist(np.asarray(W), "Portfolio EV"),
+                    hist(np.asarray(W_naive), "Ranked top-N")], ignore_index=True)
+    return alt.Chart(df).mark_bar(opacity=0.55).encode(
+        x=alt.X("lo:Q", title="Portfolio return ($ per simulated slate)",
+                scale=alt.Scale(domain=[0, hi], nice=False, clamp=True)),
+        x2="hi:Q",
+        y=alt.Y("pct:Q", title="% of simulated slates",
+                stack=None, scale=alt.Scale(zero=True)),
+        color=alt.Color("which:N", title=None,
+                        scale=alt.Scale(domain=["Portfolio EV", "Ranked top-N"],
+                                        range=[BRAND, "#8a8a8a"])),
+        tooltip=[alt.Tooltip("which:N", title="set"),
+                 alt.Tooltip("lo:Q", title="$ from", format=",.0f"),
+                 alt.Tooltip("hi:Q", title="$ to", format=",.0f"),
+                 alt.Tooltip("pct:Q", title="% slates", format=".1f")]
+    ).properties(height=240)
 
 
 def rows_to_upload_csv(rows_df, dkid):
@@ -900,11 +1017,18 @@ def ensure_fresh(status, force=False, totals_path=None):
 # Contest scoring that also captures each candidate's finishing-place
 # distribution (compact per-candidate histogram + exact best/mean/worst)
 # --------------------------------------------------------------------------- #
-def run_contest_dist(field_mat, cand_mat, n_sim, n_field, nbins=24):
+def run_contest_dist(field_mat, cand_mat, n_sim, n_field, nbins=24,
+                     cut_places=None):
     """Score each candidate against the field per sim and capture its
     finishing-place distribution as a compact ~`nbins`-bucket histogram (wider
     buckets read more clearly than per-position). Returns (wins, t10, t100, avg,
-    dist) with exact best/mean/worst places."""
+    dist) with exact best/mean/worst places.
+
+    If `cut_places` is given (ascending place indices), the field's score at each
+    of those places is also captured per sim into ``dist["field_cut_scores"]``
+    (shape ``(n_sim, len(cut_places))``). This piggybacks on the per-sim sort we
+    already do, giving the payout-aware export step the field placement ladder
+    without a second pass."""
     N = cand_mat.shape[1]
     wins = np.zeros(N, np.int64); t10 = np.zeros(N, np.int64)
     t100 = np.zeros(N, np.int64); ps = np.zeros(N, np.int64)
@@ -915,6 +1039,14 @@ def run_contest_dist(field_mat, cand_mat, n_sim, n_field, nbins=24):
     nb = len(edges) - 1
     counts = np.zeros((N, nb), np.int32)
     idx = np.arange(N)
+
+    cut_scores = None
+    if cut_places is not None and len(cut_places):
+        cut_places = np.asarray(cut_places, np.int64)
+        cut_scores = np.empty((n_sim, len(cut_places)), np.float32)
+        # ascending-sorted field: the score for place p is the p-th highest total
+        take = n_field - cut_places                     # index into ascending fs
+
     for s in range(n_sim):
         fs = np.sort(field_mat[s]); cv = cand_mat[s]
         pl = (n_field - np.searchsorted(fs, cv, side="right")) + 1
@@ -922,8 +1054,13 @@ def run_contest_dist(field_mat, cand_mat, n_sim, n_field, nbins=24):
         best = np.minimum(best, pl); worst = np.maximum(worst, pl)
         b = np.clip(np.searchsorted(edges, pl, side="right") - 1, 0, nb - 1)
         np.add.at(counts, (idx, b), 1)
+        if cut_scores is not None:
+            cut_scores[s] = fs[take]
     dist = {"edges": edges, "counts": counts, "best": best, "worst": worst,
             "mean": ps / n_sim}
+    if cut_scores is not None:
+        dist["field_cut_scores"] = cut_scores
+        dist["cut_places"] = cut_places
     return wins, t10, t100, ps / n_sim, dist
 
 
@@ -1614,10 +1751,13 @@ with tabs[0]:
                            "that could be built.")
             field_mat = score_matrix(field, score_b, K)
 
-            # ---- the contest (captures each candidate's finishing-place distro) ----
+            # ---- the contest (captures each candidate's finishing-place distro,
+            #      plus the field's per-sim placement ladder for payout-aware
+            #      portfolio export) ----
             st.write(f"Simulating the contest over {K:,} runs…")
+            cut_places = pev.field_place_cutpoints(len(field))
             wins, t10, t100, avg, dist = run_contest_dist(
-                field_mat, cand_mat, K, len(field))
+                field_mat, cand_mat, K, len(field), cut_places=cut_places)
             status.update(label=f"Done in {time.time()-t0:.1f}s", state="complete")
 
         # ---- per-lineup attributes for filtering/search ----
@@ -1664,11 +1804,18 @@ with tabs[0]:
                 "proj": float(tal[nm]) if nm in tal else None,
             }
 
+        # per-player (boosted) sim arrays for just the pool players, so the
+        # payout-aware export can rebuild any candidate's per-sim score cheaply
+        # without persisting the full (n_sim x n_candidate) matrix.
+        pool_norm = {normname(n) for n in pool["Name"].unique()}
+        score_pool = {k: np.asarray(v, np.float32)
+                      for k, v in score_b.items() if k in pool_norm}
+
         # persist so the filter/export controls below can change without re-simulating
         st.session_state["sim"] = {
             "res": res, "cands": cands, "field_df": lineups_to_df(field),
             "K": K, "contest_size": contest_size, "field_n": len(field), "beta": beta,
-            "dist": dist, "id_map": id_map,
+            "dist": dist, "id_map": id_map, "score_pool": score_pool,
             "cand_to_players": {i + 1: cand_players[i] for i in range(len(cands))},
             "pool_players": sorted({pl.Name for lu in cands for pl in lu["players"]}),
             "players_meta": players_meta,
@@ -2014,6 +2161,66 @@ with tabs[3]:
                                         ["Win%", "Top10 Rate", "Top100 Rate"], index=0,
                                         help="Win% favors tournament-winning ceiling; the "
                                              "Top10/Top100 rates favor consistent cashing.")
+
+                _ev_ready = ("field_cut_scores" in (sim.get("dist") or {})
+                             and bool(sim.get("score_pool")))
+                sel_method = st.radio(
+                    "Selection method",
+                    ["Ranked (per-lineup rates)", "Portfolio EV (payout-aware)"],
+                    index=0, horizontal=True, key="sel_method",
+                    help="Ranked takes the top lineups by the metric above, then "
+                         "fills under your caps — each lineup judged on its own. "
+                         "Portfolio EV instead picks the SET that maximizes the "
+                         "expected dollar return of the whole portfolio, so the "
+                         "lineups cover different slate outcomes instead of "
+                         "booming/busting together.")
+                ev_mode = sel_method.startswith("Portfolio EV")
+                # payout-aware defaults (overridden by the expander when in EV mode)
+                ev_entry_fee = 20.0; ev_pct_paid = 0.20; ev_rake = 0.15
+                ev_top_heavy = 0.9; ev_risk = "Balanced"
+                ev_shortlist = min(int(len(src)), 1000)
+                if ev_mode and not _ev_ready:
+                    st.info("This simulation predates the payout-aware export — "
+                            "re-run the sim (Setup tab) to enable it. Falling back "
+                            "to ranked selection for now.")
+                    ev_mode = False
+                elif ev_mode:
+                    with st.expander("Payout structure & risk posture", expanded=True):
+                        st.caption(
+                            f"Modeling a **{int(sim['field_n']):,}-entry** contest "
+                            "(your simulated field). Dollar payouts come from a "
+                            "parametric top-heavy GPP curve.")
+                        ec1, ec2, ec3 = st.columns(3)
+                        ev_entry_fee = float(ec1.number_input(
+                            "Entry fee ($)", min_value=0.25, max_value=10000.0,
+                            value=20.0, step=1.0))
+                        ev_pct_paid = ec2.slider(
+                            "% of field paid", 0.05, 0.30, 0.20, 0.01,
+                            help="Share of the field that cashes (GPPs ~20%).")
+                        ev_rake = ec3.slider(
+                            "Rake %", 0.0, 0.30, 0.15, 0.01,
+                            help="Operator's cut; sets the prize pool = "
+                                 "entries x fee x (1 - rake).")
+                        ev_top_heavy = st.slider(
+                            "Top-heaviness", 0.3, 1.5, 0.9, 0.1,
+                            help="How concentrated the prizes are at the top. "
+                                 "~0.3 = flat (double-up-like), ~0.9 = typical GPP, "
+                                 "~1.5 = winner-take-most.")
+                        ev_risk = st.selectbox(
+                            "How should the portfolio play out?",
+                            list(pev.UTILITIES.keys()), index=1,
+                            help="Sets the risk posture. "
+                                 + " ".join(f"**{k.split(' (')[0]}** — {v[1]}"
+                                            for k, v in pev.UTILITIES.items()))
+                        st.caption(pev.UTILITIES[ev_risk][1])
+                        ev_shortlist = int(st.number_input(
+                            "Candidate pool size", min_value=int(min(50, len(src))),
+                            max_value=int(min(4000, len(src))),
+                            value=int(min(1000, len(src))), step=100,
+                            help="The optimizer picks from this many top-ranked "
+                                 "candidates. Larger = more freedom to diversify, "
+                                 "slower."))
+
                 # global caps default to no effect; per-entity overrides start empty
                 hitter_cap = pitcher_cap = team_cap = 1.0
                 player_caps: dict[str, float] = {}
@@ -2184,22 +2391,43 @@ with tabs[3]:
                             st.caption("No near-twin value groups at these "
                                        "tolerances.")
 
-                csv_text, info = build_dk_upload(
-                    src, dkid, n_up, sort_by, hitter_cap, pitcher_cap, team_cap,
-                    pair_cap=pair_cap, core_cap=core_cap, max_overlap=max_overlap,
-                    group_of=group_of, group_cap=group_cap,
-                    player_caps=player_caps, team_caps=team_caps)
+                W = W_naive = ev_extra = None
+                if ev_mode:
+                    _ev = build_dk_upload_ev(
+                        src, sim, dkid, n_up, entry_fee=ev_entry_fee,
+                        pct_paid=ev_pct_paid, rake=ev_rake,
+                        top_heaviness=ev_top_heavy, risk=ev_risk,
+                        shortlist=ev_shortlist, hitter_cap=hitter_cap,
+                        pitcher_cap=pitcher_cap, team_cap=team_cap,
+                        pair_cap=pair_cap, core_cap=core_cap, max_overlap=max_overlap,
+                        group_of=group_of, group_cap=group_cap,
+                        player_caps=player_caps, team_caps=team_caps)
+                    if _ev is None:
+                        ev_mode = False
+                    else:
+                        csv_text, info, W, W_naive, ev_extra = _ev
+                if not ev_mode:
+                    csv_text, info = build_dk_upload(
+                        src, dkid, n_up, sort_by, hitter_cap, pitcher_cap, team_cap,
+                        pair_cap=pair_cap, core_cap=core_cap, max_overlap=max_overlap,
+                        group_of=group_of, group_cap=group_cap,
+                        player_caps=player_caps, team_caps=team_caps)
+
                 if info["chosen"] == 0:
                     st.error("No exportable lineups — players had no DK ID, or the caps "
                              "are too strict.")
                 else:
+                    if ev_mode:
+                        _by = f"portfolio EV ({ev_risk.split(' (')[0]})"
+                    else:
+                        _by = f"**{sort_by}**"
                     msg = (f"Selected **{info['chosen']} of {n_up}** lineups by "
-                           f"**{sort_by}**. Max hitter exposure "
+                           f"{_by}. Max hitter exposure "
                            f"{info['max_hitter']}/{info['chosen']}, max pitcher "
                            f"{info['max_pitcher']}/{info['chosen']}, max stack-team "
                            f"{info['max_team']}/{info['chosen']}.")
                     if info["chosen"] < n_up:
-                        msg += (f" Diversity caps limited the set to "
+                        msg += (f" Caps/pool limited the set to "
                                 f"{info['chosen']} — loosen them for more.")
                     msg += (f" Distinct stack pairings: {info['distinct_pairs']}; "
                             f"distinct stack cores: {info['distinct_cores']}.")
@@ -2211,6 +2439,41 @@ with tabs[3]:
                         "⬇ Download DraftKings upload CSV", csv_text.encode(),
                         file_name=f"DK_upload_{info['chosen']}.csv",
                         mime="text/csv", type="primary", width="stretch")
+
+                    # ---- payout-aware coverage visualization ----
+                    if ev_mode and W is not None and ev_extra:
+                        ps = ev_extra["prize_summary"]
+                        cost = ev_extra["cost"] or 1.0
+                        st.markdown("##### Portfolio outcome across simulated slates")
+                        st.caption(
+                            f"Curve: **${ps['first_place']:,.0f}** to 1st, "
+                            f"**${ps['min_cash']:,.0f}** min-cash, "
+                            f"{ps['places_paid']:,} paid of "
+                            f"{ev_extra['field_n']:,} "
+                            f"(pool ${ps['prize_pool']:,.0f}). "
+                            f"Entry cost {info['chosen']}×${ev_entry_fee:,.0f} "
+                            f"= ${cost:,.0f}.")
+
+                        # EV set vs a rank-selected set of the same size
+                        naive_ret = float(np.mean(W_naive))
+                        naive_cash = float(np.mean(W_naive > 0))
+                        mc1, mc2, mc3, mc4 = st.columns(4)
+                        mc1.metric("Expected return", f"${info['exp_return']:,.0f}",
+                                   f"{info['exp_return'] - naive_ret:+,.0f} vs ranked")
+                        mc2.metric("ROI", f"{100*(info['exp_return']/cost - 1):+.1f}%")
+                        mc3.metric("Cash rate (≥1 lineup)",
+                                   f"{100*info['cash_rate']:.1f}%",
+                                   f"{100*(info['cash_rate'] - naive_cash):+.1f} pts vs ranked")
+                        mc4.metric("Floor (p10) / Ceiling (p90)",
+                                   f"${info['floor_p10']:,.0f} / ${info['ceiling_p90']:,.0f}")
+                        st.altair_chart(portfolio_return_chart(W, W_naive),
+                                        use_container_width=True)
+                        st.caption(
+                            "“Cash rate” is the share of simulated slates where at "
+                            "least one exported lineup finishes in the money — the "
+                            "portfolio-level win/cash metric. Compared against a "
+                            "top-N-by-rank set of the same size, drawn from the same "
+                            "candidate pool.")
 
 
 # --------------------------------------------------------------------------- #

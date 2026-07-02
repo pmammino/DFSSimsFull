@@ -180,6 +180,9 @@ After a run, you can export a ready-to-upload DK file:
      Rate**, or **Top100 Rate**, with optional separate **hitter / pitcher /
      stack-team** exposure caps. Ranks from the **current filter** by default
      (or all candidates).
+   - Within *Top N by ranking* you can also pick a **Selection method**:
+     *Ranked (per-lineup rates)* (the classic behaviour above) or **Portfolio EV
+     (payout-aware)** — see below.
 3. Download `DK_upload_<N>.csv` — header `P,P,C,1B,2B,3B,SS,OF,OF,OF` followed by
    one row of DraftKings player IDs per lineup.
 
@@ -216,6 +219,49 @@ behaviour is unchanged until you turn them on):
 > A lineup is exportable only if every one of its players has a DK ID. The app
 > reports how many candidate players had IDs, so if your ownership and your DK
 > IDs cover different players you'll see it immediately.
+
+### Portfolio EV (payout-aware selection)
+
+Ranked selection judges every lineup **in a vacuum** — it takes the highest
+Win% / Top100% builds. The catch is those builds almost all win in the *same*
+simulations (the slates where the same chalk stack booms), so an exported set
+that looks diverse on paper is concentrated in **outcome-space** and tends to
+succeed or fail together on a given slate.
+
+**Portfolio EV** optimizes the set as a whole. It replays the correlated
+simulations as **dollar outcomes** and greedily picks the lineups that maximize
+the expected *utility* of the whole portfolio's per-slate return — so each added
+lineup is chosen for the slate outcomes it covers that the set doesn't already
+win. All the exposure/diversity caps above still apply as hard constraints.
+
+Controls (Export → *Top N by ranking* → Selection method → **Portfolio EV**):
+
+- **Payout structure** — a parametric top-heavy GPP prize curve built from the
+  **entry fee**, **% of field paid**, **rake**, and **top-heaviness** (flat
+  double-up ↔ winner-take-most). The contest size is your simulated field, so a
+  finishing place maps coherently onto the prize table.
+- **How should the portfolio play out?** — the risk posture (the utility knob):
+  - **Aggressive (max ceiling)** — near-linear utility; chases raw expected
+    dollars, barely diversifies (best for large-field GPP ceiling).
+  - **Balanced** — square-root utility; spreads winning sims across slate
+    outcomes without giving up much ceiling (default).
+  - **Conservative (consistent cashing)** — log / Kelly-style utility; strong
+    boom/bust aversion, prioritizes cashing across as many slate states as
+    possible.
+- **Candidate pool size** — the optimizer picks from this many top-ranked
+  candidates; larger = more freedom to diversify, slower.
+
+After selecting, a **coverage panel** shows the portfolio's outcome across every
+simulated slate — expected return, ROI, **cash rate** (share of slates where at
+least one exported lineup finishes in the money — the portfolio-level cash
+metric), floor/ceiling, and a return distribution — all compared against a
+top-N-by-rank set of the same size drawn from the same pool, so you can see the
+boom/bust being broken up.
+
+> Requires a fresh simulation: the payout-aware path reuses the field placement
+> ladder and per-player sim arrays captured during the run. If you loaded an
+> older session, re-run the sim to enable it (the app falls back to ranked
+> selection and tells you).
 
 ## What it does
 
