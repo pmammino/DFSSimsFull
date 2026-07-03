@@ -208,25 +208,38 @@ def main():
         if size not in results_by_size: size = a.contest_sizes[0]
         make_upload(results_by_size[size], a, size)
 
+def _split_cell(cell):
+    """A result cell is 'Name (TEAM)'; return (name, team)."""
+    s = str(cell)
+    if s.endswith(')') and ' (' in s:
+        nm, tm = s.rsplit(' (', 1)
+        return nm, tm[:-1]
+    return s, ''
+
+
 def make_upload(res, a, size):
     keymap = {'top100':['Top100','Top10','Wins'], 'top10':['Top10','Top100','Wins'],
               'win':['Wins','Top10','Top100']}[a.objective]
     res = res.sort_values(keymap, ascending=False).reset_index(drop=True)
+    import dk_ids
     dkid = {}
     if a.dk_template:
         rows = list(csv.reader(open(a.dk_template, encoding='utf-8', errors='replace')))
         hdr = next(i for i,r in enumerate(rows) if len(r)>=20 and r[11]=='Position')
         for r in rows[hdr+1:]:
-            if len(r)>=20 and r[14].strip(): dkid[norm(r[13])] = r[14].strip()
+            # col 13=Name, 14=ID, 18=TeamAbbrev — keyed by team so same-named
+            # players on different teams keep distinct ids
+            if len(r)>=20 and r[14].strip(): dk_ids.add_id(dkid, r[13], r[18], r[14])
     N = a.select; pcap = int(a.player_cap*N); tcap = int(a.team_cap*N)
-    def names_of(row): return [str(row[c]).rsplit(' (',1)[0] for c in COLS]
+    def cells_of(row): return [_split_cell(row[c]) for c in COLS]
+    def names_of(row): return [nm for nm,_ in cells_of(row)]
     def prim(row):
         c = Counter(str(row[x]).rsplit(' (',1)[1][:-1] for x in HITC if ' (' in str(row[x]))
         return c.most_common(1)[0][0]
     expo=Counter(); teamc=Counter(); chosen=[]
     for _, row in res.iterrows():
         nms = names_of(row)
-        if dkid and any(norm(n) not in dkid for n in nms): continue
+        if dkid and any(not dk_ids.has_name(dkid, n) for n in nms): continue
         if all(expo[n] < pcap for n in nms) and teamc[prim(row)] < tcap:
             chosen.append(row)
             for n in nms: expo[n]+=1
@@ -235,7 +248,9 @@ def make_upload(res, a, size):
     if dkid:
         with open(f"{a.outdir}/DK_upload_{N}.csv",'w',newline='') as f:
             w=csv.writer(f); w.writerow(SLOT)
-            for row in chosen: w.writerow([dkid[norm(n)] for n in names_of(row)])
+            for row in chosen:
+                ids = [dk_ids.lookup(dkid, nm, tm) for nm,tm in cells_of(row)]
+                if all(ids): w.writerow(ids)
     pd.DataFrame(chosen).to_csv(f"{a.outdir}/selected_{N}.csv", index=False)
     print(f"selected {len(chosen)} by {a.objective} | max player {max(expo.values())}/{N} "
           f"| max stack-team {max(teamc.values())}/{N}"

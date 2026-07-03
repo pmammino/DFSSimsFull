@@ -17,7 +17,7 @@ a chosen slate into the (dk_df, id_map) pair the rest of the app expects —
 identical in shape to what the CSV upload path produces:
 
     dk_df : FullName, Team, Position, Salary, Ownership, PlayerContestID
-    id_map: norm(name) -> DraftKingsDraftableID
+    id_map: norm(name) -> {TEAM -> DraftKingsDraftableID} (see dk_ids.py)
 
 Slates are matched between the two feeds on SlateID == SlateId; players within a
 slate are matched on RotoID, falling back to normalized name when an id is
@@ -31,6 +31,7 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 
 from stage_d import norm
+import dk_ids
 
 FEED_SALARIES  = ("https://rotowire-secrets-ebgmaeh8ecc4huhf.canadaeast-01."
                   "azurewebsites.net/api/proxy?feed=salaries-dk")
@@ -200,7 +201,9 @@ def to_dk_df(slate):
             'Position': pl['position'], 'Salary': pl['salary'],
             'Ownership': pl['ownership'], 'PlayerContestID': pl['draftable_id']})
         if pl['draftable_id']:
-            id_map[norm(pl['name'])] = pl['draftable_id']
+            # key by (name, team) so two same-named players on different teams
+            # (e.g. Max Muncy LAD vs OAK) keep distinct upload ids
+            dk_ids.add_id(id_map, pl['name'], pl['team'], pl['draftable_id'])
     return pd.DataFrame(recs), id_map
 
 

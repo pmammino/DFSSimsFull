@@ -219,6 +219,11 @@ behaviour is unchanged until you turn them on):
 > A lineup is exportable only if every one of its players has a DK ID. The app
 > reports how many candidate players had IDs, so if your ownership and your DK
 > IDs cover different players you'll see it immediately.
+>
+> When two players share a name on the same slate (e.g. **Max Muncy** on the
+> Dodgers *and* the Athletics), the upload ID is resolved by the player's
+> **team**, so the lineup's actual player — not whichever one happened to be
+> listed last — is the one written to the DK file.
 
 ### Portfolio EV (payout-aware selection)
 
