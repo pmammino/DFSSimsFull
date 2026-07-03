@@ -201,9 +201,10 @@ def to_dk_df(slate):
             'Position': pl['position'], 'Salary': pl['salary'],
             'Ownership': pl['ownership'], 'PlayerContestID': pl['draftable_id']})
         if pl['draftable_id']:
-            # key by (name, team) so two same-named players on different teams
-            # (e.g. Max Muncy LAD vs OAK) keep distinct upload ids
-            dk_ids.add_id(id_map, pl['name'], pl['team'], pl['draftable_id'])
+            # key by team/pos/salary so two same-named players (e.g. Max Muncy on
+            # two teams) keep distinct upload ids
+            dk_ids.add_id(id_map, pl['name'], pl['team'], pl['draftable_id'],
+                          pos=pl['position'], salary=pl['salary'])
     return pd.DataFrame(recs), id_map
 
 
