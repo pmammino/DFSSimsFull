@@ -291,9 +291,9 @@ def parse_dk_template(text):
     dkid = {}
     for r in rows[hdr + 1:]:
         if len(r) >= 20 and r[14].strip():
-            # col 13 = Name, 14 = ID, 18 = TeamAbbrev (keyed so same-named
-            # players on different teams don't collapse onto one id).
-            dk_ids.add_id(dkid, r[13], r[18], r[14])
+            # col 11 = Position, 13 = Name, 14 = ID, 16 = Salary, 18 = TeamAbbrev.
+            # Keyed with team/pos/salary so same-named players stay distinct.
+            dk_ids.add_id(dkid, r[13], r[18], r[14], pos=r[11], salary=r[16])
     return dkid
 
 
@@ -317,7 +317,7 @@ def parse_dk_export(text):
                 sal = 0
             recs.append({"FullName": nm, "Team": r[18].strip(),
                          "Position": r[11].strip(), "Salary": sal})
-            dk_ids.add_id(idmap, nm, r[18], r[14])
+            dk_ids.add_id(idmap, nm, r[18], r[14], pos=r[11], salary=sal)
     if not recs:
         return None
     return pd.DataFrame(recs), idmap
@@ -378,14 +378,18 @@ def ids_from_clean(df):
     cols = {_norm_col(c): c for c in df.columns}
 
     has_team = "Team" in df.columns
+    has_pos = "Position" in df.columns
+    has_sal = "Salary" in df.columns
 
     def harvest(orig):
         m = {}
         for _, r in df.iterrows():
             cid = _clean_id(r[orig])
             if cid:
-                # key by team so two same-named players stay distinct
-                dk_ids.add_id(m, r["FullName"], r["Team"] if has_team else "", cid)
+                # key by team/pos/salary so two same-named players stay distinct
+                dk_ids.add_id(m, r["FullName"], r["Team"] if has_team else "", cid,
+                              pos=r["Position"] if has_pos else "",
+                              salary=r["Salary"] if has_sal else None)
         return m
 
     # priority 1 — a contest / draftable ID column (what DK uploads require)
@@ -423,8 +427,7 @@ def ids_from_clean(df):
 
 
 def _split_cell(cell):
-    """A result cell is ``"Name (TEAM)"``; return (name, team). The team is what
-    lets the DK-id lookup pick the right one of two same-named players."""
+    """A result cell is ``"Name (TEAM)"``; return (name, team)."""
     s = str(cell)
     if s.endswith(")") and " (" in s:
         nm, tm = s.rsplit(" (", 1)
@@ -432,10 +435,38 @@ def _split_cell(cell):
     return s, ""
 
 
-def _lineup_ids(row, dkid):
-    """Resolve the DK id for every slot of a lineup row, using each player's team
-    to disambiguate same-named players. Returns the id list, or None if any
-    player can't be resolved (e.g. a clashing name whose team isn't in the map)."""
+def _players_to_ids(players, dkid):
+    """Resolve the DK id for each player OBJECT of a lineup (in slot order),
+    matching on salary/team/position so two same-named players (e.g. the two Max
+    Muncys) get their own id. Returns the id list, or None if any player has no
+    id at all. Using the pool player objects (not the display cell) gives the
+    exact salary, which is the reliable discriminator."""
+    ids = []
+    for pl in players:
+        cid = dk_ids.lookup(dkid, pl.Name, getattr(pl, "Team", ""),
+                            pos=getattr(pl, "Pos", ""),
+                            salary=getattr(pl, "Salary", None))
+        if cid is None:
+            return None
+        ids.append(cid)
+    return ids
+
+
+def _row_players(row, cands):
+    """The player objects for a result row, via its Candidate index into `cands`
+    (falls back to None when unavailable)."""
+    try:
+        return cands[int(row["Candidate"]) - 1]["players"]
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+
+
+def _lineup_ids(row, dkid, cands=None):
+    """DK ids for a result row. Prefers the candidate's player objects (exact
+    salary/team/pos); falls back to parsing name+team from the display cells."""
+    players = _row_players(row, cands) if cands is not None else None
+    if players is not None:
+        return _players_to_ids(players, dkid)
     ids = []
     for c in COLS:
         nm, tm = _split_cell(row[c])
@@ -449,7 +480,7 @@ def _lineup_ids(row, dkid):
 def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
                     pitcher_cap=1.0, team_cap=1.0, pair_cap=1.0,
                     core_cap=1.0, max_overlap=1.0, group_of=None,
-                    group_cap=1.0, player_caps=None, team_caps=None):
+                    group_cap=1.0, player_caps=None, team_caps=None, cands=None):
     """Pick n_select lineups from the ranked candidate results with the
     diversity-aware portfolio selector (per-player / stack-team / pairing /
     stack-core / value-group exposure caps + an overlap ceiling), map players to
@@ -474,7 +505,7 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
     w.writerow(SLOT)
     written = 0
     for row in chosen:
-        ids = _lineup_ids(row, dkid)   # team-aware: right id for same-named players
+        ids = _lineup_ids(row, dkid, cands)   # salary/team/pos-aware id resolution
         if ids is None:
             continue
         w.writerow(ids)
@@ -561,7 +592,7 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
     w.writerow(SLOT)
     written = 0
     for row in chosen:
-        ids = _lineup_ids(row, dkid)   # team-aware: right id for same-named players
+        ids = _lineup_ids(row, dkid, cands)   # salary/team/pos-aware id resolution
         if ids is None:
             continue
         w.writerow(ids)
@@ -606,17 +637,17 @@ def portfolio_return_chart(W, W_naive):
     ).properties(height=240)
 
 
-def rows_to_upload_csv(rows_df, dkid):
+def rows_to_upload_csv(rows_df, dkid, cands=None):
     """Emit a DK upload CSV for an explicit, already-ordered set of lineup rows
     (used by the 'export my marked selections' path). Lineups whose players
     aren't all mapped to a DK ID are skipped. Each player's id is resolved with
-    its team so two same-named players never get swapped."""
+    its salary/team/position so two same-named players never get swapped."""
     out = io.StringIO()
     w = csv.writer(out)
     w.writerow(SLOT)
     chosen = skipped = 0
     for _, row in rows_df.iterrows():
-        ids = _lineup_ids(row, dkid)
+        ids = _lineup_ids(row, dkid, cands)
         if ids is None:
             skipped += 1
             continue
@@ -2171,7 +2202,7 @@ with tabs[3]:
                     st.info("Mark some lineups above (tick the ✓ column), then export them here.")
                 else:
                     sel_df = res[res["Candidate"].isin(picked)]   # already in rank order
-                    csv_text, info = rows_to_upload_csv(sel_df, dkid)
+                    csv_text, info = rows_to_upload_csv(sel_df, dkid, sim.get("cands"))
                     if info["chosen"] == 0:
                         st.error("None of your marked lineups had a DK ID for every "
                                  "player — check that the slate file's IDs cover these "
@@ -2452,7 +2483,8 @@ with tabs[3]:
                         src, dkid, n_up, sort_by, hitter_cap, pitcher_cap, team_cap,
                         pair_cap=pair_cap, core_cap=core_cap, max_overlap=max_overlap,
                         group_of=group_of, group_cap=group_cap,
-                        player_caps=player_caps, team_caps=team_caps)
+                        player_caps=player_caps, team_caps=team_caps,
+                        cands=sim.get("cands"))
 
                 if info["chosen"] == 0:
                     st.error("No exportable lineups — players had no DK ID, or the caps "
