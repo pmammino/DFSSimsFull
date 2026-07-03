@@ -36,6 +36,7 @@ from stage_d import (load_sims, build_pool, lineups_to_df, score_matrix,
 from mlb_lineup_builder import Pool, Builder
 from portfolio import select_portfolio, select_portfolio_ev, detect_value_groups
 import portfolio_ev as pev
+import dk_ids
 from field_simulator import (normalize_to_slots, adjust_ownership,
                              beta_for_size, tilt_structures)
 from stack_signal import team_stack_ownership, apply_stack_ownership_boost
@@ -290,7 +291,9 @@ def parse_dk_template(text):
     dkid = {}
     for r in rows[hdr + 1:]:
         if len(r) >= 20 and r[14].strip():
-            dkid[normname(r[13])] = r[14].strip()
+            # col 13 = Name, 14 = ID, 18 = TeamAbbrev (keyed so same-named
+            # players on different teams don't collapse onto one id).
+            dk_ids.add_id(dkid, r[13], r[18], r[14])
     return dkid
 
 
@@ -314,7 +317,7 @@ def parse_dk_export(text):
                 sal = 0
             recs.append({"FullName": nm, "Team": r[18].strip(),
                          "Position": r[11].strip(), "Salary": sal})
-            idmap[normname(nm)] = r[14].strip()
+            dk_ids.add_id(idmap, nm, r[18], r[14])
     if not recs:
         return None
     return pd.DataFrame(recs), idmap
@@ -374,12 +377,15 @@ def ids_from_clean(df):
         return {}, None
     cols = {_norm_col(c): c for c in df.columns}
 
+    has_team = "Team" in df.columns
+
     def harvest(orig):
         m = {}
         for _, r in df.iterrows():
             cid = _clean_id(r[orig])
             if cid:
-                m[normname(r["FullName"])] = cid
+                # key by team so two same-named players stay distinct
+                dk_ids.add_id(m, r["FullName"], r["Team"] if has_team else "", cid)
         return m
 
     # priority 1 — a contest / draftable ID column (what DK uploads require)
@@ -416,6 +422,30 @@ def ids_from_clean(df):
     return {}, None
 
 
+def _split_cell(cell):
+    """A result cell is ``"Name (TEAM)"``; return (name, team). The team is what
+    lets the DK-id lookup pick the right one of two same-named players."""
+    s = str(cell)
+    if s.endswith(")") and " (" in s:
+        nm, tm = s.rsplit(" (", 1)
+        return nm, tm[:-1]
+    return s, ""
+
+
+def _lineup_ids(row, dkid):
+    """Resolve the DK id for every slot of a lineup row, using each player's team
+    to disambiguate same-named players. Returns the id list, or None if any
+    player can't be resolved (e.g. a clashing name whose team isn't in the map)."""
+    ids = []
+    for c in COLS:
+        nm, tm = _split_cell(row[c])
+        cid = dk_ids.lookup(dkid, nm, tm)
+        if cid is None:
+            return None
+        ids.append(cid)
+    return ids
+
+
 def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
                     pitcher_cap=1.0, team_cap=1.0, pair_cap=1.0,
                     core_cap=1.0, max_overlap=1.0, group_of=None,
@@ -430,7 +460,7 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
               "Top100 Rate": ["Top100", "Top10", "Wins"]}[sort_by]
 
     def eligible(nms):
-        return all(normname(n) in dkid for n in nms)
+        return all(dk_ids.has_name(dkid, n) for n in nms)
 
     chosen, info = select_portfolio(
         res_df, n_select, keymap, cols=COLS, hitc=HITC, eligible=eligible,
@@ -442,9 +472,15 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
     out = io.StringIO()
     w = csv.writer(out)
     w.writerow(SLOT)
+    written = 0
     for row in chosen:
-        nms = [str(row[c]).rsplit(" (", 1)[0] for c in COLS]
-        w.writerow([dkid[normname(n)] for n in nms])
+        ids = _lineup_ids(row, dkid)   # team-aware: right id for same-named players
+        if ids is None:
+            continue
+        w.writerow(ids)
+        written += 1
+    info["skipped_unmapped"] += info["chosen"] - written
+    info["chosen"] = written
     return out.getvalue(), info
 
 
@@ -500,7 +536,7 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
     pay = pev.candidate_payout_matrix(cand_scores, cut_scores, cut_places, prize)
 
     def eligible(nms):
-        return all(normname(n) in dkid for n in nms)
+        return all(dk_ids.has_name(dkid, n) for n in nms)
 
     chosen, info, W = select_portfolio_ev(
         short, n_select, pay, pev.utility(risk), cols=COLS, hitc=HITC,
@@ -523,9 +559,15 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
     out = io.StringIO()
     w = csv.writer(out)
     w.writerow(SLOT)
+    written = 0
     for row in chosen:
-        nms = [str(row[c]).rsplit(" (", 1)[0] for c in COLS]
-        w.writerow([dkid[normname(n)] for n in nms])
+        ids = _lineup_ids(row, dkid)   # team-aware: right id for same-named players
+        if ids is None:
+            continue
+        w.writerow(ids)
+        written += 1
+    info["skipped_unmapped"] += info["chosen"] - written
+    info["chosen"] = written
 
     extra = {"prize_summary": pev.payout_curve_summary(prize, entry_fee),
              "cost": info["chosen"] * float(entry_fee), "shortlist": M,
@@ -567,19 +609,18 @@ def portfolio_return_chart(W, W_naive):
 def rows_to_upload_csv(rows_df, dkid):
     """Emit a DK upload CSV for an explicit, already-ordered set of lineup rows
     (used by the 'export my marked selections' path). Lineups whose players
-    aren't all mapped to a DK ID are skipped."""
-    def names_of(row):
-        return [str(row[c]).rsplit(" (", 1)[0] for c in COLS]
+    aren't all mapped to a DK ID are skipped. Each player's id is resolved with
+    its team so two same-named players never get swapped."""
     out = io.StringIO()
     w = csv.writer(out)
     w.writerow(SLOT)
     chosen = skipped = 0
     for _, row in rows_df.iterrows():
-        nms = names_of(row)
-        if any(normname(n) not in dkid for n in nms):
+        ids = _lineup_ids(row, dkid)
+        if ids is None:
             skipped += 1
             continue
-        w.writerow([dkid[normname(n)] for n in nms])
+        w.writerow(ids)
         chosen += 1
     return out.getvalue(), {"chosen": chosen, "skipped_unmapped": skipped}
 
@@ -1266,7 +1307,7 @@ with tabs[0]:
                     # raw DKSalaries export: has salary/pos/team/ID but no ownership
                     base_df, id_map = export
                     st.info(f"Detected a DraftKings salaries export — "
-                            f"{len(base_df)} players, {len(id_map)} IDs captured for the "
+                            f"{len(base_df)} players, {dk_ids.count_ids(id_map)} IDs captured for the "
                             "upload export. Now add ownership for these players.")
                     own_up = st.file_uploader(
                         "Ownership CSV (columns: FullName, Ownership)", type=["csv"],
@@ -1330,7 +1371,7 @@ with tabs[0]:
         cc1, cc2, cc3 = st.columns(3)
         cc1.metric("Players in slate", len(dk_df))
         cc2.metric("Matched to sims", covered)
-        cc3.metric("DK IDs available", len(id_map) if id_map else 0)
+        cc3.metric("DK IDs available", dk_ids.count_ids(id_map) if id_map else 0)
         if covered == 0:
             st.error("None of the players in this slate matched the sim "
                      "universe — check names/teams. Nothing to simulate.")
@@ -2101,7 +2142,7 @@ with tabs[3]:
             # fallback if that file carried no player IDs.
             dkid = dict(sim.get("id_map") or {})
             if dkid:
-                st.caption(f"Using the {len(dkid)} player IDs from the slate file you "
+                st.caption(f"Using the {dk_ids.count_ids(dkid)} player IDs from the slate you "
                            "uploaded — no extra template needed.")
             else:
                 st.caption("Your slate file had no player IDs, so upload a DKSalaries "
