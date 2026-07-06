@@ -34,6 +34,31 @@ LG_PIT_VEC = dict(k_pct=0.215, bb_pct=0.082, hbp_per_bf=0.010,
                   tbf_per_ip=4.35, wp_per_pa=0.0, hand='R')
 
 
+# Map each lowercase per-PA event to its Statcast park-factor column on the
+# projection rows (1.0 = league-neutral). P_HBP / P_SF have no published factor.
+_VENUE_PF_COLS = {'p_k': 'pf_SO', 'p_bb': 'pf_BB', 'p_hr': 'pf_HR',
+                  'p_1b': 'pf_1B', 'p_2b': 'pf_2B', 'p_3b': 'pf_3B'}
+
+
+def _venue_factors(rows):
+    """Game-venue park factors = the HOME team's park. A home player's `pf_*`
+    columns already describe the home stadium, so we read them off any home-side
+    projection row (hitters or pitcher). Returned at full strength so the venue
+    applies to every hitter and pitcher in the game. Neutral (all 1.0) if no
+    home-side row carries park factors."""
+    for r in rows:
+        if r is None:
+            continue
+        pf_hr = r.get('pf_HR') if hasattr(r, 'get') else None
+        if pf_hr is not None and pd.notna(pf_hr):
+            out = {}
+            for ev, col in _VENUE_PF_COLS.items():
+                v = r.get(col, 1.0)
+                out[ev] = float(v) if pd.notna(v) else 1.0
+            return out
+    return {ev: 1.0 for ev in _VENUE_PF_COLS}
+
+
 def _norm(s):
     if not isinstance(s, str):
         return ''
@@ -68,30 +93,38 @@ def _row_for(df, name):
     return None
 
 
-def _hitter_vector(row, opp_hand, at_home):
-    """Pick the vL/vR split for the opposing pitcher's hand; park-adjust at home.
+def _hitter_vector(row, opp_hand, venue_pf):
+    """Pick the vL/vR split for the opposing pitcher's hand, then apply the
+    GAME-VENUE park factors at full strength (every PA in this game is at that
+    park, so no 81/81 home/road blend — that blend only belongs in the season
+    `_park` columns). `venue_pf` maps a lowercase event ('p_hr', ...) to a
+    multiplicative Statcast factor (1.0 = neutral). Applies to BOTH lineups —
+    the visiting hitter now inherits the venue exactly like the home hitter.
     Returns the per-PA event dict + R/RBI/SB rates the simulator expects."""
     suffix = '_vL' if opp_hand == 'L' else '_vR'
 
     def get(ev):
-        # prefer handedness split; fall back to park, then neutral
-        for s in (suffix, '_park', ''):
+        # prefer the (park-neutral) handedness split; fall back to neutral base.
+        # We deliberately do NOT fall back to the season `_park` column, so the
+        # venue factor below is never double-applied on top of a baked-in park.
+        for s in (suffix, ''):
             col = ev + s
             if col in row and pd.notna(row[col]):
-                v = float(row[col])
-                # if using the split, blend a touch of park when batting at home
-                if s == suffix and at_home:
-                    pcol = ev + '_park'
-                    if pcol in row and pd.notna(row[pcol]):
-                        # park already baked into neutral->park; nudge split by park/neutral ratio
-                        base = row.get(ev, np.nan)
-                        if pd.notna(base) and base:
-                            v *= float(row[pcol]) / float(base)
-                return max(0.0, v)
+                return max(0.0, float(row[col]))
         return 0.0
 
     p_1b, p_2b, p_3b, p_hr = get('P_1B'), get('P_2B'), get('P_3B'), get('P_HR')
     p_bb, p_hbp, p_k = get('P_BB'), get('P_HBP'), get('P_K')
+
+    # ── Game-venue park factors (full strength) ──────────────────────────────
+    # P_HBP / P_SF have no published factor -> passthrough. The sim treats the
+    # leftover PA mass as in-play outs, so we don't renormalize here.
+    p_1b *= venue_pf.get('p_1b', 1.0)
+    p_2b *= venue_pf.get('p_2b', 1.0)
+    p_3b *= venue_pf.get('p_3b', 1.0)
+    p_hr *= venue_pf.get('p_hr', 1.0)
+    p_bb *= venue_pf.get('p_bb', 1.0)
+    p_k  *= venue_pf.get('p_k', 1.0)
 
     # R / RBI / SB come from the projection (team-context + lineup slot already baked in)
     r_pa  = float(row['P_R'])  if 'P_R'  in row and pd.notna(row['P_R'])  else 0.11
@@ -103,8 +136,13 @@ def _hitter_vector(row, opp_hand, at_home):
                 r_pa=r_pa, rbi_pa=rbi_pa, p_sb=p_sb, proj_slot=slot)
 
 
-def _pitcher_vector(row, opp_lineup_hand_share, at_home):
-    """Blend the pitcher's vL/vR splits by the L/R share of the lineup faced."""
+def _pitcher_vector(row, opp_lineup_hand_share, venue_pf):
+    """Blend the pitcher's vL/vR splits by the L/R share of the lineup faced,
+    then apply the GAME-VENUE park factors at full strength to the per-PA event
+    rates (both pitchers in the game get the venue, not just the home arm).
+    ra9/era/tbf are left as the pitcher's neutral-skill anchors; the park's
+    run effect flows into the sim's ER through the (now park-inflated) hit and
+    HR counts in the earned-run traffic term."""
     sL = opp_lineup_hand_share.get('L', 0.4)
     sR = 1.0 - sL
 
@@ -113,11 +151,18 @@ def _pitcher_vector(row, opp_lineup_hand_share, at_home):
         if pd.notna(vL) and pd.notna(vR):
             v = sL * float(vL) + sR * float(vR)
         else:
-            v = float(row.get(ev + '_park', row.get(ev, 0.0)) or 0.0)
+            v = float(row.get(ev, 0.0) or 0.0)
         return max(0.0, v)
 
     p_1b, p_2b, p_3b, p_hr = get('P_1B'), get('P_2B'), get('P_3B'), get('P_HR')
     p_bb, p_hbp, p_k = get('P_BB'), get('P_HBP'), get('P_K')
+    # ── Game-venue park factors (full strength) on the rate events ───────────
+    p_1b *= venue_pf.get('p_1b', 1.0)
+    p_2b *= venue_pf.get('p_2b', 1.0)
+    p_3b *= venue_pf.get('p_3b', 1.0)
+    p_hr *= venue_pf.get('p_hr', 1.0)
+    p_bb *= venue_pf.get('p_bb', 1.0)
+    p_k  *= venue_pf.get('p_k', 1.0)
     hits_per_bf = p_1b + p_2b + p_3b + p_hr
     return dict(k_pct=p_k, bb_pct=p_bb, hbp_per_bf=p_hbp,
                 h_per_bf=hits_per_bf, hr_per_bf=p_hr,
@@ -169,8 +214,17 @@ def build_matchup_inputs(slate, hproj, pproj):
             # store the hand the OTHER side's hitters will see
             opp_hand['home' if side == 'away' else 'away'] = opp_hand_side
 
+        # Game-venue park factors (the HOME team's park). These apply to BOTH
+        # lineups and BOTH pitchers, since every PA in this game is at that park.
+        venue_rows = [_row_for(hproj, p['name']) for p in g['lineups']['home']]
+        for rk in ('starter', 'opener', 'primary'):
+            nm = g['pitchers']['home'].get(rk)
+            if nm:
+                venue_rows.append(_row_for(pproj, nm))
+        venue_pf = _venue_factors(venue_rows)
+        rec['venue_pf'] = venue_pf
+
         for side in ('away', 'home'):
-            at_home = (side == 'home')
             # lineup hand share (for pitcher split weighting): count L vs R+S→R bats
             hands = []
             lineup_vecs = []
@@ -178,7 +232,7 @@ def build_matchup_inputs(slate, hproj, pproj):
                 r = _row_for(hproj, p['name'])
                 hand = (r['BatSide'] if r is not None and pd.notna(r['BatSide']) else 'R')
                 hands.append(hand)
-                vec = _hitter_vector(r, opp_hand[side], at_home) if r is not None else dict(LG_HIT_VEC)
+                vec = _hitter_vector(r, opp_hand[side], venue_pf) if r is not None else dict(LG_HIT_VEC)
                 if r is None:
                     missing['hitters'].append(p['name'])
                 lineup_vecs.append({'name': p['name'], 'slot': p['slot'], 'pos': p['pos'],
@@ -194,7 +248,6 @@ def build_matchup_inputs(slate, hproj, pproj):
         for side in ('away', 'home'):
             opp_side = 'home' if side == 'away' else 'away'
             share = rec['lineup_hand_share'][opp_side]
-            at_home = (side == 'home')
             ps = g['pitchers'][side]
             rec['pitchers'][side] = {}
             for role_key in ('starter', 'opener', 'primary'):
@@ -206,7 +259,7 @@ def build_matchup_inputs(slate, hproj, pproj):
                     missing['pitchers'].append(nm)
                     vec = dict(LG_PIT_VEC); hand = 'R'
                 else:
-                    vec = _pitcher_vector(r, share, at_home); hand = vec['hand']
+                    vec = _pitcher_vector(r, share, venue_pf); hand = vec['hand']
                 rec['pitchers'][side][role_key] = {'name': nm, 'hand': hand, 'vec': vec}
         out['games'][gid] = rec
 
