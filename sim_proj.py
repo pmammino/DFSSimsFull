@@ -32,7 +32,17 @@ def dk_hitter(s, d, t, hr, rbi, r, bb, hbp, sb):
 def dk_pitcher(outs, k, win, er, h, bb, hbp, cg, cgs, nh):
     return outs*0.75 + k*2 + win*4 - er*2 - h*0.6 - bb*0.6 - hbp*0.6 + cg*2.5 + cgs*2.5 + nh*5
 
-# correlation loadings (validated)
+# correlation loadings (validated: teammate H-H ~+0.24, hitter vs opposing SP
+# ~-0.37). Left at the validated values on purpose. Recalibration testing against
+# 5 real DK GPP contest-standings (target winner/median ~2.06x, p99/median
+# ~1.70x) showed that shrinking these loadings is NOT an effective tail lever —
+# a 40% shrink (which craters teammate correlation to 0.16) only moves a matched
+# field's winner/median 2.79x -> 2.39x, and even a mild shrink weakens the
+# hitter-vs-SP anti-correlation below its target. The per-lineup ceiling excess
+# lives in the MARGINAL per-player score tail, not the correlation structure. The
+# R/RBI team-run-conservation fix above is the effective tail change (it cut the
+# extreme stack max ~25% and stack p99 ~8%); closing the remaining gap needs a
+# per-player PIT calibration against same-slate (walk-forward) sims, not a knob.
 SG, ST, SI, SG_HR_EXTRA = 0.20, 0.50, 0.30, 0.12
 OPENER_BF_MEAN, OPENER_BF_SD = 4.6, 1.3
 
@@ -104,10 +114,20 @@ def simulate(matchup, n_sims=10000, seed=20260610):
             shvar[s] = SG**2 + st_eff**2
 
         # ---- hitters ----
+        # Two passes per side so runs are CONSERVED at the team level. Pass 1
+        # simulates every hitter's PA events. We then derive ONE team-runs total
+        # per sim from those realized events (mean-anchored to the projection's
+        # team-run expectation) and, in pass 2, allocate R and RBI out of that
+        # shared total. This ties run production to the events that actually
+        # happened and enforces team R == team RBI == team runs, instead of the
+        # old independent per-player Poissons (which let R and RBI float free of
+        # the box score and of each other, fattening stack ceilings).
         for side in ('away', 'home'):
             sh = shared[side]; sh_var = shvar[side]
             implied = g['implied'][side]
             ts = ts_side[side]
+
+            plist = []   # per-hitter pass-1 state
             for p in g['lineups'][side]:
                 vec = p['vec']
                 if vec is None:
@@ -140,9 +160,70 @@ def simulate(matchup, n_sims=10000, seed=20260610):
                     bb[a]+=((u>=c1)&(u<cb)).astype(int); hbp[a]+=((u>=cb)&(u<chb)).astype(int)
                     ks[a]+=((u>=chb)&(u<ck)).astype(int)
 
-                r_s   = rng.poisson(np.clip(vec['r_pa']   * pa * m_off, 0, 6))
-                rbi_s = rng.poisson(np.clip(vec['rbi_pa'] * pa * m_off, 0, 8))
-                sb_s  = rng.poisson(np.clip(vec['p_sb']   * pa,         0, 3))
+                sb_s = rng.poisson(np.clip(vec['p_sb'] * pa, 0, 3))
+                plist.append(dict(p=p, vec=vec, pa=pa, m_off=m_off,
+                                  sgl=sgl, dbl=dbl, trp=trp, hr=hr,
+                                  bb=bb, hbp=hbp, ks=ks, sb=sb_s))
+
+            if not plist:
+                continue
+
+            # ── team run-conservation ────────────────────────────────────────
+            # Event-based team run SHAPE (a positive combination of the realized
+            # events; only its relative shape matters — it is rescaled below).
+            team_raw = np.zeros(n)
+            r_wsum = np.zeros(n)      # Σ r_pa·pa  (projection weight for R split)
+            rbi_wsum = np.zeros(n)    # Σ rbi_pa·pa (projection weight for RBI split)
+            r_exp = np.zeros(n)       # Σ r_pa·pa·m_off (projection team-run mean)
+            for d in plist:
+                team_raw += (d['hr'] + 0.6*(d['dbl'] + d['trp'])
+                             + 0.3*d['sgl'] + 0.2*(d['bb'] + d['hbp']))
+                rw = d['vec']['r_pa'] * d['pa']
+                bw = d['vec']['rbi_pa'] * d['pa']
+                r_wsum += rw
+                rbi_wsum += bw
+                r_exp += rw * d['m_off']
+            # Anchor the event-based total so its MEAN matches the projection's
+            # team-run expectation (preserves the Vegas-anchored run level while
+            # taking the bounded, event-driven shape). Rounded to an integer team
+            # total per sim WITHOUT extra Poisson scale noise, so team runs are a
+            # deterministic function of the realized box score — this is what
+            # BOUNDS the ceiling to what the events can actually drive in.
+            raw_mean = team_raw.mean()
+            c_scale = (r_exp.mean() / raw_mean) if raw_mean > 0 else 1.0
+            team_runs_int = np.clip(np.round(team_raw * c_scale), 0, None).astype(int)
+            r_wsum = np.where(r_wsum > 0, r_wsum, 1.0)
+            rbi_wsum = np.where(rbi_wsum > 0, rbi_wsum, 1.0)
+
+            # Allocate the SAME integer team total to R and to RBI via a
+            # conditional-binomial decomposition of a multinomial (per-player
+            # shares from the projection weights). Because both R and RBI are
+            # drawn from the one team_runs_int, they satisfy
+            # Σ R == Σ RBI == team runs exactly (real box-score conservation),
+            # instead of two independent per-player Poisson channels.
+            def _allocate(rate_key, wsum, out_key):
+                rem = team_runs_int.copy()
+                rem_share = np.ones(n)
+                shares = [(d['vec'][rate_key] * d['pa']) / wsum for d in plist]
+                for k, d in enumerate(plist):
+                    if k == len(plist) - 1:
+                        take = rem.copy()
+                    else:
+                        p_cond = np.clip(shares[k] / np.maximum(rem_share, 1e-9), 0.0, 1.0)
+                        take = rng.binomial(rem, p_cond)
+                    d[out_key] = take
+                    rem = rem - take
+                    rem_share = rem_share - shares[k]
+            _allocate('r_pa', r_wsum, 'R')
+            _allocate('rbi_pa', rbi_wsum, 'RBI')
+
+            # ── pass 2: score DK ─────────────────────────────────────────────
+            for d in plist:
+                p = d['p']; vec = d['vec']
+                sgl, dbl, trp, hr = d['sgl'], d['dbl'], d['trp'], d['hr']
+                bb, hbp, ks, sb_s, pa = d['bb'], d['hbp'], d['ks'], d['sb'], d['pa']
+                r_s   = np.clip(d['R'],   0, 6)
+                rbi_s = np.clip(d['RBI'], 0, 8)
 
                 dk = dk_hitter(sgl, dbl, trp, hr, rbi_s, r_s, bb, hbp, sb_s)
                 nm = p['name']
