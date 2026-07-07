@@ -186,6 +186,10 @@ def select_portfolio(res_df, n_select, sort_cols, *, cols, hitc,
         "distinct_pairs": len(pairc),
         "distinct_cores": len(corec),
         "distinct_primaries": len(teamc),
+        # full exposure breakdown (counts over the chosen set)
+        "player_expo": dict(expo),
+        "team_expo": dict(teamc),
+        "pitchers": sorted(pitchers),
     }
     return chosen, info
 
@@ -339,6 +343,10 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
         "distinct_pairs": len(pairc),
         "distinct_cores": len(corec),
         "distinct_primaries": len(teamc),
+        # full exposure breakdown (counts over the chosen set)
+        "player_expo": dict(expo),
+        "team_expo": dict(teamc),
+        "pitchers": sorted(pitchers),
         # portfolio outcome (full sims)
         "exp_return": float(W.mean()),
         "floor_p10": float(np.percentile(W, 10)),

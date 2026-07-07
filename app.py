@@ -29,7 +29,6 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import contest_review as cr
 
 from stage_d import (load_sims, build_pool, lineups_to_df, score_matrix,
                      norm as normname, COLS, HITC, SLOT)
@@ -1278,10 +1277,10 @@ c2.metric("Pitchers simmed", n_pit)
 c3.metric("Sims available", f"{n_sim:,}")
 
 
-tabs = st.tabs(["⚙️  Setup", "📊  Players", "🏆  Results", "⬇️  Export", "🔍  Review"])
+tabs = st.tabs(["⚙️  Setup", "📊  Players", "🏆  Results", "⬇️  Export"])
 
 with tabs[0]:
-    st.subheader("1 · Choose your slate")
+    st.subheader("Choose your slate")
 
     dk_df = None
     csv_ok = False
@@ -1501,7 +1500,7 @@ with tabs[0]:
     # --------------------------------------------------------------------------- #
     # Step 2 — forced decisions, gated behind a Run button
     # --------------------------------------------------------------------------- #
-    st.subheader("2 · Make your selections, then run")
+    st.subheader("Make your selections, then run")
 
     with st.form("contest_form", clear_on_submit=False):
         fc1, fc2, fc3 = st.columns(3)
@@ -1899,11 +1898,11 @@ with tabs[0]:
         st.session_state["_goto_players"] = True
 
 
-    # --------------------------------------------------------------------------- #
-    # Results + DK upload  (rendered from session_state so widget tweaks below
-    # don't trigger a re-simulation)
-    # --------------------------------------------------------------------------- #
-
+# --------------------------------------------------------------------------- #
+# Players tab — per-player projected ranges & thresholds.
+# The Results and Export tabs below render from st.session_state["sim"], so
+# tweaking their widgets doesn't trigger a re-simulation.
+# --------------------------------------------------------------------------- #
 with tabs[1]:
     with st.expander("📊 Players — projected ranges & thresholds", expanded=True):
         st.caption("Per-player DK-point distribution from the current sims: projected "
@@ -1950,8 +1949,8 @@ with tabs[1]:
 sim = st.session_state.get("sim")
 with tabs[2]:
     if sim is None:
-        st.info("Upload your slate file and make all three selections above, "
-                "then press **Run simulation**.")
+        st.info("On the **Setup** tab, upload your slate file and make all three "
+                "selections, then press **Run simulation**.")
     else:
         res = sim["res"]
         K = sim["K"]
@@ -2167,7 +2166,7 @@ with tabs[3]:
     if sim is None:
         st.info("Run a simulation first (Setup tab) to build a DraftKings upload.")
     else:
-            st.subheader("3 · Build a DraftKings upload file")
+            st.subheader("Build a DraftKings upload file")
 
             # IDs come from the slate file you already uploaded; a template is only a
             # fallback if that file carried no player IDs.
@@ -2513,6 +2512,83 @@ with tabs[3]:
                         file_name=f"DK_upload_{info['chosen']}.csv",
                         mime="text/csv", type="primary", width="stretch")
 
+                    # ---- exposure breakdown (player & team) ----
+                    _pexpo = info.get("player_expo") or {}
+                    _texpo = info.get("team_expo") or {}
+                    _n_lu = info["chosen"] or 1
+                    if _pexpo or _texpo:
+                        _meta = sim.get("players_meta") or {}
+                        _pset = set(info.get("pitchers") or [])
+                        with st.expander(
+                                "Exposure breakdown (player & team)",
+                                expanded=False):
+                            st.caption(
+                                f"How the {info['chosen']} exported lineups spread "
+                                "across players and stack teams. **Exposure** is the "
+                                "share of exported lineups the player (or primary "
+                                "stack team) appears in.")
+                            ec1, ec2 = st.columns([3, 2])
+
+                            with ec1:
+                                st.markdown("**Player exposure**")
+                                _prows = []
+                                for _nm, _ct in _pexpo.items():
+                                    _m = _meta.get(_nm, {})
+                                    _prows.append({
+                                        "Player": _nm,
+                                        "Pos": ("P" if _nm in _pset
+                                                else _m.get("pos", "")),
+                                        "Team": _m.get("team", ""),
+                                        "Lineups": int(_ct),
+                                        "Exposure": int(_ct) / _n_lu,
+                                    })
+                                _pdf = pd.DataFrame(_prows).sort_values(
+                                    ["Lineups", "Player"],
+                                    ascending=[False, True]).reset_index(drop=True)
+                                st.dataframe(
+                                    _pdf, hide_index=True, width="stretch",
+                                    column_config={
+                                        "Lineups": st.column_config.NumberColumn(
+                                            help=f"of {info['chosen']} lineups"),
+                                        "Exposure": st.column_config.ProgressColumn(
+                                            format="percent", min_value=0.0,
+                                            max_value=1.0),
+                                    })
+                                st.download_button(
+                                    "⬇ Player exposure CSV",
+                                    _pdf.assign(Exposure=(_pdf["Exposure"] * 100)
+                                                .round(1)).to_csv(index=False)
+                                    .encode(),
+                                    file_name=f"player_exposure_{info['chosen']}.csv",
+                                    mime="text/csv", width="stretch")
+
+                            with ec2:
+                                st.markdown("**Stack-team exposure (primary)**")
+                                _trows = [{
+                                    "Team": _tm,
+                                    "Lineups": int(_ct),
+                                    "Exposure": int(_ct) / _n_lu,
+                                } for _tm, _ct in _texpo.items()]
+                                _tdf = pd.DataFrame(_trows).sort_values(
+                                    ["Lineups", "Team"],
+                                    ascending=[False, True]).reset_index(drop=True)
+                                st.dataframe(
+                                    _tdf, hide_index=True, width="stretch",
+                                    column_config={
+                                        "Lineups": st.column_config.NumberColumn(
+                                            help=f"of {info['chosen']} lineups"),
+                                        "Exposure": st.column_config.ProgressColumn(
+                                            format="percent", min_value=0.0,
+                                            max_value=1.0),
+                                    })
+                                st.download_button(
+                                    "⬇ Team exposure CSV",
+                                    _tdf.assign(Exposure=(_tdf["Exposure"] * 100)
+                                                .round(1)).to_csv(index=False)
+                                    .encode(),
+                                    file_name=f"team_exposure_{info['chosen']}.csv",
+                                    mime="text/csv", width="stretch")
+
                     # ---- payout-aware coverage visualization ----
                     if ev_mode and W is not None and ev_extra:
                         ps = ev_extra["prize_summary"]
@@ -2547,665 +2623,6 @@ with tabs[3]:
                             "portfolio-level win/cash metric. Compared against a "
                             "top-N-by-rank set of the same size, drawn from the same "
                             "candidate pool.")
-
-
-# --------------------------------------------------------------------------- #
-# Tab 4 — Review (post-slate grading)
-# --------------------------------------------------------------------------- #
-with tabs[4]:
-    st.subheader("4 · Post-Slate Review")
-    st.caption(
-        "Upload the DraftKings contest-standings CSV (available the day after a slate) "
-        "and enter your DraftKings username. The tool finds all your submitted entries, "
-        "shows how they actually placed, then runs your portfolio against the real field "
-        "using the pre-slate projection sims to show the full distribution of expected outcomes."
-    )
-
-    contest_file = st.file_uploader(
-        "Contest standings CSV (DK export)",
-        type=["csv"],
-        key="review_contest_csv",
-        help="DraftKings: My Contests → a past contest → Export standings.",
-    )
-
-    if contest_file is None:
-        st.info("Upload a contest standings CSV above to begin the review.")
-    else:
-        # Cache parsed contest in session state so username edits don't re-parse
-        _rv_key = f"review_contest_{contest_file.name}_{contest_file.size}"
-        if st.session_state.get("_rv_key") != _rv_key:
-            try:
-                st.session_state["_rv_contest"] = cr.parse_contest_csv(contest_file.getvalue())
-                st.session_state["_rv_key"] = _rv_key
-            except Exception as _e:
-                st.error(f"Could not parse the contest CSV: {_e}")
-                st.session_state.pop("_rv_contest", None)
-
-        contest_data = st.session_state.get("_rv_contest")
-
-        if contest_data is not None and contest_data.n_entries == 0:
-            st.error("No contest entries found — check that this is a DK standings export.")
-            contest_data = None
-
-        if contest_data is not None:
-            _scores = contest_data.scores
-            _top10_line = contest_data.percentile_score(0.90)
-            _cash_line = contest_data.percentile_score(0.50)
-
-            # ---- headline field metrics ----
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Field entries", f"{contest_data.n_entries:,}")
-            m2.metric("Winner score", f"{_scores.max():.2f}")
-            m3.metric("Top-10% line", f"{_top10_line:.2f}")
-            m4.metric("Median / cash line", f"{_cash_line:.2f}")
-
-            # ---- username ----
-            st.divider()
-            _uname = st.text_input(
-                "Your DraftKings username",
-                placeholder="e.g. JD1230",
-                key="rv_username",
-                help="Finds all your entries — handles multi-entry format like 'JD1230 (3/5)'.",
-            )
-
-            _user_entries: list = []
-            if _uname.strip():
-                _user_entries = cr.find_user_entries(contest_data, _uname.strip())
-                if not _user_entries:
-                    _all_users = cr.list_usernames(contest_data)
-                    _suggestions = [u for u in _all_users
-                                    if _uname.strip().lower() in u.lower()][:5]
-                    if _suggestions:
-                        st.warning(
-                            f"No entries for **{_uname}**. "
-                            f"Did you mean: {', '.join(_suggestions)}?"
-                        )
-                    else:
-                        st.warning(f"No entries found for **{_uname}**.")
-                else:
-                    st.success(f"Found **{len(_user_entries)}** entr{'y' if len(_user_entries) == 1 else 'ies'} for **{_uname}**.")
-
-            # ---- rebuild sims for this slate date -----------------------
-            # Reproduce the slate as if it were that day: fetch that date's
-            # lineups + matchups + Vegas from the feeds and run the full
-            # projection sim, so the portfolio is evaluated against the sims
-            # that *would* have driven the slate — not whatever happens to be
-            # sitting in deliverables/.
-            st.divider()
-            st.markdown("**Slate simulation**")
-            _rd1, _rd2 = st.columns([1, 2])
-            with _rd1:
-                _slate_date = st.text_input(
-                    "Slate date (YYYY-MM-DD)",
-                    value=st.session_state.get("_rv_slate_date", ""),
-                    key="rv_slate_date_input",
-                    placeholder="2026-06-25",
-                    help="The date this contest was played. The tool fetches that "
-                         "day's lineups/matchups/Vegas and re-runs the sim for it.",
-                )
-            with _rd2:
-                st.caption(
-                    "Rebuilds the correlated projection sims **as if running that "
-                    "day's slate** — same pipeline as a live slate, but for the "
-                    "contest date. Reuses the current player projections (skill "
-                    "models are season-level) and only re-ingests the slate + "
-                    "re-simulates. Takes a minute or two."
-                )
-                _do_rebuild = st.button(
-                    "🔄 Rebuild sims for this slate",
-                    key="rv_rebuild_btn",
-                    type="primary",
-                    disabled=not _slate_date.strip(),
-                )
-
-            if _do_rebuild and _slate_date.strip():
-                _dt = _slate_date.strip()
-                with st.status(f"Rebuilding sims for {_dt}…", expanded=True) as _stat:
-                    _ok, _out = run_script(
-                        ["run_slate.py", "--date", _dt],
-                        f"Historical slate sim ({_dt})", _stat)
-                    if _ok:
-                        _h3 = os.path.join(DELIV, "hitter_dk_sims.npy")
-                        _p3 = os.path.join(DELIV, "pitcher_dk_sims.npy")
-                        try:
-                            _Hd = np.load(_h3, allow_pickle=True).item()
-                            _Pd = np.load(_p3, allow_pickle=True).item()
-                            st.session_state["_rv_sims"] = {
-                                "date": _dt, "H": _Hd, "P": _Pd}
-                            st.session_state["_rv_slate_date"] = _dt
-                            # bust the cached portfolio sim so it recomputes
-                            st.session_state.pop("_port_sim_key", None)
-                            _stat.update(label=f"Rebuilt sims for {_dt} "
-                                         f"({len(_Hd) + len(_Pd):,} players).",
-                                         state="complete")
-                        except Exception as _e:
-                            _stat.update(label="Rebuild ran but sims failed to "
-                                         f"load: {_e}", state="error")
-                    else:
-                        _stat.update(label="Rebuild failed.", state="error")
-                        st.error("Slate rebuild failed — see the log below. The "
-                                 "feed may not have lineups for that date, or a "
-                                 "pipeline step errored.\n\n"
-                                 f"```\n{_tail(_out)}\n```")
-
-            # ---- load sim scores ----------------------------------------
-            # Priority: 1) sims rebuilt for THIS slate date (most correct)
-            #           2) in-session sim run
-            #           3) deliverables/ on disk (fallback — may be a different slate)
-            _sim_scores_dict: dict[str, np.ndarray] = {}
-            _proj_pts: dict[str, float] = {}
-            _proj_own: dict[str, float] = {}
-            _sim_loaded = False
-            _sim_source = ""        # human-readable provenance label
-            _sim_is_rebuilt = False
-            _sim_is_fallback = False
-
-            _raw_H: dict = {}
-            _raw_P: dict = {}
-
-            _rebuilt = st.session_state.get("_rv_sims")
-            if _rebuilt:
-                # 1) Sims rebuilt for a slate date in this session
-                _raw_H = _rebuilt.get("H", {})
-                _raw_P = _rebuilt.get("P", {})
-                _sim_source = f"rebuilt slate sim for {_rebuilt.get('date', '?')}"
-                _sim_is_rebuilt = True
-            elif sim is not None:
-                # 2) In-session sim run (Setup tab)
-                _raw_H = sim.get("H", {})
-                _raw_P = sim.get("P", {})
-                _sim_source = "current session sim"
-            else:
-                # 3) Deliverables folder on disk
-                _h2 = os.path.join(DELIV, "hitter_dk_sims.npy")
-                _p2 = os.path.join(DELIV, "pitcher_dk_sims.npy")
-                if os.path.exists(_h2) and os.path.exists(_p2):
-                    try:
-                        _raw_H = np.load(_h2, allow_pickle=True).item()
-                        _raw_P = np.load(_p2, allow_pickle=True).item()
-                        _deliv_date = ""
-                        for _mf in glob.glob(os.path.join(DELIV, "sim_manifest_*.json")):
-                            try:
-                                _deliv_date = json.load(open(_mf)).get("date", "")
-                            except Exception:
-                                pass
-                        _sim_source = (
-                            f"deliverables/ (from {_deliv_date})" if _deliv_date
-                            else "deliverables/")
-                        _sim_is_fallback = True
-                    except Exception:
-                        pass
-
-            for _d in (_raw_H, _raw_P):
-                for _k, _v in _d.items():
-                    _sim_scores_dict[normname(_k)] = np.asarray(_v, dtype=np.float32)
-
-            _sim_loaded = bool(_sim_scores_dict)
-
-            # Projected means from sim arrays (for Player Actuals tab)
-            if _sim_loaded:
-                for _k, _arr in _sim_scores_dict.items():
-                    try:
-                        _proj_pts[_k] = float(_arr.mean())
-                    except Exception:
-                        pass
-
-            # Projected ownership from the slate file used in the current sim
-            if sim is not None:
-                _sim_dk = sim.get("dk_df")
-                if _sim_dk is not None and isinstance(_sim_dk, pd.DataFrame):
-                    for _, _row in _sim_dk.iterrows():
-                        _nn = normname(str(_row.get("FullName", "")))
-                        try:
-                            _proj_own[_nn] = float(_row.get("Ownership", 0) or 0)
-                        except Exception:
-                            pass
-
-            if _sim_loaded:
-                _icon = "✅" if _sim_is_rebuilt else ("⚠️" if _sim_is_fallback else "ℹ️")
-                _cov_note = (
-                    f"{_icon} Projection sims: **{len(_sim_scores_dict):,} players** "
-                    f"from {_sim_source}.")
-                if _sim_is_fallback:
-                    _cov_note += (
-                        "  \n_These may be from a different slate. Enter the contest "
-                        "date above and click **Rebuild sims for this slate** for an "
-                        "accurate evaluation._")
-                st.caption(_cov_note)
-            else:
-                st.warning(
-                    "No projection sims available. Enter the contest's slate date "
-                    "above and click **Rebuild sims for this slate**, or run a "
-                    "simulation on the Setup tab.")
-
-            # ---- grade user entries (actual results) ----
-            _graded_result = None
-            if _user_entries:
-                _graded_result = cr.grade_user_entries(contest_data, _user_entries)
-
-            # ---- portfolio sim (computed on demand) ----
-            _port_sim: "cr.PortfolioSimResult | None" = None
-
-            # ---- sub-tabs --------------------------------------------------
-            rv_tab1, rv_tab2, rv_tab3, rv_tab4 = st.tabs(
-                ["📈 Player Actuals", "🗂 Field Scores",
-                 "🏅 Actual Results", "📊 Portfolio Sim"]
-            )
-
-            # ================================================================
-            # Tab 1 — Player Actuals
-            # ================================================================
-            with rv_tab1:
-                actuals_df = cr.build_player_sim_table(
-                    contest_data,
-                    sim_scores=_sim_scores_dict if _sim_loaded else None,
-                    projected=_proj_pts if _proj_pts else None,
-                    proj_own=_proj_own if _proj_own else None,
-                )
-
-                _pos_filter = st.multiselect(
-                    "Filter by position", ["P", "C", "1B", "2B", "3B", "SS", "OF"],
-                    default=[], key="rv_pos_filter")
-                _adf = actuals_df
-                if _pos_filter:
-                    _adf = _adf[_adf["Position"].isin(_pos_filter)]
-
-                _grad_col = "Actual %ile" if "Actual %ile" in _adf.columns else "Actual FPTS"
-                st.dataframe(
-                    _adf.style.background_gradient(subset=[_grad_col], cmap="RdYlGn"),
-                    width="stretch", hide_index=True)
-
-                if _sim_loaded and "Actual %ile" in actuals_df.columns:
-                    _avg_pct = actuals_df["Actual %ile"].mean()
-                    st.caption(
-                        f"Slate-wide average player percentile in sim: **{_avg_pct:.0f}th** — "
-                        + ("slate ran cold vs projections." if _avg_pct < 45
-                           else "slate ran hot vs projections." if _avg_pct > 55
-                           else "slate ran close to projected median.")
-                    )
-
-                st.download_button(
-                    "⬇ Download player actuals CSV",
-                    actuals_df.to_csv(index=False).encode(),
-                    file_name="player_actuals.csv",
-                    mime="text/csv")
-
-            # ================================================================
-            # Tab 2 — Field Scores
-            # ================================================================
-            with rv_tab2:
-                _score_df = pd.DataFrame({"Score": _scores})
-                _hist = (
-                    alt.Chart(_score_df)
-                    .mark_bar(color="#A020FE", opacity=0.75)
-                    .encode(
-                        alt.X("Score:Q", bin=alt.Bin(maxbins=60), title="Score (DK pts)"),
-                        alt.Y("count()", title="# Lineups"),
-                        tooltip=["count()"],
-                    )
-                )
-                _cash_rule = (
-                    alt.Chart(pd.DataFrame({"x": [_cash_line]}))
-                    .mark_rule(color="#00c853", strokeWidth=2, strokeDash=[4, 4])
-                    .encode(x="x:Q")
-                )
-                _top10_rule = (
-                    alt.Chart(pd.DataFrame({"x": [_top10_line]}))
-                    .mark_rule(color="#ff6d00", strokeWidth=2, strokeDash=[4, 4])
-                    .encode(x="x:Q")
-                )
-
-                _user_rules = alt.layer()
-                if _graded_result:
-                    _user_pts_df = pd.DataFrame(
-                        {"x": [g.actual_score for g in _graded_result.graded]})
-                    _user_rules = (
-                        alt.Chart(_user_pts_df)
-                        .mark_rule(color="#00bcd4", strokeWidth=1.5, opacity=0.8)
-                        .encode(x="x:Q")
-                    )
-
-                st.altair_chart(
-                    _hist + _cash_rule + _top10_rule + _user_rules,
-                    width="stretch")
-                _leg = (f"🟢 Cash line ({_cash_line:.2f}) · "
-                        f"🟠 Top-10% line ({_top10_line:.2f})")
-                if _graded_result:
-                    _leg += " · 🔵 Your lineups"
-                st.caption(_leg)
-
-                _top_n = st.slider("Show top N lineups", 5, 100, 20, key="rv_top_n")
-                st.dataframe(cr.entries_to_df(contest_data, _top_n),
-                             width="stretch", hide_index=True)
-
-            # ================================================================
-            # Tab 3 — Actual Results
-            # ================================================================
-            with rv_tab3:
-                if not _user_entries:
-                    st.info("Enter your DraftKings username above to see your results.")
-                else:
-                    _gl = _graded_result.graded
-                    _avg_score = np.mean([g.actual_score for g in _gl])
-                    _avg_pct = np.mean([g.field_pct for g in _gl]) * 100
-                    _best_g = max(_gl, key=lambda g: g.actual_score)
-
-                    gc1, gc2, gc3, gc4 = st.columns(4)
-                    gc1.metric("Lineups", len(_gl))
-                    gc2.metric("Avg score", f"{_avg_score:.2f}")
-                    gc3.metric("Avg %ile beaten", f"{_avg_pct:.1f}%")
-                    gc4.metric("Best rank", f"{_best_g.field_rank:,} / {contest_data.n_entries:,}")
-
-                    st.dataframe(
-                        cr.graded_to_df(_graded_result).style.background_gradient(
-                            subset=["Actual Score"], cmap="YlGn"),
-                        width="stretch", hide_index=True)
-
-                    # Scatter: actual score vs field rank
-                    _sc_df = pd.DataFrame([{
-                        "Entry": g.entry_name,
-                        "Score": g.actual_score,
-                        "Field Rank": g.field_rank,
-                        "Field %ile": round(g.field_pct * 100, 1),
-                    } for g in _gl])
-                    _sc_chart = (
-                        alt.Chart(_sc_df)
-                        .mark_circle(size=90, color="#A020FE")
-                        .encode(
-                            x=alt.X("Score:Q", title="Actual Score"),
-                            y=alt.Y("Field Rank:Q", title="Field Rank",
-                                    scale=alt.Scale(reverse=True)),
-                            tooltip=["Entry", "Score", "Field Rank", "Field %ile"],
-                        )
-                    )
-                    _cl_rule = (
-                        alt.Chart(pd.DataFrame({"v": [_cash_line]}))
-                        .mark_rule(color="#00c853", strokeWidth=2, strokeDash=[4, 4])
-                        .encode(x="v:Q")
-                    )
-                    st.altair_chart(_sc_chart + _cl_rule, width="stretch")
-                    st.caption("🟢 dashed = cash line")
-
-                    # Per-lineup player breakdown with sim percentiles
-                    _sel_entry = st.selectbox(
-                        "Inspect a lineup",
-                        [g.entry_name for g in _gl],
-                        key="rv_lineup_inspect")
-                    _sel_g = next(g for g in _gl if g.entry_name == _sel_entry)
-                    _bd_rows = []
-                    for _pos, _pname in _sel_g.players:
-                        _pa = contest_data.player_actual(_pname)
-                        _bd: dict = {
-                            "Position": _pos,
-                            "Player": _pname,
-                            "Actual FPTS": _pa.fpts if _pa else "—",
-                        }
-                        _sim_arr = _sim_scores_dict.get(normname(_pname))
-                        if _sim_arr is not None and _pa is not None:
-                            _bd["Sim Mean"] = round(float(_sim_arr.mean()), 1)
-                            _bd["Sim P10"] = round(float(np.percentile(_sim_arr, 10)), 1)
-                            _bd["Sim P90"] = round(float(np.percentile(_sim_arr, 90)), 1)
-                            _bd["Actual %ile"] = round(
-                                float(np.mean(_sim_arr <= _pa.fpts) * 100), 0)
-                        _bd_rows.append(_bd)
-                    _bd_df = pd.DataFrame(_bd_rows)
-                    _bd_style = _bd_df.style
-                    if "Actual %ile" in _bd_df.columns:
-                        _bd_style = _bd_style.background_gradient(
-                            subset=["Actual %ile"], cmap="RdYlGn", vmin=0, vmax=100)
-                    st.dataframe(_bd_style, width="stretch", hide_index=True)
-
-            # ================================================================
-            # Tab 4 — Portfolio Sim
-            # Uses the projection sims + the actual field composition to show
-            # the distribution of expected outcomes across all 10,000 sim runs.
-            # ================================================================
-            with rv_tab4:
-                if not _user_entries:
-                    st.info("Enter your DraftKings username above to run the portfolio simulation.")
-                elif not _sim_loaded:
-                    st.warning(
-                        "No projection sims available — run a simulation on the Setup tab first."
-                    )
-                else:
-                    st.caption(
-                        "Your submitted lineups are scored against the **actual field** "
-                        "from this contest using the pre-slate projection sim distributions. "
-                        "This shows the full range of outcomes across all simulated universes, "
-                        "not just the one that happened."
-                    )
-
-                    _psim_cache_key = (
-                        f"port_sim_{_rv_key}_{_uname}_{len(_user_entries)}"
-                        f"_{len(_sim_scores_dict)}_{_sim_source}"
-                    )
-                    if st.session_state.get("_port_sim_key") != _psim_cache_key:
-                        with st.spinner(
-                            f"Simulating {len(_user_entries)} lineup(s) against "
-                            f"{contest_data.n_entries:,} field entries over "
-                            f"{len(next(iter(_sim_scores_dict.values()))):,} sims…"
-                        ):
-                            _port_sim = cr.simulate_portfolio_vs_field(
-                                contest_data, _sim_scores_dict, _user_entries)
-                        st.session_state["_port_sim"] = _port_sim
-                        st.session_state["_port_sim_key"] = _psim_cache_key
-                    else:
-                        _port_sim = st.session_state.get("_port_sim")
-
-                    if _port_sim is not None:
-                        # ---- coverage warning ----
-                        if _port_sim.field_sim_coverage < 0.85:
-                            st.warning(
-                                f"Field sim coverage is **{_port_sim.field_sim_coverage * 100:.0f}%** — "
-                                "the projection sims pre-date this contest's player pool. "
-                                "Results are indicative but will improve with same-day sims."
-                            )
-
-                        # ---- portfolio headline metrics ----
-                        st.subheader("Portfolio-level (any lineup)")
-                        ph1, ph2, ph3, ph4 = st.columns(4)
-                        ph1.metric(
-                            "P(win contest)",
-                            f"{_port_sim.portfolio_win_pct:.2f}%",
-                            help="% of 10K sims where at least one of your lineups finishes #1",
-                        )
-                        ph2.metric(
-                            "P(any top-10 finish)",
-                            f"{_port_sim.portfolio_top10_pct:.2f}%",
-                            help="% of sims with at least one lineup in the top 10",
-                        )
-                        ph3.metric(
-                            "P(any top-1% finish)",
-                            f"{_port_sim.portfolio_top1pct_pct:.1f}%",
-                            help="% of sims with at least one lineup in the top 1% of the field",
-                        )
-                        ph4.metric(
-                            "P(any top-10% finish)",
-                            f"{_port_sim.portfolio_top10pct_pct:.1f}%",
-                            help="% of sims with at least one lineup finishing in the top 10% (GPP cash line)",
-                        )
-
-                        # ---- sim-derived field lines ----
-                        st.caption(
-                            f"Sim-projected field lines — "
-                            f"Cash: **{_port_sim.sim_cash_line:.1f} pts** · "
-                            f"Top-10%: **{_port_sim.sim_top10_line:.1f} pts** · "
-                            f"Winner range: **{_port_sim.field_proj_p99:.1f}+ pts** "
-                            f"(actual: cash {_cash_line:.1f} · top-10% {_top10_line:.1f} · "
-                            f"winner {_scores.max():.1f})"
-                        )
-
-                        st.divider()
-
-                        # ---- per-lineup table ----
-                        st.subheader("Per-lineup breakdown")
-                        _psim_df = cr.portfolio_sim_to_df(_port_sim)
-                        st.dataframe(
-                            _psim_df.style.background_gradient(
-                                subset=["Top-10% field"], cmap="YlGn"),
-                            width="stretch", hide_index=True)
-
-                        st.divider()
-
-                        # ---- score distribution chart per lineup ----
-                        st.subheader("Projected score distributions vs actual field")
-                        st.caption(
-                            "Histogram = projected field score distribution from sims. "
-                            "Colored markers = each lineup's projected mean score. "
-                            "Reference lines = sim-derived cash and top-10% lines."
-                        )
-
-                        # Sample the field score distribution across all sims
-                        _h_n_sims = len(next(iter(_sim_scores_dict.values())))
-                        # Build field distribution: take mean across entries per sim,
-                        # then sample representative scores
-                        _field_sample_size = min(5000, _h_n_sims)
-                        _rng_idx = np.linspace(0, _h_n_sims - 1,
-                                               _field_sample_size, dtype=int)
-
-                        # Build a flat sample of field scores across sims
-                        # Use a subset of field entries to keep chart responsive
-                        _field_entries_sample = contest_data.entries[::max(1, len(contest_data.entries) // 200)]
-                        _field_scores_flat = []
-                        for _fe in _field_entries_sample:
-                            _fe_total = np.zeros(_h_n_sims, dtype=np.float32)
-                            for _, _pn in _fe.players:
-                                _fa = _sim_scores_dict.get(normname(_pn))
-                                if _fa is not None:
-                                    _fe_total += _fa
-                            _field_scores_flat.extend(_fe_total[_rng_idx].tolist())
-
-                        _field_hist_df = pd.DataFrame({"Score": _field_scores_flat,
-                                                        "Series": "Field (sim)"})
-                        _fh_chart = (
-                            alt.Chart(_field_hist_df)
-                            .mark_bar(color="#A020FE", opacity=0.35)
-                            .encode(
-                                alt.X("Score:Q", bin=alt.Bin(maxbins=60),
-                                      title="Projected Score (DK pts)"),
-                                alt.Y("count()", title="# Observations"),
-                            )
-                        )
-
-                        # Reference lines
-                        _sim_cash_rule = (
-                            alt.Chart(pd.DataFrame({"x": [_port_sim.sim_cash_line]}))
-                            .mark_rule(color="#00c853", strokeWidth=2, strokeDash=[4, 4])
-                            .encode(x="x:Q")
-                        )
-                        _sim_top10_rule = (
-                            alt.Chart(pd.DataFrame({"x": [_port_sim.sim_top10_line]}))
-                            .mark_rule(color="#ff6d00", strokeWidth=2, strokeDash=[4, 4])
-                            .encode(x="x:Q")
-                        )
-
-                        # User lineup mean markers
-                        _lineup_means_df = pd.DataFrame([{
-                            "Lineup": ls.entry_name,
-                            "Proj Mean": ls.proj_mean,
-                            "Win%": round(ls.win_pct, 3),
-                            "Top-10% field": round(ls.top10pct_pct, 1),
-                        } for ls in _port_sim.lineup_stats])
-                        _lu_marks = (
-                            alt.Chart(_lineup_means_df)
-                            .mark_rule(color="#00bcd4", strokeWidth=2)
-                            .encode(
-                                x="Proj Mean:Q",
-                                tooltip=["Lineup", "Proj Mean", "Win%", "Top-10% field"],
-                            )
-                        )
-
-                        st.altair_chart(
-                            _fh_chart + _sim_cash_rule + _sim_top10_rule + _lu_marks,
-                            width="stretch")
-                        st.caption(
-                            "🟣 Field distribution · "
-                            "🟢 Sim cash line · "
-                            "🟠 Sim top-10% line · "
-                            "🔵 Your lineup projected means"
-                        )
-
-                        # ---- lineup selector: detailed score distribution ----
-                        st.divider()
-                        st.subheader("Lineup outcome distribution")
-                        _sel_lu_name = st.selectbox(
-                            "Select a lineup to inspect",
-                            [ls.entry_name for ls in _port_sim.lineup_stats],
-                            key="rv_port_lineup_sel")
-                        _sel_ls = next(
-                            ls for ls in _port_sim.lineup_stats
-                            if ls.entry_name == _sel_lu_name)
-
-                        # Show the lineup's projected score distribution by
-                        # recomputing from sim arrays (fast — already loaded)
-                        _lu_sim_scores = np.zeros(_h_n_sims, dtype=np.float32)
-                        _lu_missing = []
-                        for _pos, _pname in _sel_ls.players:
-                            _la = _sim_scores_dict.get(normname(_pname))
-                            if _la is not None:
-                                _lu_sim_scores += _la
-                            else:
-                                _lu_missing.append(_pname)
-
-                        _lu_hist_df = pd.DataFrame({"Score": _lu_sim_scores.tolist()})
-
-                        _lu_hist = (
-                            alt.Chart(_lu_hist_df)
-                            .mark_bar(color="#00bcd4", opacity=0.7)
-                            .encode(
-                                alt.X("Score:Q", bin=alt.Bin(maxbins=50),
-                                      title="Projected Lineup Score"),
-                                alt.Y("count()", title="# Sims"),
-                                tooltip=["count()"],
-                            )
-                        )
-                        _lu_mean_rule = (
-                            alt.Chart(pd.DataFrame({"x": [_sel_ls.proj_mean]}))
-                            .mark_rule(color="#ff6d00", strokeWidth=2)
-                            .encode(x="x:Q")
-                        )
-
-                        # Also show actual score as a marker if graded
-                        _lu_actual_rules = alt.layer()
-                        if _graded_result:
-                            _match_g = next(
-                                (g for g in _graded_result.graded
-                                 if g.entry_name == _sel_lu_name), None)
-                            if _match_g:
-                                _lu_actual_rules = (
-                                    alt.Chart(pd.DataFrame({"x": [_match_g.actual_score]}))
-                                    .mark_rule(color="#00c853", strokeWidth=2,
-                                               strokeDash=[4, 4])
-                                    .encode(x="x:Q")
-                                )
-
-                        st.altair_chart(
-                            _lu_hist + _lu_mean_rule + _lu_actual_rules,
-                            width="stretch")
-                        _lu_cap = (
-                            f"🟠 Proj mean ({_sel_ls.proj_mean:.1f} pts) · "
-                            f"P10–P90 range: {_sel_ls.proj_p10:.1f} – {_sel_ls.proj_p90:.1f}"
-                        )
-                        if _graded_result:
-                            _mg = next((g for g in _graded_result.graded
-                                        if g.entry_name == _sel_lu_name), None)
-                            if _mg:
-                                _lu_cap += f" · 🟢 Actual score ({_mg.actual_score:.1f} pts)"
-                        st.caption(_lu_cap)
-
-                        if _lu_missing:
-                            st.caption(
-                                f"⚠️ {len(_lu_missing)} player(s) not in sim dict "
-                                f"(contribute 0 projected pts): {', '.join(_lu_missing)}"
-                            )
-
-                        # Key sim stats for the selected lineup
-                        ls1, ls2, ls3, ls4, ls5 = st.columns(5)
-                        ls1.metric("Win%", f"{_sel_ls.win_pct:.3f}%")
-                        ls2.metric("Top-10 finish%", f"{_sel_ls.top10_pct:.2f}%")
-                        ls3.metric("Top-1% field%", f"{_sel_ls.top1pct_pct:.1f}%")
-                        ls4.metric("Top-10% field%", f"{_sel_ls.top10pct_pct:.1f}%")
-                        ls5.metric("Avg place", f"{_sel_ls.avg_place:,.0f}")
 
 
 # --------------------------------------------------------------------------- #
