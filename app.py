@@ -795,6 +795,7 @@ def slate_team_totals():
 
 
 TOTALS_OVERRIDE_PATH = os.path.join(HERE, "data", "team_totals_override.json")
+SLATE_PLAYERS_PATH = os.path.join(HERE, "data", "slate_players.json")
 
 
 def run_vegas_diagnostic(date=None):
@@ -893,7 +894,7 @@ def _stamp_after_sims(today, live_sig):
                       slate_date=(fresh or {}).get("date") or (live_sig or {}).get("date"))
 
 
-def ensure_fresh(status, force=False, totals_path=None):
+def ensure_fresh(status, force=False, totals_path=None, slate_players=None):
     """Refresh only what's stale, with the daily SIM rebuild decoupled from the
     heavier projection rebuild. When `force` is set, rebuild both projections
     (bypassing the once-a-day attempt guard) and sims regardless of staleness.
@@ -906,11 +907,27 @@ def ensure_fresh(status, force=False, totals_path=None):
         game day started, projections were rebuilt, or no sims exist — this is
         what actually pulls the new lineups/matchups/totals into the sims.
 
+    `slate_players` (optional): the FullNames on the chosen DK slate. Passed to
+    the slate ingest so the off-slate game of a double-header is dropped (its
+    pitcher/matchup would otherwise leak into today's rosterable set and the
+    sims — see slate_ingest.filter_slate_doubleheaders).
+
     Returns (notes, sims_changed, live_playable) where live_playable is the
     set of normnames eligible to be rostered today (lineup hitters + starting/
     opener/primary pitchers), or None if the live feed couldn't be read."""
     notes, sims_changed = [], False
     today = datetime.date.today().isoformat()
+    # persist the slate's player list so the sim rebuild (a subprocess) can drop
+    # the off-slate half of a double-header the same way the live read below does
+    slate_players = list(slate_players) if slate_players is not None else None
+    slate_players_path = None
+    if slate_players:
+        try:
+            os.makedirs(os.path.dirname(SLATE_PLAYERS_PATH), exist_ok=True)
+            json.dump(slate_players, open(SLATE_PLAYERS_PATH, "w"))
+            slate_players_path = SLATE_PLAYERS_PATH
+        except Exception:
+            slate_players_path = None
     # sync down the latest shared build before deciding anything
     if shared_store.enabled():
         try:
@@ -924,7 +941,7 @@ def ensure_fresh(status, force=False, totals_path=None):
     live = live_sig = live_starters = live_playable = None
     try:
         status.write("Reading the live lineup/matchup feed…")
-        live = slate_ingest.build_slate(write=False)
+        live = slate_ingest.build_slate(write=False, slate_players=slate_players)
         live_sig = slate_change_signature(live)
         live_starters = {normname(tg["sp"]) for tg in live_sig["teams"].values()
                          if tg.get("sp")}
@@ -1056,6 +1073,8 @@ def ensure_fresh(status, force=False, totals_path=None):
             cmd = ["run_slate.py"]
             if totals_path is not None:
                 cmd += ["--team-totals", totals_path]
+            if slate_players_path is not None:
+                cmd += ["--slate-players", slate_players_path]
             ok, out = run_script(cmd, "Correlated sims (Stage C)", status)
             if ok:
                 _stamp_after_sims(today, live_sig)
@@ -1639,8 +1658,13 @@ with tabs[0]:
                 st.write(f"Applying {len(tt_override)} team-total override(s): "
                          + ", ".join(f"{t} {v:g}" for t, v in tt_override.items()))
             # ---- 0) freshness: rebuild projections / sims when stale ----
+            # the chosen slate's players tell the ingest which half of a
+            # double-header is actually on the slate (only the pitchers differ)
+            slate_players = (dk_df["FullName"].tolist()
+                             if dk_df is not None and "FullName" in dk_df else None)
             notes, sims_changed, live_playable = ensure_fresh(
-                status, force=force_refresh, totals_path=tt_path)
+                status, force=force_refresh, totals_path=tt_path,
+                slate_players=slate_players)
             for n in notes:
                 st.write("• " + n)
             H_, P_, score_, n_sim_ = H, P, score, n_sim

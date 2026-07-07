@@ -118,6 +118,10 @@ def main():
     ap.add_argument('--team-totals', help='JSON {team_code: implied_runs} to '
                     'override the slate Vegas team totals (replaces that team\'s '
                     'implied total before the Vegas-vs-slate-average scaling).')
+    ap.add_argument('--slate-players', help='JSON list of player names that are '
+                    'on the DFS slate. Used to drop the off-slate game of a '
+                    'double-header so its pitcher/matchup does not leak into the '
+                    'sims (see slate_ingest.filter_slate_doubleheaders).')
     ap.add_argument('--total-baseline', type=float, default=LEAGUE_AVG_RUNS,
                     help=f'Implied-total that maps to a neutral 1.0 offense scale '
                          f'(default {LEAGUE_AVG_RUNS}, the league average). Each '
@@ -141,7 +145,9 @@ def main():
     cx = open(args.confirmed).read() if args.confirmed else None
     ex = open(args.expected).read() if args.expected else None
     vj = open(args.vegas).read() if args.vegas else None
-    slate = slate_ingest.build_slate(cx, ex, vegas_json=vj, date=args.date)
+    sp = json.load(open(args.slate_players)) if args.slate_players else None
+    slate = slate_ingest.build_slate(cx, ex, vegas_json=vj, date=args.date,
+                                     slate_players=sp)
     print(f"   date={slate['date']} games={len(slate['games'])}")
     if args.date and not slate['games']:
         print(f"   WARNING: no games returned for {args.date} — the feed may not "
