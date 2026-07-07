@@ -19,10 +19,22 @@ feed when direct fetch fails. If neither works, implied totals fall back to
 DEFAULT_TEAM_RUNS and the pipeline still runs.
 """
 import json, os, re, sys
+import unicodedata
 import xml.etree.ElementTree as ET
 import urllib.request
 
 import slate_config as C
+
+
+def _norm_name(n):
+    """Normalize a player name for matching. Mirrors stage_d.norm but without the
+    numpy-heavy import, so the slate ingest stays dependency-light."""
+    n = unicodedata.normalize('NFKD', str(n)).encode('ascii', 'ignore').decode()
+    n = n.lower().replace('.', '').replace(',', '').replace("'", "")
+    for s in (' jr', ' sr', ' ii', ' iii', ' iv'):
+        if n.endswith(s):
+            n = n[:-len(s)]
+    return n.strip()
 
 
 def _http_get(url, timeout=30):
@@ -162,14 +174,87 @@ def _with_date(url, date):
     return f"{url}{sep}date={date}"
 
 
+def _canon_matchup(rec):
+    """Order-independent key identifying the two teams playing in a game."""
+    return frozenset({C.canonical_team(rec.get('away')),
+                      C.canonical_team(rec.get('home'))})
+
+
+def filter_slate_doubleheaders(games, slate_players):
+    """Drop off-slate games of a double-header.
+
+    On a double-header day the confirmed-lineup feed returns BOTH games of a
+    matchup (same two teams, two game ids), but usually only one of them is on
+    the DFS slate. Keeping both makes the pipeline treat the OTHER game's
+    (confirmed) pitcher as if it applied to the slate, and lets the wrong
+    matchup drive the sims.
+
+    The two games of a double-header share the same two lineups, so hitters
+    can't tell them apart — only the PITCHERS differ. `slate_players` is the set
+    of players actually on the slate (the DK slate / uploaded file, which lists
+    each game's probable pitcher by name), so the on-slate game is the one whose
+    starter/opener/primary is in that set. When no game's pitcher matches (e.g.
+    neither is confirmed yet and the names don't line up), the earliest game by
+    start time is kept as a best guess.
+
+    `games` is {gid: rec}; `slate_players` an iterable of raw player names.
+    Returns a new {gid: rec} with the off-slate double-header games removed.
+    Matchups that appear only once are always kept unchanged, so ordinary
+    (non-double-header) slates are unaffected; a falsy `slate_players` returns
+    the games untouched.
+    """
+    if not slate_players:
+        return games
+    _norm = _norm_name
+    sp = {_norm(n) for n in slate_players if n}
+
+    groups = {}
+    for gid, rec in games.items():
+        groups.setdefault(_canon_matchup(rec), []).append(gid)
+
+    def _pitcher_hits(gid):
+        rec = games[gid]
+        hits = 0
+        for side in ('away', 'home'):
+            roles = rec.get('pitchers', {}).get(side) or {}
+            for role in ('starter', 'opener', 'primary'):
+                nm = roles.get(role)
+                if nm and _norm(nm) in sp:
+                    hits += 1
+        return hits
+
+    keep = set()
+    for gids in groups.values():
+        if len(gids) == 1:                       # not a double-header
+            keep.update(gids)
+            continue
+        scored = {gid: _pitcher_hits(gid) for gid in gids}
+        best = max(scored.values())
+        if best > 0:                             # keep the game whose SP is on the slate
+            keep.update(gid for gid, s in scored.items() if s == best)
+        else:                                    # can't disambiguate — keep the earliest
+            keep.add(min(gids, key=lambda g: (games[g].get('datetime') or '')))
+
+    dropped = [gid for gid in games if gid not in keep]
+    if dropped:
+        print(f"  [slate] double-header: kept {len(keep)} game(s), dropped "
+              f"{len(dropped)} off-slate game(s) {dropped}", file=sys.stderr)
+    return {gid: rec for gid, rec in games.items() if gid in keep}
+
+
 def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=True,
-                date=None):
+                date=None, slate_players=None):
     """Merge everything into one normalized slate.
 
     `date` (YYYY-MM-DD, optional): rebuild a *historical* slate. When given and
     the lineup feeds aren't passed in directly, the confirmed/expected feeds are
     fetched with a &date= parameter and Vegas totals are fetched for that date,
     so the pipeline reproduces a past day's slate (lineups + matchups + Vegas).
+
+    `slate_players` (optional): raw player names that are on the DFS slate (the
+    DK slate / uploaded file). Used to drop the off-slate game of a
+    double-header so its pitcher isn't treated as a slate starter — see
+    filter_slate_doubleheaders(). Ignored when the day has no double-header.
 
     Returns slate = {
         'date': 'YYYY-MM-DD',
@@ -225,6 +310,8 @@ def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=Tr
         h_imp = h_imp if h_imp is not None else C.DEFAULT_TEAM_RUNS
         out['implied'] = {'away': a_imp, 'home': h_imp, 'total': a_imp + h_imp}
         games[gid] = out
+
+    games = filter_slate_doubleheaders(games, slate_players)
 
     slate = {'date': date, 'games': games}
     if write:
