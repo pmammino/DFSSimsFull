@@ -2513,6 +2513,83 @@ with tabs[3]:
                         file_name=f"DK_upload_{info['chosen']}.csv",
                         mime="text/csv", type="primary", width="stretch")
 
+                    # ---- exposure breakdown (player & team) ----
+                    _pexpo = info.get("player_expo") or {}
+                    _texpo = info.get("team_expo") or {}
+                    _n_lu = info["chosen"] or 1
+                    if _pexpo or _texpo:
+                        _meta = sim.get("players_meta") or {}
+                        _pset = set(info.get("pitchers") or [])
+                        with st.expander(
+                                "Exposure breakdown (player & team)",
+                                expanded=False):
+                            st.caption(
+                                f"How the {info['chosen']} exported lineups spread "
+                                "across players and stack teams. **Exposure** is the "
+                                "share of exported lineups the player (or primary "
+                                "stack team) appears in.")
+                            ec1, ec2 = st.columns([3, 2])
+
+                            with ec1:
+                                st.markdown("**Player exposure**")
+                                _prows = []
+                                for _nm, _ct in _pexpo.items():
+                                    _m = _meta.get(_nm, {})
+                                    _prows.append({
+                                        "Player": _nm,
+                                        "Pos": ("P" if _nm in _pset
+                                                else _m.get("pos", "")),
+                                        "Team": _m.get("team", ""),
+                                        "Lineups": int(_ct),
+                                        "Exposure": int(_ct) / _n_lu,
+                                    })
+                                _pdf = pd.DataFrame(_prows).sort_values(
+                                    ["Lineups", "Player"],
+                                    ascending=[False, True]).reset_index(drop=True)
+                                st.dataframe(
+                                    _pdf, hide_index=True, width="stretch",
+                                    column_config={
+                                        "Lineups": st.column_config.NumberColumn(
+                                            help=f"of {info['chosen']} lineups"),
+                                        "Exposure": st.column_config.ProgressColumn(
+                                            format="percent", min_value=0.0,
+                                            max_value=1.0),
+                                    })
+                                st.download_button(
+                                    "⬇ Player exposure CSV",
+                                    _pdf.assign(Exposure=(_pdf["Exposure"] * 100)
+                                                .round(1)).to_csv(index=False)
+                                    .encode(),
+                                    file_name=f"player_exposure_{info['chosen']}.csv",
+                                    mime="text/csv", width="stretch")
+
+                            with ec2:
+                                st.markdown("**Stack-team exposure (primary)**")
+                                _trows = [{
+                                    "Team": _tm,
+                                    "Lineups": int(_ct),
+                                    "Exposure": int(_ct) / _n_lu,
+                                } for _tm, _ct in _texpo.items()]
+                                _tdf = pd.DataFrame(_trows).sort_values(
+                                    ["Lineups", "Team"],
+                                    ascending=[False, True]).reset_index(drop=True)
+                                st.dataframe(
+                                    _tdf, hide_index=True, width="stretch",
+                                    column_config={
+                                        "Lineups": st.column_config.NumberColumn(
+                                            help=f"of {info['chosen']} lineups"),
+                                        "Exposure": st.column_config.ProgressColumn(
+                                            format="percent", min_value=0.0,
+                                            max_value=1.0),
+                                    })
+                                st.download_button(
+                                    "⬇ Team exposure CSV",
+                                    _tdf.assign(Exposure=(_tdf["Exposure"] * 100)
+                                                .round(1)).to_csv(index=False)
+                                    .encode(),
+                                    file_name=f"team_exposure_{info['chosen']}.csv",
+                                    mime="text/csv", width="stretch")
+
                     # ---- payout-aware coverage visualization ----
                     if ev_mode and W is not None and ev_extra:
                         ps = ev_extra["prize_summary"]
