@@ -479,7 +479,8 @@ def _lineup_ids(row, dkid, cands=None):
 def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
                     pitcher_cap=1.0, team_cap=1.0, pair_cap=1.0,
                     core_cap=1.0, max_overlap=1.0, group_of=None,
-                    group_cap=1.0, player_caps=None, team_caps=None, cands=None):
+                    group_cap=1.0, player_caps=None, team_caps=None,
+                    player_mins=None, team_mins=None, cands=None):
     """Pick n_select lineups from the ranked candidate results with the
     diversity-aware portfolio selector (per-player / stack-team / pairing /
     stack-core / value-group exposure caps + an overlap ceiling), map players to
@@ -497,7 +498,8 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
         hitter_cap=hitter_cap, pitcher_cap=pitcher_cap, team_cap=team_cap,
         pair_cap=pair_cap, core_cap=core_cap, max_overlap=max_overlap,
         group_of=group_of, group_cap=group_cap,
-        player_caps=player_caps, team_caps=team_caps)
+        player_caps=player_caps, team_caps=team_caps,
+        player_mins=player_mins, team_mins=team_mins)
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -518,7 +520,8 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
                        top_heaviness, risk, shortlist, hitter_cap=1.0,
                        pitcher_cap=1.0, team_cap=1.0, pair_cap=1.0, core_cap=1.0,
                        max_overlap=1.0, group_of=None, group_cap=1.0,
-                       player_caps=None, team_caps=None, eval_sims=4000):
+                       player_caps=None, team_caps=None,
+                       player_mins=None, team_mins=None, eval_sims=4000):
     """Payout-aware portfolio export. Instead of ranking each lineup by its
     standalone finish rate, this rebuilds the candidates' correlated per-sim
     scores, turns them into DOLLAR payouts against a parametric top-heavy curve,
@@ -573,7 +576,8 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
         eligible=eligible, hitter_cap=hitter_cap, pitcher_cap=pitcher_cap,
         team_cap=team_cap, pair_cap=pair_cap, core_cap=core_cap,
         max_overlap=max_overlap, group_of=group_of, group_cap=group_cap,
-        player_caps=player_caps, team_caps=team_caps, eval_sims=eval_sims)
+        player_caps=player_caps, team_caps=team_caps,
+        player_mins=player_mins, team_mins=team_mins, eval_sims=eval_sims)
 
     # rank-selected baseline of the SAME size (eligible only) for the comparison
     naive_pos = []
@@ -2433,6 +2437,8 @@ with tabs[3]:
                 hitter_cap = pitcher_cap = team_cap = 1.0
                 player_caps: dict[str, float] = {}
                 team_caps: dict[str, float] = {}
+                player_mins: dict[str, float] = {}
+                team_mins: dict[str, float] = {}
                 with st.expander("Exposure caps (optional)"):
                     _cap_mode = st.radio(
                         "Exposure cap mode",
@@ -2458,13 +2464,37 @@ with tabs[3]:
                             help="Cap the share sharing the same primary stack team.")
                     else:
                         st.caption(
-                            "Set a **Max %** for the players and/or teams you want "
-                            "to limit. Leave a row at 100 for no cap; set 0 to "
-                            "exclude entirely. Anything not listed has no cap.")
+                            "Set a **Min %** and/or **Max %** for the players and/or "
+                            "teams you want to control. **Max %** caps exposure "
+                            "(100 = no cap, 0 = exclude); **Min %** forces a floor — "
+                            "the entity is seeded into at least that share of lineups "
+                            "before the rest fill by rank (0 = no floor). Anything "
+                            "left at Min 0 / Max 100 is unconstrained.")
                         _meta = sim.get("players_meta") or {}
                         _pool = sim.get("pool_players") or sorted(_meta.keys())
+                        _min_conflicts = []
 
-                        # ---- per-player caps ----
+                        def _collect(_row, name_key, caps, mins):
+                            """Read a Min %/Max % editor row into the caps/mins maps;
+                            flag a min that exceeds its own max (engine clamps it)."""
+                            nm = str(_row[name_key])
+                            try:
+                                mx = float(_row["Max %"])
+                            except (TypeError, ValueError):
+                                mx = 100.0
+                            try:
+                                mn = float(_row["Min %"])
+                            except (TypeError, ValueError):
+                                mn = 0.0
+                            if mx < 100:
+                                caps[nm] = mx / 100.0
+                            if mn > 0:
+                                mins[nm] = mn / 100.0
+                                if mx < 100 and mn > mx:
+                                    _min_conflicts.append(
+                                        f"{nm} (min {mn:g}% > max {mx:g}%)")
+
+                        # ---- per-player caps / mins ----
                         _prows = []
                         for _nm in _pool:
                             _m = _meta.get(_nm, {})
@@ -2474,6 +2504,7 @@ with tabs[3]:
                                 "Team": _m.get("team", ""),
                                 "Proj": (round(float(_m["proj"]), 1)
                                          if _m.get("proj") is not None else None),
+                                "Min %": 0,
                                 "Max %": 100,
                             })
                         # most-used (highest proj) players first so caps are handy
@@ -2482,7 +2513,7 @@ with tabs[3]:
                             _pdf = _pdf.sort_values(
                                 "Proj", ascending=False, na_position="last"
                             ).reset_index(drop=True)
-                        st.markdown("**Per-player max exposure**")
+                        st.markdown("**Per-player exposure (min / max)**")
                         _pedit = st.data_editor(
                             _pdf, hide_index=True, width="stretch",
                             key="player_caps_editor",
@@ -2491,48 +2522,56 @@ with tabs[3]:
                                 "Pos": st.column_config.TextColumn(disabled=True),
                                 "Team": st.column_config.TextColumn(disabled=True),
                                 "Proj": st.column_config.NumberColumn(disabled=True),
+                                "Min %": st.column_config.NumberColumn(
+                                    min_value=0, max_value=100, step=5,
+                                    help="Min share of exported lineups this player "
+                                         "must appear in (best-effort)."),
                                 "Max %": st.column_config.NumberColumn(
                                     min_value=0, max_value=100, step=5,
                                     help="Max share of exported lineups this player "
                                          "may appear in."),
                             })
                         for _, _r in _pedit.iterrows():
-                            try:
-                                _v = float(_r["Max %"])
-                            except (TypeError, ValueError):
-                                continue
-                            if _v < 100:
-                                player_caps[str(_r["Player"])] = _v / 100.0
+                            _collect(_r, "Player", player_caps, player_mins)
 
-                        # ---- per-team caps ----
+                        # ---- per-team caps / mins ----
                         _teams = sorted({_m.get("team", "") for _m in _meta.values()
                                          if _m.get("team")})
                         if _teams:
-                            st.markdown("**Per-team (primary stack) max exposure**")
+                            st.markdown("**Per-team (primary stack) exposure (min / max)**")
                             _tdf = pd.DataFrame(
-                                [{"Team": _t, "Max %": 100} for _t in _teams])
+                                [{"Team": _t, "Min %": 0, "Max %": 100}
+                                 for _t in _teams])
                             _tedit = st.data_editor(
                                 _tdf, hide_index=True, width="content",
                                 key="team_caps_editor",
                                 column_config={
                                     "Team": st.column_config.TextColumn(disabled=True),
+                                    "Min %": st.column_config.NumberColumn(
+                                        min_value=0, max_value=100, step=5,
+                                        help="Min share of exported lineups whose "
+                                             "primary stack is this team "
+                                             "(best-effort)."),
                                     "Max %": st.column_config.NumberColumn(
                                         min_value=0, max_value=100, step=5,
                                         help="Max share of exported lineups whose "
                                              "primary stack is this team."),
                                 })
                             for _, _r in _tedit.iterrows():
-                                try:
-                                    _v = float(_r["Max %"])
-                                except (TypeError, ValueError):
-                                    continue
-                                if _v < 100:
-                                    team_caps[str(_r["Team"])] = _v / 100.0
+                                _collect(_r, "Team", team_caps, team_mins)
 
-                        _n_set = len(player_caps) + len(team_caps)
+                        if _min_conflicts:
+                            st.warning(
+                                "Min above max — the floor is clamped to the cap for: "
+                                + ", ".join(_min_conflicts))
+                        _n_set = (len(player_caps) + len(team_caps)
+                                  + len(player_mins) + len(team_mins))
                         if _n_set:
-                            st.caption(f"{len(player_caps)} player cap(s) and "
-                                       f"{len(team_caps)} team cap(s) active.")
+                            st.caption(
+                                f"{len(player_caps)} player cap(s), "
+                                f"{len(team_caps)} team cap(s), "
+                                f"{len(player_mins)} player min(s) and "
+                                f"{len(team_mins)} team min(s) active.")
 
                 with st.expander("Portfolio diversity (optional)"):
                     st.caption("Spread the exported set so the lineups work "
@@ -2609,7 +2648,8 @@ with tabs[3]:
                         pitcher_cap=pitcher_cap, team_cap=team_cap,
                         pair_cap=pair_cap, core_cap=core_cap, max_overlap=max_overlap,
                         group_of=group_of, group_cap=group_cap,
-                        player_caps=player_caps, team_caps=team_caps)
+                        player_caps=player_caps, team_caps=team_caps,
+                        player_mins=player_mins, team_mins=team_mins)
                     if _ev is None:
                         ev_mode = False
                     else:
@@ -2620,6 +2660,7 @@ with tabs[3]:
                         pair_cap=pair_cap, core_cap=core_cap, max_overlap=max_overlap,
                         group_of=group_of, group_cap=group_cap,
                         player_caps=player_caps, team_caps=team_caps,
+                        player_mins=player_mins, team_mins=team_mins,
                         cands=sim.get("cands"))
 
                 if info["chosen"] == 0:
@@ -2644,6 +2685,13 @@ with tabs[3]:
                         msg += (f" ({info['skipped_unmapped']} skipped: a player had no "
                                 "DK ID.)")
                     st.success(msg)
+                    _unmet = info.get("unmet_mins") or []
+                    if _unmet:
+                        st.warning(
+                            "Couldn't fully meet these minimum exposures (not enough "
+                            "distinct lineups or caps left no room): "
+                            + ", ".join(
+                                f"{u['name']} {u['have']}/{u['need']}" for u in _unmet))
                     st.download_button(
                         "⬇ Download DraftKings upload CSV", csv_text.encode(),
                         file_name=f"DK_upload_{info['chosen']}.csv",

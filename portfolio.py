@@ -24,6 +24,7 @@ caller spread the portfolio along the axes that actually matter:
 Every control is OFF by default (caps = 1.0, overlap = 1.0): with the defaults
 this reproduces the prior top-N-by-rank behaviour exactly.
 """
+import math
 from collections import Counter, defaultdict
 
 import numpy as np
@@ -77,6 +78,21 @@ def _jaccard(a, b):
     return len(a & b) / u if u else 0.0
 
 
+def _unmet_mins(player_minn, team_minn, expo, teamc):
+    """List the minimum-exposure targets the finished portfolio fell short of,
+    as [{kind, name, have, need}] — empty when every floor was met."""
+    out = []
+    for nm, need in player_minn.items():
+        if expo[nm] < need:
+            out.append({"kind": "player", "name": nm,
+                        "have": int(expo[nm]), "need": int(need)})
+    for tm, need in team_minn.items():
+        if teamc[tm] < need:
+            out.append({"kind": "team", "name": tm,
+                        "have": int(teamc[tm]), "need": int(need)})
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Diversity-aware greedy selection
 # --------------------------------------------------------------------------- #
@@ -84,7 +100,8 @@ def select_portfolio(res_df, n_select, sort_cols, *, cols, hitc,
                      eligible=None, hitter_cap=1.0, pitcher_cap=1.0,
                      team_cap=1.0, pair_cap=1.0, core_cap=1.0,
                      max_overlap=1.0, group_of=None, group_cap=1.0,
-                     player_caps=None, team_caps=None):
+                     player_caps=None, team_caps=None,
+                     player_mins=None, team_mins=None):
     """Rank `res_df` by `sort_cols` (descending) then greedily accept lineups
     that keep every exposure cap and the pairwise-overlap ceiling satisfied.
 
@@ -101,6 +118,15 @@ def select_portfolio(res_df, n_select, sort_cols, *, cols, hitc,
     caller cap, say, one star hitter at 40% while leaving everyone else at the
     global default.
 
+    `player_mins` / `team_mins` ({name: fraction}) give per-ENTITY MINIMUM
+    exposures — a floor on the share of exported lineups that must contain the
+    player / use the team as primary stack. Minimums are seeded first (in rank
+    order) so the required entities are locked in before the rest of the set is
+    filled by rank; a minimum above the entity's own max is clamped to the max.
+    Minimums are best-effort: if the candidate pool can't supply enough distinct
+    lineups (or the maxes leave no room), the shortfall is reported in
+    ``info["unmet_mins"]`` rather than raising.
+
     Returns (chosen_rows, info).
     """
     N = int(n_select)
@@ -111,6 +137,12 @@ def select_portfolio(res_df, n_select, sort_cols, *, cols, hitc,
         # positive cap still admits one lineup.
         f = float(frac)
         return 0 if f <= 0 else max(1, int(round(f * N)))
+
+    def min_n(frac):
+        # ceil so "at least X%" never rounds down below the requested share;
+        # never demand more than the whole set.
+        f = float(frac)
+        return 0 if f <= 0 else min(N, int(math.ceil(f * N)))
 
     hcap, pcap, tcap = cap_n(hitter_cap), cap_n(pitcher_cap), cap_n(team_cap)
     paircap, ccap, gcap = cap_n(pair_cap), cap_n(core_cap), cap_n(group_cap)
@@ -130,39 +162,46 @@ def select_portfolio(res_df, n_select, sort_cols, *, cols, hitc,
     def team_cap_for(team):
         return team_capn.get(team, tcap)
 
+    # per-entity minimums -> target counts, clamped to the entity's own max
+    player_minn = {nm: min_n(fr) for nm, fr in (player_mins or {}).items()}
+    team_minn = {tm: min_n(fr) for tm, fr in (team_mins or {}).items()}
+    player_minn = {nm: min(need, player_capn.get(nm, N)) for nm, need in player_minn.items()
+                   if need > 0}
+    team_minn = {tm: min(need, team_capn.get(tm, N)) for tm, need in team_minn.items()
+                 if need > 0}
+
     expo = Counter()     # per player
     teamc = Counter()    # per primary stack team
     pairc = Counter()    # per (primary, secondary) pair
     corec = Counter()    # per (primary, frozenset of stack members)
     groupc = Counter()   # per value-group id
     pitchers = set()
-    chosen, chosen_sets, skipped = [], [], 0
+    chosen, chosen_sets, chosen_idx, skipped = [], [], set(), 0
 
-    for _, row in rdf.iterrows():
-        f = lineup_features(row, cols, hitc)
-        names = f["names"]
-        if eligible is not None and not eligible(names):
-            skipped += 1
-            continue
-        # per-player caps (first two slots are pitchers); per-entity overrides
-        # apply where set, else the global hitter/pitcher cap.
+    feats = [lineup_features(rdf.iloc[i], cols, hitc) for i in range(len(rdf))]
+
+    def fits_maxes(f, names):
         if any(expo[n] >= player_cap_for(n, i) for i, n in enumerate(names)):
-            continue
+            return False
         if teamc[f["primary"]] >= team_cap_for(f["primary"]):
-            continue
+            return False
         if f["secondary"] and pairc[f["pair"]] >= paircap:
-            continue
+            return False
         if corec[f["core"]] >= ccap:
-            continue
-        gids = {group_of[n] for n in names if n in group_of} if group_of else set()
-        if any(groupc[g] >= gcap for g in gids):
-            continue
+            return False
+        if any(groupc[g] >= gcap
+               for g in ({group_of[n] for n in names if n in group_of}
+                         if group_of else set())):
+            return False
         if max_overlap < 1.0 and chosen_sets:
             if max(_jaccard(f["playerset"], s) for s in chosen_sets) > max_overlap:
-                continue
-        # ---- accept ----
+                return False
+        return True
+
+    def accept(pos, row, f, names):
         chosen.append(row)
         chosen_sets.append(f["playerset"])
+        chosen_idx.add(pos)
         for i, n in enumerate(names):
             expo[n] += 1
             if i < 2:
@@ -171,11 +210,52 @@ def select_portfolio(res_df, n_select, sort_cols, *, cols, hitc,
         if f["secondary"]:
             pairc[f["pair"]] += 1
         corec[f["core"]] += 1
-        for g in gids:
+        for g in ({group_of[n] for n in names if n in group_of} if group_of else set()):
             groupc[g] += 1
-        if len(chosen) == N:
-            break
 
+    def deficits_remain():
+        return (any(expo[nm] < need for nm, need in player_minn.items()) or
+                any(teamc[tm] < need for tm, need in team_minn.items()))
+
+    def helps_deficit(f, names):
+        if any(nm in player_minn and expo[nm] < player_minn[nm] for nm in names):
+            return True
+        return (f["primary"] in team_minn and
+                teamc[f["primary"]] < team_minn[f["primary"]])
+
+    # ---- Phase 1: seed the minimum-exposure targets (rank order) ---- #
+    # Lock in the required players/teams before the general fill, so a floor is
+    # satisfied even when the highest-ranked lineups wouldn't have included them.
+    if player_minn or team_minn:
+        for pos, row in rdf.iterrows():
+            if len(chosen) >= N or not deficits_remain():
+                break
+            f = feats[pos]
+            names = f["names"]
+            if eligible is not None and not eligible(names):
+                continue
+            if not helps_deficit(f, names):
+                continue
+            if not fits_maxes(f, names):
+                continue
+            accept(pos, row, f, names)
+
+    # ---- Phase 2: fill the remaining slots by rank ---- #
+    for pos, row in rdf.iterrows():
+        if len(chosen) >= N:
+            break
+        if pos in chosen_idx:
+            continue
+        f = feats[pos]
+        names = f["names"]
+        if eligible is not None and not eligible(names):
+            skipped += 1
+            continue
+        if not fits_maxes(f, names):
+            continue
+        accept(pos, row, f, names)
+
+    unmet_mins = _unmet_mins(player_minn, team_minn, expo, teamc)
     info = {
         "chosen": len(chosen), "requested": N, "skipped_unmapped": skipped,
         "max_pitcher": max((expo[n] for n in pitchers), default=0),
@@ -190,6 +270,7 @@ def select_portfolio(res_df, n_select, sort_cols, *, cols, hitc,
         "player_expo": dict(expo),
         "team_expo": dict(teamc),
         "pitchers": sorted(pitchers),
+        "unmet_mins": unmet_mins,
     }
     return chosen, info
 
@@ -201,7 +282,8 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
                         eligible=None, hitter_cap=1.0, pitcher_cap=1.0,
                         team_cap=1.0, pair_cap=1.0, core_cap=1.0,
                         max_overlap=1.0, group_of=None, group_cap=1.0,
-                        player_caps=None, team_caps=None, eval_sims=None):
+                        player_caps=None, team_caps=None,
+                        player_mins=None, team_mins=None, eval_sims=None):
     """Greedily build the export set that maximizes the expected *utility* of the
     portfolio's per-simulation dollar return, subject to the same exposure /
     diversity caps as :func:`select_portfolio`.
@@ -249,6 +331,10 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
         f = float(frac)
         return 0 if f <= 0 else max(1, int(round(f * N)))
 
+    def min_n(frac):
+        f = float(frac)
+        return 0 if f <= 0 else min(N, int(math.ceil(f * N)))
+
     hcap, pcap, tcap = cap_n(hitter_cap), cap_n(pitcher_cap), cap_n(team_cap)
     paircap, ccap, gcap = cap_n(pair_cap), cap_n(core_cap), cap_n(group_cap)
     group_of = group_of or {}
@@ -262,6 +348,14 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
 
     def team_cap_for(team):
         return team_capn.get(team, tcap)
+
+    # per-entity minimums -> target counts, clamped to the entity's own max
+    player_minn = {nm: min_n(fr) for nm, fr in (player_mins or {}).items()}
+    team_minn = {tm: min_n(fr) for tm, fr in (team_mins or {}).items()}
+    player_minn = {nm: min(need, player_capn.get(nm, N)) for nm, need in player_minn.items()
+                   if need > 0}
+    team_minn = {tm: min(need, team_capn.get(tm, N)) for tm, need in team_minn.items()
+                 if need > 0}
 
     # precompute lineup features + eligibility once
     feats = [lineup_features(rdf.iloc[i], cols, hitc) for i in range(n_row)]
@@ -279,6 +373,16 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
 
     def gids_of(names):
         return {group_of[n] for n in names if n in group_of} if group_of else set()
+
+    def deficits_remain():
+        return (any(expo[nm] < need for nm, need in player_minn.items()) or
+                any(teamc[tm] < need for tm, need in team_minn.items()))
+
+    def helps_deficit(f):
+        if any(nm in player_minn and expo[nm] < player_minn[nm] for nm in f["names"]):
+            return True
+        return (f["primary"] in team_minn and
+                teamc[f["primary"]] < team_minn[f["primary"]])
 
     def fits(i):
         f = feats[i]; names = f["names"]
@@ -307,12 +411,22 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
         # marginal gain of each available candidate: mean(util(W + pay)) - cur_u
         u_new = util(W_sel[:, None] + pay_sel[:, avail_idx])
         gains = u_new.mean(axis=0) - cur_u
+        order = np.argsort(-gains)
         picked = -1
-        for li in np.argsort(-gains):
-            i = int(avail_idx[li])
-            if fits(i):
-                picked = i
-                break
+        # while any minimum floor is unmet, prefer the best-gain lineup that both
+        # fits the maxes AND advances a deficit; otherwise fall back to best-gain.
+        if deficits_remain():
+            for li in order:
+                i = int(avail_idx[li])
+                if fits(i) and helps_deficit(feats[i]):
+                    picked = i
+                    break
+        if picked < 0:
+            for li in order:
+                i = int(avail_idx[li])
+                if fits(i):
+                    picked = i
+                    break
         if picked < 0:
             break
         i = picked; f = feats[i]
@@ -347,6 +461,7 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
         "player_expo": dict(expo),
         "team_expo": dict(teamc),
         "pitchers": sorted(pitchers),
+        "unmet_mins": _unmet_mins(player_minn, team_minn, expo, teamc),
         # portfolio outcome (full sims)
         "exp_return": float(W.mean()),
         "floor_p10": float(np.percentile(W, 10)),
@@ -483,6 +598,44 @@ if __name__ == "__main__":
                               cols=COLS, hitc=HITC, player_caps={'b1': 0.0})
     assert all('b1 (' not in str(r['1B']) for r in chx)   # 0% excludes entirely
 
+    # ---- minimum exposure: seed a required player/team into the set ----
+    # By rank the top 5 are the identical CLE/KC builds; s2 lives only in the
+    # low-ranked alt build (row 6), so it never appears without a floor.
+    _, base_info = select_portfolio(df, 5, ['Wins', 'Top10', 'Top100'],
+                                    cols=COLS, hitc=HITC)
+    assert base_info["player_expo"].get('s2', 0) == 0, base_info
+    _, minfo = select_portfolio(df, 5, ['Wins', 'Top10', 'Top100'],
+                                cols=COLS, hitc=HITC, player_mins={'s2': 0.2})
+    assert minfo["player_expo"].get('s2', 0) >= 1, minfo   # floor pulled it in
+    assert not minfo["unmet_mins"], minfo
+
+    # a floor the pool can't supply is reported, not silently dropped (s2 is in
+    # a single candidate, so 60% of 5 = 3 is unreachable -> have 1, need 3)
+    _, uinfo = select_portfolio(df, 5, ['Wins', 'Top10', 'Top100'],
+                                cols=COLS, hitc=HITC, player_mins={'s2': 0.6})
+    assert any(u["name"] == 's2' and u["have"] == 1 and u["need"] == 3
+               for u in uinfo["unmet_mins"]), uinfo
+
+    # a floor above the entity's own cap is clamped to the cap (no conflict loop)
+    _, cinfo = select_portfolio(dfm, 10, ['Wins', 'Top10', 'Top100'],
+                                cols=COLS, hitc=HITC,
+                                player_caps={'b1': 0.2}, player_mins={'b1': 0.5})
+    assert cinfo["player_expo"]['b1'] == 2, cinfo          # min(ceil(.5*10), cap 2)
+    assert not cinfo["unmet_mins"], cinfo
+
+    # team-level floor: force a primary NYY stack that rank alone would skip
+    nyy_h = [('C', 'n1', 'NYY'), ('1B', 'n2', 'NYY'), ('2B', 'n3', 'NYY'),
+             ('3B', 'n4', 'NYY'), ('SS', 'n5', 'NYY'), ('OF1', 'k1', 'KC'),
+             ('OF2', 'k2', 'KC'), ('OF3', 'o1', 'BOS')]
+    tm_rows = [mk('pa', 'pb', base_h, {'Wins': 100 - i, 'Top10': 0, 'Top100': 0})
+               for i in range(5)]
+    tm_rows.append(mk('pc', 'pd', nyy_h, {'Wins': 10, 'Top10': 0, 'Top100': 0}))
+    tdf = pd.DataFrame(tm_rows)
+    _, tninfo = select_portfolio(tdf, 5, ['Wins', 'Top10', 'Top100'],
+                                 cols=COLS, hitc=HITC, team_mins={'NYY': 0.2})
+    assert tninfo["team_expo"].get('NYY', 0) >= 1, tninfo
+    assert not tninfo["unmet_mins"], tninfo
+
     # ---- payout-aware EV selection: prefer decorrelated coverage ----
     from portfolio_ev import utility
     # four lineups; A & B win big only in sim 0, C wins only in sim 1, D never.
@@ -517,5 +670,13 @@ if __name__ == "__main__":
                                       cols=COLS, hitc=HITC)
     assert iL["cash_rate"] == 0.5, iL
     assert sorted(WL.tolist()) == [0.0, 200.0], WL
+
+    # EV selection with a minimum floor: D (row 3) never wins, so EV alone skips
+    # it; a floor on one of its players forces it into the set anyway.
+    chM, iM, WM = select_portfolio_ev(
+        ev_df, 2, ev_pay, utility("Conservative (consistent cashing)"),
+        cols=COLS, hitc=HITC, player_mins={'d1': 0.5})
+    assert iM["player_expo"].get('d1', 0) >= 1, iM
+    assert not iM["unmet_mins"], iM
 
     print("portfolio.py self-test passed:", info)
