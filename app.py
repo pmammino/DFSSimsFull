@@ -794,6 +794,58 @@ def slate_team_totals():
     return live or stored
 
 
+def parse_team_totals_csv(raw_text, valid_teams=None):
+    """Parse an uploaded CSV of team implied totals into a {TEAM: total} map.
+
+    Accepts flexible headers — a team column (team/abbr/tm/club) and an
+    implied-total column (implied/total/vegas/runs/itt/proj); if neither header
+    is recognised it falls back to the first column for teams and the first
+    numeric column for totals. Team codes are upper-cased and matched against
+    `valid_teams` (the slate's teams) when provided so a stray/misspelled team
+    is reported rather than silently applied. Returns
+    (mapping, matched_teams, unmatched_labels)."""
+    df = pd.read_csv(io.StringIO(raw_text))
+    if df.empty or len(df.columns) < 2:
+        raise ValueError("need at least a team column and an implied-total column")
+    cols = list(df.columns)
+    low = {c: str(c).strip().lower() for c in cols}
+
+    def _find(keys, exclude=None):
+        for c in cols:
+            if c != exclude and any(k in low[c] for k in keys):
+                return c
+        return None
+
+    team_col = _find(("team", "abbr", "tm", "club")) or cols[0]
+    total_col = _find(("implied", "total", "vegas", "runs", "itt", "proj"),
+                      exclude=team_col)
+    if total_col is None:                       # first numeric non-team column
+        for c in cols:
+            if c != team_col and pd.to_numeric(df[c], errors="coerce").notna().any():
+                total_col = c
+                break
+    if total_col is None:
+        raise ValueError("couldn't find a numeric implied-total column")
+
+    valid = {str(t).strip().upper(): t for t in (valid_teams or [])}
+    mapping, matched, unmatched = {}, [], []
+    for _, row in df.iterrows():
+        raw_team = str(row[team_col]).strip()
+        if not raw_team or raw_team.lower() == "nan":
+            continue
+        try:
+            val = round(float(row[total_col]), 2)
+        except (TypeError, ValueError):
+            continue
+        canon = valid.get(raw_team.upper(), None) if valid else raw_team
+        if canon is None:
+            unmatched.append(raw_team)
+            continue
+        mapping[canon] = val
+        matched.append(canon)
+    return mapping, matched, unmatched
+
+
 TOTALS_OVERRIDE_PATH = os.path.join(HERE, "data", "team_totals_override.json")
 SLATE_PLAYERS_PATH = os.path.join(HERE, "data", "slate_players.json")
 
@@ -1486,9 +1538,70 @@ with tabs[0]:
                 with st.spinner("Probing the Vegas feed…"):
                     st.code(run_vegas_diagnostic(), language="text")
 
+        # --- Upload team totals to pre-fill the overrides ------------------- #
+        # A CSV of teams + implied totals seeds the editor below; matching teams
+        # are pre-filled and any change vs the live Vegas total becomes an
+        # override on Run. Unmatched teams are reported, not silently dropped.
+        with st.expander("⬆ Upload team totals (CSV)"):
+            st.caption("CSV with a **team** column (DK abbreviations, e.g. NYY) "
+                       "and an **implied total** column. Matching teams are "
+                       "pre-filled below; edit further or remove the file to "
+                       "revert to the live Vegas totals.")
+            st.download_button(
+                "⬇ Download template (today's teams)",
+                pd.DataFrame(fetched)[["Team", "Vegas total"]]
+                    .rename(columns={"Vegas total": "Implied total"})
+                    .to_csv(index=False).encode(),
+                file_name="team_totals_template.csv", mime="text/csv",
+                key="tt_csv_tmpl")
+            tt_csv = st.file_uploader(
+                "Team totals CSV", type=["csv"], key="tt_csv_uploader",
+                label_visibility="collapsed")
+            if tt_csv is not None and \
+                    st.session_state.get("_tt_csv_fid") != tt_csv.file_id:
+                st.session_state["_tt_csv_fid"] = tt_csv.file_id
+                try:
+                    raw_tt = tt_csv.getvalue().decode("latin-1", "replace")
+                    cmap, matched, unmatched = parse_team_totals_csv(
+                        raw_tt, set(fetched_map))
+                except Exception as e:
+                    st.session_state["_tt_csv_map"] = {}
+                    st.session_state["_tt_csv_report"] = None
+                    st.error(f"Couldn't read that CSV: {e}")
+                else:
+                    st.session_state["_tt_csv_map"] = cmap
+                    st.session_state["_tt_csv_report"] = {
+                        "matched": matched, "unmatched": unmatched}
+                    st.session_state["_tt_csv_ver"] = \
+                        st.session_state.get("_tt_csv_ver", 0) + 1
+            elif tt_csv is None and st.session_state.get("_tt_csv_map"):
+                # File cleared → drop the overlay and re-seed the editor.
+                st.session_state["_tt_csv_map"] = {}
+                st.session_state["_tt_csv_fid"] = None
+                st.session_state["_tt_csv_report"] = None
+                st.session_state["_tt_csv_ver"] = \
+                    st.session_state.get("_tt_csv_ver", 0) + 1
+
+            _tt_report = st.session_state.get("_tt_csv_report") or {}
+            _tt_map = st.session_state.get("_tt_csv_map") or {}
+            if _tt_map:
+                st.success(f"Loaded {len(_tt_map)} team total(s) from CSV.")
+            if _tt_report.get("unmatched"):
+                st.caption("⚠️ Not matched to any slate team (ignored): "
+                           + ", ".join(_tt_report["unmatched"]))
+
+        # Seed the editor with any uploaded totals (matching teams only).
+        _base_tt = pd.DataFrame(fetched)
+        _csv_map = st.session_state.get("_tt_csv_map") or {}
+        if _csv_map:
+            _base_tt["Vegas total"] = [
+                _csv_map.get(t, v)
+                for t, v in zip(_base_tt["Team"], _base_tt["Vegas total"])]
+
         _tt_edit = st.data_editor(
-            pd.DataFrame(fetched), hide_index=True, width="stretch",
-            height=min(460, 60 + 34 * len(fetched)), key="tt_editor",
+            _base_tt, hide_index=True, width="stretch",
+            height=min(460, 60 + 34 * len(fetched)),
+            key=f"tt_editor_{st.session_state.get('_tt_csv_ver', 0)}",
             disabled=["Game", "Team"],
             column_config={
                 "Game": st.column_config.TextColumn(width="medium"),
