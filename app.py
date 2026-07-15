@@ -56,9 +56,10 @@ PARAMS_PATH = os.path.join(HERE, "field_params.json")
 REQ_COLS = ["FullName", "Team", "Position", "Salary", "Ownership"]
 SIZE_PRESETS = [150, 1000, 6000, 20000, 50000, 150000]
 
-# Brand palette
-BRAND = "#A020FE"
-INK = "#000000"
+# Brand palette — navy / red
+BRAND = "#F22E45"   # red accent
+NAVY = "#002248"
+INK = "#000D1A"     # near-black navy (page background)
 PAPER = "#FFFFFF"
 
 
@@ -113,9 +114,10 @@ st.markdown("""
   @font-face{font-family:'Cosmica Mono';src:url('app/static/fonts/CosmicaMono-Semibold.otf') format('opentype');font-weight:600;font-display:swap;}
 
   :root{
-    --rw-purple:#a020fe; --rw-purple-400:#b34dfe; --rw-purple-700:#7217b4;
-    --rw-ink:#0b0b0d; --rw-surface:#0f0f12; --rw-raised:#16161a; --rw-line:#26262c;
-    --rw-mut:#8f8f99; --rw-turf:#00e657; --rw-ketchup:#ff4537; --rw-lemon:#d9fc07;
+    --rw-red:#f22e45; --rw-red-400:#f5566a; --rw-red-700:#c21e31;
+    --rw-navy:#002248;
+    --rw-ink:#000d1a; --rw-surface:#002248; --rw-raised:#083363; --rw-line:#1c4a7a;
+    --rw-mut:#8ba0ba; --rw-turf:#00e657; --rw-ketchup:#ff4537;
     --font-body:'Cosmica',ui-sans-serif,system-ui,'Segoe UI',sans-serif;
     --font-display:'Integral CF','Impact',system-ui,sans-serif;
     --font-mono:'Cosmica Mono',ui-monospace,Menlo,Consolas,monospace;
@@ -154,7 +156,7 @@ st.markdown("""
     letter-spacing:.04em; font-size:13px; color: var(--rw-mut); padding:6px 14px;
   }
   .stTabs [aria-selected="true"]{ color:#fff !important; }
-  .stTabs [data-baseweb="tab-highlight"]{ background-color: var(--rw-purple) !important; height:3px; }
+  .stTabs [data-baseweb="tab-highlight"]{ background-color: var(--rw-red) !important; height:3px; }
 
   /* Buttons — primary purple, square-ish RW radius */
   .stButton>button, .stDownloadButton>button, [data-testid="stFormSubmitButton"]>button{
@@ -162,10 +164,10 @@ st.markdown("""
     border:1px solid var(--rw-line);
   }
   [data-testid="stBaseButton-primary"], [data-testid="stFormSubmitButton"]>button{
-    background: var(--rw-purple) !important; border-color: var(--rw-purple) !important; color:#fff !important;
+    background: var(--rw-red) !important; border-color: var(--rw-red) !important; color:#fff !important;
   }
   [data-testid="stBaseButton-primary"]:hover, [data-testid="stFormSubmitButton"]>button:hover{
-    background: var(--rw-purple-400) !important; border-color: var(--rw-purple-400) !important;
+    background: var(--rw-red-400) !important; border-color: var(--rw-red-400) !important;
   }
 
   /* Surfaces: expanders, inputs, dataframes */
@@ -174,17 +176,17 @@ st.markdown("""
     background: var(--rw-raised) !important; border-radius:8px !important;
   }
   [data-testid="stDataFrame"], [data-testid="stDataFrameResizable"]{ border:1px solid var(--rw-line); border-radius:10px; }
-  .stProgress > div > div > div > div { background-color: var(--rw-purple); }
-  a, a:visited { color: var(--rw-purple-400); }
+  .stProgress > div > div > div > div { background-color: var(--rw-red); }
+  a, a:visited { color: var(--rw-red-400); }
   hr { border-top:1px solid var(--rw-line); }
   ::-webkit-scrollbar{width:10px;height:10px}
-  ::-webkit-scrollbar-thumb{background:#2b2b31;border-radius:8px}
+  ::-webkit-scrollbar-thumb{background:#1c4a7a;border-radius:8px}
   ::-webkit-scrollbar-track{background:transparent}
 
   /* RotoWire branded header */
   .rw-header{display:flex;align-items:center;gap:16px;padding:14px 18px;margin:2px 0 6px;
     background:var(--rw-surface);border:1px solid var(--rw-line);border-radius:14px;}
-  .rw-header .rw-logo{width:42px;height:42px;flex-shrink:0;color:var(--rw-purple);}
+  .rw-header .rw-logo{width:42px;height:42px;flex-shrink:0;color:var(--rw-red);}
   .rw-header .rw-logo svg{width:100%;height:auto;display:block;}
   .rw-header .rw-wordmark{height:30px;flex-shrink:0;display:flex;align-items:center;}
   .rw-header .rw-wordmark svg{height:30px;width:auto;display:block;}
@@ -194,9 +196,9 @@ st.markdown("""
   .rw-eyebrow{font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;
     font-size:10px;color:var(--rw-mut);margin-top:4px;}
   .rw-badge{margin-left:auto;font-family:var(--font-mono);font-weight:600;font-size:11px;
-    text-transform:uppercase;letter-spacing:.04em;background:var(--rw-lemon);color:#3a3800;
+    text-transform:uppercase;letter-spacing:.04em;background:var(--rw-red);color:#fff;
     padding:6px 12px;border-radius:9999px;display:inline-flex;align-items:center;gap:7px;}
-  .rw-badge .dot{width:7px;height:7px;border-radius:9999px;background:#3a3800;
+  .rw-badge .dot{width:7px;height:7px;border-radius:9999px;background:#fff;
     display:inline-block;animation:rwspin 2s linear infinite;}
   @keyframes rwspin{to{transform:rotate(360deg)}}
 </style>
@@ -1236,8 +1238,8 @@ def place_distribution_chart(dist, i, n_field, n_sim):
                  alt.Tooltip("pct:Q", title="% of sims", format=".2f")])
 
     rules = []
-    for x, label, color in [(1, "1st", "#ffffff"), (10, "Top-10", "#d398ff"),
-                            (100, "Top-100", "#7a13c4"),
+    for x, label, color in [(1, "1st", "#ffffff"), (10, "Top-10", "#f5566a"),
+                            (100, "Top-100", "#c21e31"),
                             (float(dist["mean"][i]), "Mean", "#00e657")]:
         if 1 <= x <= xmax:
             rdf = pd.DataFrame({"x": [x], "label": [label]})

@@ -1,9 +1,9 @@
-# RotoWire design system — full dark.
+# Brand design system — navy / red full dark.
 [theme]
 base = "dark"
-primaryColor = "#a020fe"
-backgroundColor = "#0b0b0d"
-secondaryBackgroundColor = "#16161a"
+primaryColor = "#f22e45"
+backgroundColor = "#000d1a"
+secondaryBackgroundColor = "#002248"
 textColor = "#ffffff"
 font = "sans serif"
 
