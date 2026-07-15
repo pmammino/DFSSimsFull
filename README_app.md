@@ -21,11 +21,13 @@ streamlit run app.py
 ## Design — RotoWire (full dark) + Tabbed Workspace
 
 The UI implements the **RotoWire product design system** (from the Claude Design
-handoff): full-dark theme, **RW Purple #A020FE**, the licensed brand fonts
-(**Integral CF** uppercase display, **Cosmica** body, **Cosmica Mono** labels,
-served from `static/fonts/` via Streamlit static serving), a branded header
-lockup with an animated **SLATE** date badge, and RotoWire-styled stat cards,
-pill badges, tabs (purple active underline), buttons, and tables.
+handoff): full-dark **navy/red** theme — **Navy #002248** panels on a **Dark
+#000D1A** background, **Red #F22E45** accent, and **White #FFFFFF** text — the
+licensed brand fonts (**Integral CF** uppercase display, **Cosmica** body,
+**Cosmica Mono** labels, served from `static/fonts/` via Streamlit static
+serving), a branded header lockup with an animated **SLATE** date badge, and
+RotoWire-styled stat cards, pill badges, tabs (red active underline), buttons,
+and tables.
 
 The flow is organized as a **Tabbed Workspace** (design Option C):
 
