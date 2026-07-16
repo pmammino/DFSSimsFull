@@ -90,18 +90,27 @@ def stack_behavior(hitter_dk, hrows, team=None, k=5, seed=7):
     }
 
 
+def _fmt_corr(v):
+    """Format a correlation that may be None (e.g. no unrelated pairs on a
+    single-game / Showdown slate) without crashing the report."""
+    return f"{v:+.3f}" if v is not None else "  n/a "
+
+
 def print_report(hitter_dk, pitcher_dk, hrows):
     rep = correlation_report(hitter_dk, pitcher_dk, hrows)
     print("  Correlations:")
-    print(f"    teammate H-H:   {rep['teammate_mean']:+.3f}  (target +0.20..+0.50, n={rep['n_teammate_pairs']})")
-    print(f"    unrelated H-H:  {rep['unrelated_mean']:+.3f}  (target ~0, n={rep['n_unrelated_pairs']})")
-    print(f"    hitter vs SP:   {rep['hitter_vs_sp_mean']:+.3f}  (target -0.30..-0.60, n={rep['n_hvp_pairs']})")
+    print(f"    teammate H-H:   {_fmt_corr(rep['teammate_mean'])}  (target +0.20..+0.50, n={rep['n_teammate_pairs']})")
+    print(f"    unrelated H-H:  {_fmt_corr(rep['unrelated_mean'])}  (target ~0, n={rep['n_unrelated_pairs']})")
+    print(f"    hitter vs SP:   {_fmt_corr(rep['hitter_vs_sp_mean'])}  (target -0.30..-0.60, n={rep['n_hvp_pairs']})")
     sb = stack_behavior(hitter_dk, hrows)
     print(f"  Stack check ({sb['team']} {len(sb['stack'])}-stack vs matched unrelated):")
     print(f"    correlated  mean {sb['corr_mean']}  p99 {sb['corr_p99']}  P(>=2x)={sb['corr_P(>=2x_mean)']}")
     print(f"    unrelated   mean {sb['unrel_mean']}  p99 {sb['unrel_p99']}  P(>=2x)={sb['unrel_P(>=2x_mean)']}")
-    ok = (rep['teammate_mean'] and rep['teammate_mean'] >= 0.18
-          and rep['hitter_vs_sp_mean'] and rep['hitter_vs_sp_mean'] <= -0.25
-          and abs(rep['unrelated_mean']) < 0.05)
+    # A single-game slate (Showdown, or a one-game Classic) has no unrelated
+    # hitter pairs, so unrelated_mean is None — treat that as "not applicable"
+    # rather than a failure; the teammate and hitter-vs-SP targets still gate.
+    ok = bool(rep['teammate_mean'] is not None and rep['teammate_mean'] >= 0.18
+              and rep['hitter_vs_sp_mean'] is not None and rep['hitter_vs_sp_mean'] <= -0.25
+              and (rep['unrelated_mean'] is None or abs(rep['unrelated_mean']) < 0.05))
     print(f"  VALIDATION: {'PASS' if ok else 'CHECK'}")
     return rep, sb, ok
