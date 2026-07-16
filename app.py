@@ -42,6 +42,10 @@ from stack_signal import team_stack_ownership, apply_stack_ownership_boost
 import slate_ingest
 import dk_slate_feed
 import shared_store
+import showdown_builder as sb
+import showdown_contest as sc
+import showdown_portfolio as sp
+import showdown_upload as su
 
 # per-position place charts can exceed Altair's default 5000-row cap
 try:
@@ -659,6 +663,442 @@ def rows_to_upload_csv(rows_df, dkid, cands=None):
         w.writerow(ids)
         chosen += 1
     return out.getvalue(), {"chosen": chosen, "skipped_unmapped": skipped}
+
+
+# --------------------------------------------------------------------------- #
+# Showdown (Captain Mode): build the contest, render Results + Export.
+# All of this runs only for showdown-format slates; the classic paths above and
+# below are untouched. Backend lives in showdown_builder / showdown_contest /
+# showdown_portfolio / showdown_upload.
+# --------------------------------------------------------------------------- #
+def run_showdown_sim(dk_df, score_k, K, contest_size, id_map, num_candidates,
+                     seed_cand, seed_field, medium, chalk, cand_jitter, status):
+    """Build a showdown contest (1 CPT + 5 UTIL) from the slate + sims and return
+    the session-state dict the Results/Export tabs render from. Reuses the
+    format-agnostic run_contest_dist (placement ladder + finishing distribution)
+    so the payout-aware export works for showdown too."""
+    pool = sc.build_pool(dk_df, score_k, normfn=normname)   # raises unless 2 teams
+    teams = sorted(pool["Team"].unique())
+    st.write(f"Showdown pool: **{len(pool)} players** — {teams[0]} vs {teams[1]}.")
+    if len(pool) < sb.ROSTER_SIZE:
+        raise RuntimeError(f"need at least {sb.ROSTER_SIZE} simmed players for a "
+                           "showdown roster")
+
+    st.write(f"Developing {int(num_candidates):,} candidate lineups…")
+    cb = sb.Builder(sb.Pool(pool), seed=int(seed_cand), uniform=True,
+                    jitter=float(cand_jitter))
+    cands, _ = build_many(cb, int(num_candidates), "Candidates")
+    if not cands:
+        raise RuntimeError("could not build any showdown candidate lineup")
+
+    beta = beta_for_size(int(contest_size), int(medium), float(chalk))
+    st.write(f"Building an ownership-weighted field of {int(contest_size):,} "
+             f"(chalk β={beta:.2f}, captain ceiling-tilted)…")
+    fp = sc._field_pool(pool, score_k, normname, sc.DEFAULT_CPT_CEILING_TILT)
+    fb = sb.Builder(sb.Pool(fp), {"cpt_chalk": beta, "util_chalk": beta},
+                    seed=int(seed_field), uniform=False)
+    field, _ = build_many(fb, int(contest_size), "Field")
+    if not field:
+        raise RuntimeError("could not build a showdown field")
+    if len(field) < int(contest_size):
+        st.warning(f"Built {len(field):,} of {int(contest_size):,} field lineups "
+                   "(pool constrained); simulating against what could be built.")
+
+    cand_mat = sb.score_matrix(cands, score_k, K, norm=normname)
+    field_mat = sb.score_matrix(field, score_k, K, norm=normname)
+
+    st.write(f"Simulating the contest over {K:,} runs…")
+    cut_places = pev.field_place_cutpoints(len(field))
+    wins, t10, t100, avg, dist = run_contest_dist(
+        field_mat, cand_mat, K, len(field), cut_places=cut_places)
+
+    own_map = {normname(r.FullName): float(r.Ownership) for r in dk_df.itertuples()}
+    res = sb.lineups_to_df(cands)
+    res.insert(0, "Candidate", np.arange(1, len(cands) + 1))
+    res["Wins"] = wins
+    res["Win%"] = np.round(100 * wins / K, 3)
+    res["Top10"] = t10
+    res["Top10%"] = np.round(100 * t10 / K, 2)
+    res["Top100"] = t100
+    res["Top100%"] = np.round(100 * t100 / K, 2)
+    res["AvgPlace"] = np.round(avg, 1)
+    res["BestPlace"] = dist["best"]
+    res["WorstPlace"] = dist["worst"]
+    res["Captain"] = [lu["captain"].Name for lu in cands]
+    res["CptTeam"] = [lu["captain"].Team for lu in cands]
+    res["Split"] = ['-'.join(map(str, sorted(lu["teams"].values(), reverse=True)))
+                    for lu in cands]
+    res["OwnSum"] = [round(sum(own_map.get(normname(pl.Name), 0.0)
+                               for pl in lu["players"]), 1) for lu in cands]
+    res = res.sort_values(["Wins", "Top10", "Top100", "AvgPlace"],
+                          ascending=[False, False, False, True]).reset_index(drop=True)
+
+    pool_norm = {normname(n) for n in pool["Name"].unique()}
+    score_pool = {k: np.asarray(v, np.float32)
+                  for k, v in score_k.items() if k in pool_norm}
+
+    tal, players_meta = {}, {}
+    for nm in pool["Name"]:
+        a = score_k.get(normname(nm))
+        if a is not None and len(a):
+            tal[nm] = 0.5 * float(np.mean(a)) + 0.5 * float(np.percentile(a, 90))
+    for r in pool.itertuples():
+        if r.Name not in players_meta:
+            players_meta[r.Name] = {"pos": r.Pos, "salary": int(r.Salary),
+                                    "team": r.Team, "proj": tal.get(r.Name)}
+
+    return {
+        "format": "showdown",
+        "res": res, "cands": cands, "field": field,
+        "field_df": sb.lineups_to_df(field),
+        "K": K, "contest_size": int(contest_size), "field_n": len(field),
+        "beta": beta, "dist": dist, "id_map": id_map, "score_pool": score_pool,
+        "cand_to_players": {i + 1: frozenset(pl.Name for pl in lu["players"])
+                            for i, lu in enumerate(cands)},
+        "pool_players": sorted({pl.Name for lu in cands for pl in lu["players"]}),
+        "players_meta": players_meta,
+        "captains": sorted({lu["captain"].Name for lu in cands}),
+        "teams": teams,
+    }
+
+
+def _sd_cand_scores(short, sim):
+    """Rebuild each shortlisted showdown candidate's per-sim score (captain 1.5x)
+    from the pool arrays — the payout-aware export path."""
+    score_pool = sim["score_pool"]
+    cands = sim["cands"]
+    K = int(sim["K"])
+    M = len(short)
+    mat = np.zeros((K, M), np.float32)
+    for j, cid in enumerate(short["Candidate"].to_numpy()):
+        lu = cands[int(cid) - 1]
+        for i, pl in enumerate(lu["players"]):
+            arr = score_pool.get(normname(pl.Name))
+            if arr is not None:
+                mat[:, j] += (sb.CPT_MULT * arr) if i == 0 else arr
+    return mat
+
+
+def render_showdown_results(sim):
+    """Results tab for showdown: metrics, captain/team-split filters, a CPT/UTIL
+    lineup table with ✓-to-mark, downloads, and finishing-position detail."""
+    res = sim["res"]
+    K = sim["K"]
+    st.success(f"Simulated {len(sim['cands']):,} showdown candidate lineups in a "
+               f"{sim['field_n']:,}-entry field over {K:,} runs "
+               f"(chalk β = {sim['beta']:.2f}). "
+               f"Game: {sim['teams'][0]} vs {sim['teams'][1]}.")
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Best Win%", f"{res['Win%'].max():.2f}%")
+    m2.metric("Candidates that ever win", int((res["Wins"] > 0).sum()))
+    m3.metric("Best Top100%", f"{res['Top100%'].max():.1f}%")
+    m4.metric("Distinct captains", res["Captain"].nunique())
+
+    res = res.copy()
+    res["Rank"] = np.arange(1, len(res) + 1)
+    st.subheader("Candidate lineups")
+
+    with st.expander("🔎 Filter & search lineups", expanded=False):
+        f1, f2 = st.columns(2)
+        players_sel = f1.multiselect("Must include player(s)", sim["pool_players"])
+        match_mode = f1.radio("Player match", ["all", "any"], horizontal=True)
+        exclude_sel = f1.multiselect("Exclude player(s)", sim["pool_players"])
+        cpt_sel = f2.multiselect("Captain is", sim["captains"])
+        split_sel = f2.multiselect("Team split", sorted(res["Split"].unique()))
+        g1, g2 = st.columns(2)
+
+        def rng_slider(col_obj, col, label, step, fmt):
+            lo, hi = float(res[col].min()), float(res[col].max())
+            if hi <= lo:
+                return (lo, hi)
+            return col_obj.slider(label, lo, hi, (lo, hi), step=step, format=fmt)
+
+        own_rng = rng_slider(g1, "OwnSum", "Combined ownership %", 0.5, "%.0f")
+        sal_rng = rng_slider(g2, "Salary", "Salary", 100.0, "$%d")
+        h1, h2, h3 = st.columns(3)
+        min_win = h1.number_input("Min Win%", 0.0, 100.0, 0.0, 0.1, format="%.2f")
+        min_t10 = h2.number_input("Min Top10%", 0.0, 100.0, 0.0, 0.5)
+        min_t100 = h3.number_input("Min Top100%", 0.0, 100.0, 0.0, 1.0)
+
+    mask = pd.Series(True, index=res.index)
+    c2p = sim["cand_to_players"]
+    if players_sel:
+        want = set(players_sel)
+        mask &= res["Candidate"].map(
+            lambda c: (want.issubset(c2p[int(c)]) if match_mode == "all"
+                       else bool(want & c2p[int(c)])))
+    if exclude_sel:
+        avoid = set(exclude_sel)
+        mask &= res["Candidate"].map(lambda c: not (avoid & c2p[int(c)]))
+    if cpt_sel:
+        mask &= res["Captain"].isin(cpt_sel)
+    if split_sel:
+        mask &= res["Split"].isin(split_sel)
+    mask &= res["OwnSum"].between(*own_rng)
+    mask &= res["Salary"].between(*sal_rng)
+    mask &= res["Win%"] >= min_win
+    mask &= res["Top10%"] >= min_t10
+    mask &= res["Top100%"] >= min_t100
+    fres = res[mask].reset_index(drop=True)
+    st.session_state["_sd_fres_ids"] = list(fres["Candidate"])
+
+    picked = st.session_state.setdefault("picked", set())
+    c1, c2, c3 = st.columns([1.2, 1, 3])
+    c1.caption(f"**{len(fres):,}** of {len(res):,} lineups match.")
+    if c2.button("Mark all", width="stretch"):
+        picked |= {int(x) for x in fres["Candidate"]}
+    if c3.button("Clear marks", width="content"):
+        picked.clear()
+
+    if len(fres) == 0:
+        st.info("No lineups match these filters — loosen them.")
+        return
+
+    def _nm(v):
+        return str(v).rsplit(" (", 1)[0]
+
+    disp = pd.DataFrame({"✓": [int(x) in picked for x in fres["Candidate"]],
+                         "Rank": fres["Rank"]})
+    for c in sb.SD_COLS:
+        disp[c] = fres[c].map(_nm)
+    disp["Win%"] = fres["Win%"]
+    disp["Top10%"] = fres["Top10%"]
+    disp["Top100%"] = fres["Top100%"]
+    disp["Salary"] = fres["Salary"]
+    disp["Own%"] = fres["OwnSum"]
+    disp["Split"] = fres["Split"]
+
+    colcfg = {
+        "✓": st.column_config.CheckboxColumn("✓", help="Mark for export", width="small"),
+        "Rank": st.column_config.NumberColumn(width="small"),
+        "Win%": st.column_config.NumberColumn(format="%.2f%%", width="small"),
+        "Top10%": st.column_config.NumberColumn(format="%.1f%%", width="small"),
+        "Top100%": st.column_config.NumberColumn(format="%.1f%%", width="small"),
+        "Salary": st.column_config.NumberColumn(format="$%d", width="small"),
+        "Own%": st.column_config.NumberColumn(format="%.0f%%", width="small"),
+        "Split": st.column_config.TextColumn(width="small")}
+    colcfg["CPT"] = st.column_config.TextColumn("CPT (1.5×)")
+    for c in sb.SD_COLS[1:]:
+        colcfg[c] = st.column_config.TextColumn("UTIL")
+
+    st.caption("The **CPT** column is your captain (1.5× points & salary). "
+               "Tick **✓** to mark lineups for export.")
+    edited = st.data_editor(
+        disp, hide_index=True, height=460, width="stretch",
+        disabled=[c for c in disp.columns if c != "✓"], column_config=colcfg,
+        column_order=["✓", "Rank"] + sb.SD_COLS +
+                     ["Win%", "Top10%", "Top100%", "Salary", "Own%", "Split"])
+    for cand_id, on in zip(fres["Candidate"], edited["✓"]):
+        (picked.add if on else picked.discard)(int(cand_id))
+    st.caption(f"☑️ **{len(picked):,}** lineup(s) marked for export.")
+
+    d1, d2, d3 = st.columns(3)
+    d1.download_button("Download filtered results (CSV)",
+                       fres.to_csv(index=False).encode(),
+                       file_name=f"showdown_results_{sim['contest_size']}.csv",
+                       mime="text/csv", width="stretch")
+    d2.download_button("Download all candidate lineups (CSV)",
+                       sb.lineups_to_df(sim["cands"]).to_csv(index=False).encode(),
+                       file_name=f"showdown_candidates_{len(sim['cands'])}.csv",
+                       mime="text/csv", width="stretch")
+    d3.download_button("Download field (CSV)",
+                       sim["field_df"].to_csv(index=False).encode(),
+                       file_name=f"showdown_field_{sim['field_n']}.csv",
+                       mime="text/csv", width="stretch")
+
+    with st.expander("📊 Finishing-position detail — click a lineup", expanded=False):
+        pick_df = pd.DataFrame({
+            "Rank": fres["Rank"], "Captain": fres["Captain"], "Split": fres["Split"],
+            "Win%": fres["Win%"], "Top100%": fres["Top100%"], "Salary": fres["Salary"]})
+        pick_evt = st.dataframe(
+            pick_df, hide_index=True, width="stretch", height=200,
+            on_select="rerun", selection_mode="single-row", key="sd_finish_pick",
+            column_config={
+                "Win%": st.column_config.NumberColumn(format="%.2f%%", width="small"),
+                "Top100%": st.column_config.NumberColumn(format="%.1f%%", width="small"),
+                "Salary": st.column_config.NumberColumn(format="$%d", width="small")})
+        sel_rows = pick_evt.selection["rows"] if pick_evt.selection else []
+        pos = sel_rows[0] if sel_rows else 0
+        chosen_cand = int(fres["Candidate"].iloc[pos])
+        r = res[res["Candidate"] == chosen_cand].iloc[0]
+        cc1, cc2 = st.columns([3, 4])
+        with cc1:
+            st.altair_chart(
+                place_distribution_chart(sim["dist"], chosen_cand - 1,
+                                         sim["field_n"], K), width="stretch")
+        with cc2:
+            st.caption(f"Rank #{int(r['Rank'])} · captain {r['Captain']} · "
+                       f"{r['Split']} · ${int(r['Salary']):,}")
+            q1, q2, q3 = st.columns(3)
+            q1.metric("Best", f"{int(r['BestPlace']):,}")
+            q2.metric("Avg", f"{r['AvgPlace']:,.0f}")
+            q3.metric("Worst", f"{int(r['WorstPlace']):,}")
+            lu_rows = []
+            for j, c in enumerate(sb.SD_COLS):
+                v = str(r[c])
+                nm = v.rsplit(" (", 1)[0]
+                tm = v.rsplit(" (", 1)[1][:-1] if " (" in v else ""
+                lu_rows.append({"Slot": "CPT" if j == 0 else "UTIL",
+                                "Player": nm, "Team": tm})
+            st.dataframe(pd.DataFrame(lu_rows), hide_index=True, width="stretch",
+                         height=250)
+            in_marks = int(chosen_cand) in picked
+            if st.button(("☑️ Unmark" if in_marks else "⬜ Mark for export"),
+                         width="stretch", key="sd_mark_btn"):
+                (picked.discard if in_marks else picked.add)(int(chosen_cand))
+                st.rerun()
+
+
+def render_showdown_export(sim):
+    """Export tab for showdown: requires a DKSalaries CSV (for CPT+UTIL ids),
+    then exports marked or top-N lineups — ranked or payout-aware (Portfolio EV)
+    — under per-player / per-captain / per-team exposure caps."""
+    st.subheader("Build a DraftKings Showdown upload file")
+    res = sim["res"]
+    cands = sim["cands"]
+    picked = st.session_state.setdefault("picked", set())
+
+    st.caption("Showdown uploads need each player's **Captain-slot** and **UTIL-slot** "
+               "DraftKings IDs. The RotoWire feed carries only the flex ID, so upload a "
+               "DraftKings **DKSalaries.csv** for this slate (it lists both CPT and UTIL "
+               "rows with their IDs). This is required to generate the upload file.")
+    tmpl = st.file_uploader("DraftKings Showdown DKSalaries CSV", type=["csv"],
+                            key="sd_template")
+    tmap = None
+    if tmpl is not None:
+        tmap = su.parse_showdown_template(tmpl.getvalue().decode("utf-8", "replace"))
+        if not tmap:
+            st.error("Couldn't find CPT/UTIL rows in that CSV — expected DraftKings "
+                     "columns Name, ID, and Roster Position (CPT/UTIL).")
+        else:
+            n_cpt = sum(1 for v in tmap.values() if 'CPT' in v)
+            st.success(f"Loaded IDs for {len({k[0] for k in tmap})} players "
+                       f"({n_cpt} CPT/UTIL rows).")
+
+    fids = st.session_state.get("_sd_fres_ids") or list(res["Candidate"])
+    fres = res[res["Candidate"].isin(fids)]
+
+    mode = st.radio("Which lineups to export?",
+                    [f"My marked selections ({len(picked)})", "Top N by ranking"],
+                    index=0 if picked else 1, horizontal=True)
+
+    if not tmap:
+        st.info("Upload a DKSalaries CSV above to enable the export.")
+        return
+
+    def eligible(names):
+        return su.eligible_names(tmap, names)
+
+    if mode.startswith("My marked"):
+        if not picked:
+            st.info("Mark some lineups on the Results tab, then export them here.")
+            return
+        sel_df = res[res["Candidate"].isin(picked)]
+        csv_text, uinfo = su.upload_csv([row for _, row in sel_df.iterrows()],
+                                        tmap, cands)
+        if uinfo["chosen"] == 0:
+            st.error("None of your marked lineups had CPT+UTIL IDs for every player.")
+            return
+        msg = f"Exporting **{uinfo['chosen']}** marked lineup(s)."
+        if uinfo["skipped_unmapped"]:
+            msg += f" ({uinfo['skipped_unmapped']} skipped — missing an ID.)"
+        st.success(msg)
+        st.download_button("⬇ Download DraftKings upload CSV", csv_text.encode(),
+                           file_name=f"DK_showdown_marked_{uinfo['chosen']}.csv",
+                           mime="text/csv", type="primary", width="stretch")
+        return
+
+    # ---- Top-N ----
+    from_filter = st.radio("Rank from", [f"Current filter ({len(fres):,})",
+                                         f"All candidates ({len(res):,})"],
+                           index=0, horizontal=True)
+    src = fres if from_filter.startswith("Current") else res
+    if len(src) == 0:
+        st.info("No candidates to export.")
+        return
+    uc1, uc2 = st.columns(2)
+    n_up = uc1.number_input("Number of lineups to export", 1, max(1, int(len(src))),
+                            min(20, max(1, int(len(src)))), 1)
+    sort_by = uc2.selectbox("Rank lineups by",
+                            ["Win%", "Top10 Rate", "Top100 Rate"], index=0)
+    keymap = {"Win%": ["Wins", "Top10", "Top100"],
+              "Top10 Rate": ["Top10", "Top100", "Wins"],
+              "Top100 Rate": ["Top100", "Top10", "Wins"]}[sort_by]
+
+    _ev_ready = ("field_cut_scores" in (sim.get("dist") or {})
+                 and bool(sim.get("score_pool")))
+    sel_method = st.radio("Selection method",
+                          ["Ranked (per-lineup rates)", "Portfolio EV (payout-aware)"],
+                          index=0, horizontal=True, key="sd_sel_method")
+    ev_mode = sel_method.startswith("Portfolio EV") and _ev_ready
+    if sel_method.startswith("Portfolio EV") and not _ev_ready:
+        st.info("Re-run the sim to enable payout-aware export. Using ranked for now.")
+
+    with st.expander("Exposure caps (optional)", expanded=False):
+        cc1, cc2, cc3 = st.columns(3)
+        player_cap = cc1.slider("Max per player", 0.0, 1.0, 1.0, 0.05)
+        captain_cap = cc2.slider("Max per captain", 0.0, 1.0, 1.0, 0.05)
+        team_cap = cc3.slider("Max per team (majority side)", 0.0, 1.0, 1.0, 0.05)
+        max_overlap = st.slider("Max lineup overlap", 0.5, 1.0, 1.0, 0.05,
+                                help="Cap the share of players any two exported "
+                                     "lineups may share (1.0 = no limit).")
+
+    ev_entry_fee, ev_pct_paid, ev_rake = 20.0, 0.20, 0.15
+    ev_top_heavy, ev_risk = 0.9, "Balanced"
+    ev_shortlist = min(int(len(src)), 1000)
+    if ev_mode:
+        with st.expander("Payout structure & risk posture", expanded=True):
+            st.caption(f"Modeling a **{int(sim['field_n']):,}-entry** contest.")
+            ec1, ec2, ec3 = st.columns(3)
+            ev_entry_fee = float(ec1.number_input("Entry fee ($)", 0.25, 10000.0,
+                                                  20.0, 1.0))
+            ev_pct_paid = ec2.slider("% of field paid", 0.05, 0.30, 0.20, 0.01)
+            ev_rake = ec3.slider("Rake %", 0.0, 0.30, 0.15, 0.01)
+            ev_top_heavy = st.slider("Top-heaviness", 0.3, 1.5, 0.9, 0.1)
+            ev_risk = st.selectbox("How should the portfolio play out?",
+                                   list(pev.UTILITIES.keys()), index=1)
+            st.caption(pev.UTILITIES[ev_risk][1])
+            ev_shortlist = int(st.number_input(
+                "Candidate pool size", int(min(50, len(src))),
+                int(min(4000, len(src))), int(min(1000, len(src))), 100))
+
+    if ev_mode:
+        short = (src.sort_values(keymap, ascending=False)
+                 .head(int(ev_shortlist)).reset_index(drop=True))
+        cand_scores = _sd_cand_scores(short, sim)
+        prize = pev.make_payout_curve(int(sim["field_n"]), ev_entry_fee,
+                                      top_heaviness=ev_top_heavy,
+                                      pct_paid=ev_pct_paid, rake=ev_rake)
+        pay = pev.candidate_payout_matrix(
+            cand_scores, sim["dist"]["field_cut_scores"],
+            sim["dist"]["cut_places"], prize)
+        chosen, info, W = sp.select_showdown_portfolio_ev(
+            short, int(n_up), pay, pev.utility(ev_risk), eligible=eligible,
+            player_cap=player_cap, captain_cap=captain_cap, team_cap=team_cap,
+            max_overlap=max_overlap, eval_sims=4000)
+        csv_text, uinfo = su.upload_csv(chosen, tmap, cands)
+        st.caption(f"Portfolio EV — exp return ${info['exp_return']:.0f}/slate · "
+                   f"cash rate {100*info['cash_rate']:.0f}% · "
+                   f"{info['distinct_captains']} distinct captains.")
+    else:
+        chosen, info = sp.select_showdown_portfolio(
+            src, int(n_up), keymap, eligible=eligible, player_cap=player_cap,
+            captain_cap=captain_cap, team_cap=team_cap, max_overlap=max_overlap)
+        csv_text, uinfo = su.upload_csv(chosen, tmap, cands)
+
+    if uinfo["chosen"] == 0:
+        st.error("No exportable lineups — check the DKSalaries CSV covers these players.")
+        return
+    st.success(f"Selected **{uinfo['chosen']}** lineup(s) — max/player "
+               f"{info['max_player']}, max/captain {info['max_captain']}, "
+               f"max/team {info['max_team']} ({info['distinct_captains']} captains).")
+    if uinfo["skipped_unmapped"]:
+        st.caption(f"{uinfo['skipped_unmapped']} lineup(s) skipped — a player lacked "
+                   "a CPT/UTIL ID in the DKSalaries CSV.")
+    st.download_button("⬇ Download DraftKings upload CSV", csv_text.encode(),
+                       file_name=f"DK_showdown_top{uinfo['chosen']}.csv",
+                       mime="text/csv", type="primary", width="stretch")
 
 
 # --------------------------------------------------------------------------- #
@@ -1388,14 +1828,17 @@ with tabs[0]:
                 format_func=lambda i: labels.get(i, i), key="slate_pick")
             slate = next(s for s in slates if s["slate_id"] == sid)
             dk_df, id_map = dk_slate_feed.to_dk_df(slate)
+            st.session_state["_slate_fmt"] = slate.get("format", "classic")
             unowned = slate["n_players"] - slate["n_owned"]
+            games_lbl = ("1 game (Showdown)" if slate.get("format") == "showdown"
+                         else f"{slate['n_games']} games")
             st.caption(
                 f"Slate **{sid}** ({catalog.get('date', '')}) — "
-                f"{slate['n_games']} games, {slate['n_players']} players, "
+                f"{games_lbl}, {slate['n_players']} players, "
                 f"{slate['n_owned']} with feed ownership"
                 + (f" ({unowned} defaulted to 0%)." if unowned else "."))
         elif catalog is not None:
-            st.warning("No Classic slates are available from the feed right now — "
+            st.warning("No slates are available from the feed right now — "
                        "switch to “Upload your own file”.")
     else:
         st.caption(
@@ -1405,6 +1848,7 @@ with tabs[0]:
             "**clean CSV** with columns " + ", ".join(f"`{c}`" for c in REQ_COLS) +
             " (add an `ID` column to enable the DK upload without a separate template). "
             "Ownership is the projected draft % (0–100).")
+        st.session_state["_slate_fmt"] = "classic"   # uploads run the classic path
         upload = st.file_uploader("Slate file", type=["csv"], label_visibility="collapsed")
         if upload is not None:
             try:
@@ -1804,6 +2248,28 @@ with tabs[0]:
                          "matched the sim universe. Check the slate file.")
                 st.stop()
 
+            # ---- Showdown slates take a dedicated path (1 CPT + 5 UTIL, single
+            # game). Everything above (freshness, sim load, name-match guard) is
+            # format-agnostic; everything below is the classic build, so we branch
+            # here and st.rerun() to render the tabs from session state. ----
+            if st.session_state.get("_slate_fmt", "classic") == "showdown":
+                try:
+                    sim_state = run_showdown_sim(
+                        dk_df, score_k, K, int(contest_size), id_map,
+                        int(num_candidates), int(seed_cand), int(seed_field),
+                        int(medium), float(chalk), float(cand_jitter), status)
+                except Exception as e:
+                    status.update(label="Showdown build failed", state="error")
+                    st.error(f"Could not build the showdown contest: {e}")
+                    st.stop()
+                st.session_state["sim"] = sim_state
+                st.session_state["picked"] = set()
+                st.session_state.pop("show_dist_for", None)
+                st.session_state.pop("_sd_fres_ids", None)
+                st.session_state["_goto_players"] = True
+                status.update(label=f"Done in {time.time()-t0:.1f}s", state="complete")
+                st.rerun()
+
             # ---- build the pool (write CSV to a temp path for build_pool) ----
             st.write("Building player pool from your slate + sims…")
             with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False,
@@ -2094,6 +2560,8 @@ with tabs[2]:
     if sim is None:
         st.info("On the **Setup** tab, upload your slate file and make all three "
                 "selections, then press **Run simulation**.")
+    elif sim.get("format") == "showdown":
+        render_showdown_results(sim)
     else:
         res = sim["res"]
         K = sim["K"]
@@ -2308,6 +2776,8 @@ with tabs[2]:
 with tabs[3]:
     if sim is None:
         st.info("Run a simulation first (Setup tab) to build a DraftKings upload.")
+    elif sim.get("format") == "showdown":
+        render_showdown_export(sim)
     else:
             st.subheader("Build a DraftKings upload file")
 
