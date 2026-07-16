@@ -21,8 +21,12 @@ identical in shape to what the CSV upload path produces:
 
 Slates are matched between the two feeds on SlateID == SlateId; players within a
 slate are matched on RotoID, falling back to normalized name when an id is
-missing. Only Classic slates are surfaced (the sim pipeline doesn't build
-Showdown).
+missing. Both Classic and Showdown slates are surfaced, each tagged with a
+normalized ``format`` ('classic' | 'showdown') so the app can route to the right
+builder. Showdown slates list each player once at Position "UT" with a single
+(flex/UTIL) DraftKingsDraftableID and the base salary; the captain costs 1.5x and
+its DK upload id is not in this feed, so showdown uploads need a DKSalaries.csv
+template for the Captain-slot ids (mirrors the Classic upload's dk_template).
 """
 import re
 import urllib.request
@@ -32,6 +36,13 @@ import pandas as pd
 
 from stage_d import norm
 import dk_ids
+
+
+def slate_format(game_type):
+    """Normalize a DK GameType to a routing key: 'showdown' or 'classic'.
+    The salaries feed uses 'Classic' / 'Showdown'; anything containing
+    'showdown' (case-insensitive) is treated as showdown, else classic."""
+    return 'showdown' if 'showdown' in str(game_type or '').lower() else 'classic'
 
 FEED_SALARIES  = ("https://rotowire-secrets-ebgmaeh8ecc4huhf.canadaeast-01."
                   "azurewebsites.net/api/proxy?feed=salaries-dk")
@@ -63,20 +74,20 @@ def _txt(el, tag, default=''):
 
 
 def parse_salaries(xml_text):
-    """Return (date, {slate_id: slate}). Classic slates only.
-    slate = {slate_id, game_type, slate_type, start, end, games(set),
-             players:[{name, team, position, salary, draftable_id, roto_id}]}."""
+    """Return (date, {slate_id: slate}). Classic and Showdown slates.
+    slate = {slate_id, game_type, format, slate_type, start, end, games(set),
+             players:[{name, team, position, salary, draftable_id, roto_id}]}.
+    `format` is 'classic' or 'showdown' (see slate_format)."""
     root = _root(xml_text, 'Salaries')
     date = (root.get('Date') or '').strip()
     slates = {}
     for p in root.findall('.//Player'):
-        if _txt(p, 'GameType').lower() != 'classic':
-            continue
+        gt = _txt(p, 'GameType')
         sid = _txt(p, 'SlateID')
         if not sid:
             continue
         s = slates.setdefault(sid, {
-            'slate_id': sid, 'game_type': _txt(p, 'GameType'),
+            'slate_id': sid, 'game_type': gt, 'format': slate_format(gt),
             'slate_type': _txt(p, 'SlateType'),
             'start': _txt(p, 'SlateStart'), 'end': _txt(p, 'SlateEnd'),
             'games': set(), 'players': []})
@@ -139,9 +150,22 @@ def _fmt_time(start):
 
 
 def _label(slate, n_games, n_players):
-    gt = (slate['game_type'] or 'Classic').replace('_', ' ').title()
+    fmt = slate.get('format') or slate_format(slate.get('game_type'))
     t = _fmt_time(slate['start'])
-    bits = [gt, f"{n_games} games"]
+    if fmt == 'showdown':
+        # single game: lead with "Showdown" and the matchup, not a game count.
+        # Prefer the actual matchup (games set / salaries SlateType 'NYM @ PHI')
+        # over the ownership feed's SlateType, which is just the word 'SHOWDOWN'.
+        games = slate.get('games') or []
+        st = (slate.get('slate_type') or '').strip()
+        matchup = (next(iter(sorted(games)), '')
+                   or (st if st.lower() != 'showdown' else '')).strip()
+        bits = ['Showdown']
+        if matchup:
+            bits.append(matchup)
+    else:
+        gt = (slate['game_type'] or 'Classic').replace('_', ' ').title()
+        bits = [gt, f"{n_games} games"]
     if t:
         bits.append(t)
     bits.append(f"{n_players} players")
@@ -149,9 +173,10 @@ def _label(slate, n_games, n_players):
 
 
 def build_catalog(salaries_xml=None, ownership_xml=None):
-    """Fetch + join both feeds into a catalog of Classic slates that have both
-    salary and ownership data. Returns {'date', 'slates':[slate, …]} where each
-    slate is JSON-serialisable and carries its joined players."""
+    """Fetch + join both feeds into a catalog of Classic and Showdown slates that
+    have both salary and ownership data. Returns {'date', 'slates':[slate, …]}
+    where each slate is JSON-serialisable, tagged with a 'format'
+    ('classic'|'showdown'), and carries its joined players."""
     salaries_xml = salaries_xml or _http_get(FEED_SALARIES)
     ownership_xml = ownership_xml or _http_get(FEED_OWNERSHIP)
     date, sal_slates = parse_salaries(salaries_xml)
@@ -174,20 +199,25 @@ def build_catalog(salaries_xml=None, ownership_xml=None):
                 n_owned += 1
             players.append({**pl, 'ownership': float(ov)})
         n_games = len(s['games'])
-        # the ownership feed's GameType (EARLY/AFTERNOON/…) is the descriptive
-        # time-window label; the salaries feed's is just "Classic".
+        # the ownership feed's GameType is a descriptive label (classic:
+        # EARLY/AFTERNOON/…; showdown: the matchup), not the format — the
+        # salaries feed's GameType ('Classic'/'Showdown') is authoritative for
+        # routing, so `format` comes from there.
         meta = dict(s)
         meta['game_type'] = own.get('game_type') or s['game_type']
+        meta['slate_type'] = own.get('slate_type') or s['slate_type']
         out.append({
             'slate_id': sid, 'date': date,
+            'format': s['format'],
             'game_type': meta['game_type'],
-            'slate_type': own.get('slate_type') or s['slate_type'],
+            'slate_type': meta['slate_type'],
             'start': s['start'], 'end': s['end'],
             'n_games': n_games, 'n_players': len(players), 'n_owned': n_owned,
             'games': sorted(s['games']),
             'label': _label(meta, n_games, len(players)),
             'players': players})
-    out.sort(key=lambda x: (x['start'], -x['n_games']))
+    # classic first (more common), then by start time, then more games first
+    out.sort(key=lambda x: (x['format'] != 'classic', x['start'], -x['n_games']))
     return {'date': date, 'slates': out}
 
 
@@ -210,7 +240,9 @@ def to_dk_df(slate):
 
 if __name__ == '__main__':
     cat = build_catalog()
-    print(f"Slate catalog {cat['date']}: {len(cat['slates'])} Classic slate(s)")
+    n_c = sum(1 for s in cat['slates'] if s['format'] == 'classic')
+    n_s = sum(1 for s in cat['slates'] if s['format'] == 'showdown')
+    print(f"Slate catalog {cat['date']}: {n_c} Classic, {n_s} Showdown slate(s)")
     for s in cat['slates']:
         print(f"  [{s['slate_id']}] {s['label']} "
               f"({s['n_owned']}/{s['n_players']} with ownership)")

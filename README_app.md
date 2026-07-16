@@ -48,6 +48,29 @@ The flow is organized as a **Tabbed Workspace** (design Option C):
 - **🏆 Results** — candidate lineups: metrics, filter/search, quick export.
 - **⬇️ Export** — build the DraftKings upload file.
 
+### Classic vs. Showdown slates
+
+The app supports both DraftKings contest formats and routes automatically on the
+slate you pick from the RotoWire feed (each slate is tagged Classic or Showdown):
+
+- **Classic** — the standard 2×P + C/1B/2B/3B/SS/3×OF roster with hitter stacks
+  (everything described elsewhere in this doc).
+- **Showdown / Captain Mode** — a single game, **1 CPT + 5 UTIL**. The captain
+  scores **1.5× points** and costs **1.5× salary**; any player (hitter or
+  pitcher) may fill any slot; rosters must include players from **both teams**.
+  The same correlated sims drive it — only the roster, the captain multiplier,
+  and the opponent-field model differ. The field is **ownership-driven with a
+  captain ceiling-tilt** (studs get captained more than flex ownership implies);
+  it is a heuristic, not yet calibrated to real showdown standings. Results shows
+  a **CPT/UTIL** table with captain and team-split filters; Export offers the
+  same ranked / Portfolio-EV selection under **per-player / per-captain /
+  per-team** exposure caps.
+
+  **Showdown upload:** the RotoWire feed carries only each player's flex ID, so
+  the Export tab **requires you to upload a DraftKings `DKSalaries.csv`** for the
+  slate — it supplies the distinct **Captain-slot and UTIL-slot** IDs needed for
+  a valid upload (the captain is written under its CPT id).
+
 Theme tokens live in `.streamlit/config.toml`. Drop your logo at
 **`assets/logo.svg`** (or `.png`/`.jpg`/`.webp`) — it's used in the header
 lockup and as the favicon (favicon needs a raster file).
