@@ -636,11 +636,14 @@ def fetch_statcast_season(year: int, force: bool = False) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def fetch_chadwick_lookup(force: bool = False) -> pd.DataFrame:
-    """Returns columns: key_mlbam, name_first, name_last.
+    """Returns columns: key_mlbam, name_first, name_last[, birth_year].
 
     Mirrors chadwick_player_lu() in baseballr. Falls back to an empty
     dataframe if the upstream is unavailable — the pipeline's primary name
-    source is statsapi anyway, so this is only used to fill gaps.
+    source is statsapi anyway, so this is only used to fill gaps. birth_year
+    is included when the upstream register exposes it (used by the minor-league
+    translation step to age debut players); it is optional and callers must
+    treat it as best-effort.
     """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     out_path = CACHE_DIR / "chadwick_lookup.parquet"
@@ -652,7 +655,10 @@ def fetch_chadwick_lookup(force: bool = False) -> pd.DataFrame:
         import warnings
         warnings.filterwarnings("ignore")
         df = pb.chadwick_register()
-        df = df[["key_mlbam", "name_first", "name_last"]].dropna(subset=["key_mlbam"])
+        keep = ["key_mlbam", "name_first", "name_last"]
+        if "birth_year" in df.columns:
+            keep.append("birth_year")
+        df = df[keep].dropna(subset=["key_mlbam"])
         df["key_mlbam"] = df["key_mlbam"].astype(int)
         df.to_parquet(out_path)
         return df
@@ -663,6 +669,96 @@ def fetch_chadwick_lookup(force: bool = False) -> pd.DataFrame:
         return pd.DataFrame({"key_mlbam": pd.Series(dtype="int64"),
                              "name_first": pd.Series(dtype="string"),
                              "name_last":  pd.Series(dtype="string")})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Minor-league stat tables (RotoWire) for MLE translations
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Minor-league level → RotoWire "level" query value. Extend as new levels are
+# added to MLE_LEVELS.
+_MINORS_LEVEL_PARAM = {"AAA": "AAA", "AA": "AA", "A+": "A+", "A": "A"}
+# Role → RotoWire "pos" query value (B = batters, P = pitchers).
+_MINORS_ROLE_PARAM  = {"hitters": "B", "pitchers": "P"}
+_MINORS_BASE_URL = "https://www.rotowire.com/baseball/tables/minors-player-stats.php"
+
+
+def _fetch_minors_one(season: int, level: str, role: str) -> list[dict]:
+    """Fetch one (level, role) minors table from RotoWire. Returns [] on failure.
+
+    role is 'hitters' or 'pitchers'. The endpoint returns a JSON array of
+    per-player dicts (see minors_inputs/sample_minors_2026.json for the shape).
+    """
+    params = {
+        "pos":    _MINORS_ROLE_PARAM[role],
+        "league": "ALL",
+        "season": season,
+        "level":  _MINORS_LEVEL_PARAM.get(level, level),
+    }
+    r = requests.get(_MINORS_BASE_URL, params=params,
+                     timeout=STATSAPI_TIMEOUT, headers=HEADERS)
+    r.raise_for_status()
+    data = r.json()
+    return data if isinstance(data, list) else []
+
+
+def fetch_minors(season: int, levels: tuple[str, ...] = ("AAA", "AA"),
+                 local_feed: "Path | str | None" = None,
+                 force: bool = False) -> dict:
+    """Return minor-league stat tables as {level: {"hitters": [...], "pitchers": [...]}}.
+
+    Resolution order for each (level, role):
+      1. cached JSON (cache/minors_<season>.json) unless force
+      2. live RotoWire fetch
+      3. local fallback feed (local_feed, with '<season>' substituted) — used
+         when the live host is blocked (e.g. the hosted web sandbox). The local
+         file must already be in the {level: {hitters, pitchers}} shape.
+
+    The result is cached to cache/minors_<season>.json. An empty dict is
+    returned only when nothing at all could be loaded.
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = CACHE_DIR / f"minors_{season}.json"
+    if cache_path.exists() and not force:
+        try:
+            return json.loads(cache_path.read_text())
+        except Exception:
+            pass  # fall through and refetch
+
+    feed: dict = {}
+    any_live = False
+    for level in levels:
+        feed[level] = {"hitters": [], "pitchers": []}
+        for role in ("hitters", "pitchers"):
+            try:
+                recs = _fetch_minors_one(season, level, role)
+                feed[level][role] = recs
+                any_live = any_live or bool(recs)
+                print(f"  minors {season} {level} {role}: {len(recs)}")
+            except Exception as e:
+                print(f"  minors {season} {level} {role}: FAILED ({type(e).__name__})")
+            time.sleep(0.3)
+
+    if not any_live:
+        # Live fetch produced nothing — try the local fallback file.
+        if local_feed is not None:
+            p = Path(str(local_feed).replace("<season>", str(season)))
+            if p.exists():
+                try:
+                    feed = json.loads(p.read_text())
+                    print(f"  minors {season}: loaded local fallback {p} "
+                          f"({sum(len(v.get('hitters', [])) + len(v.get('pitchers', [])) for v in feed.values())} records)")
+                except Exception as e:
+                    print(f"  minors {season}: local fallback {p} unreadable ({e})")
+            else:
+                print(f"  minors {season}: no live data and local fallback {p} not found")
+
+    # Only cache non-empty feeds so a transient outage doesn't poison the cache.
+    has_any = any((feed.get(lv, {}) or {}).get(role)
+                  for lv in feed for role in ("hitters", "pitchers"))
+    if has_any:
+        cache_path.write_text(json.dumps(feed))
+    return feed
 
 
 if __name__ == "__main__":

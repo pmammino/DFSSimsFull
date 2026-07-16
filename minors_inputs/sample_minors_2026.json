@@ -1,0 +1,66 @@
+{
+  "AAA": {
+    "hitters": [
+      {
+        "playerID": "17781",
+        "playerURL": "/baseball/player/ryan-fitzgerald-17781",
+        "player": "Ryan Fitzgerald",
+        "firstname": "Ryan",
+        "lastname": "Fitzgerald",
+        "team": "Oklahoma C",
+        "currentTeam": "LAD",
+        "position": "3B",
+        "games": "86",
+        "ab": "352",
+        "runs": "60",
+        "hits": "108",
+        "doubles": "20",
+        "triples": "4",
+        "hr": "7",
+        "rbi": "56",
+        "walks": "33",
+        "strikes": "60",
+        "bbperk": "0.55",
+        "contact": "82.95",
+        "steals": "8",
+        "caught": "3",
+        "avg": ".307",
+        "obp": ".376",
+        "slg": ".446",
+        "ops": ".822"
+      }
+    ],
+    "pitchers": [
+      {
+        "playerID": "14590",
+        "playerURL": "/baseball/player/casey-lawrence-14590",
+        "player": "Casey Lawrence",
+        "firstname": "Casey",
+        "lastname": "Lawrence",
+        "team": "Tacoma",
+        "pos": "P",
+        "games": "19",
+        "gs": "19",
+        "cg": "0",
+        "sh": "0",
+        "ip": "108.2",
+        "h": "119",
+        "er": "48",
+        "hr": "15",
+        "k": "68",
+        "bb": "16",
+        "k9": "5.7",
+        "bb9": "1.3",
+        "hr9": "1.2",
+        "w": "5",
+        "l": "6",
+        "sv": "0",
+        "era": "3.98",
+        "whip": "1.25",
+        "hrfbpct": "16.9",
+        "kpct": "15.3",
+        "bbpct": "3.6"
+      }
+    ]
+  }
+}

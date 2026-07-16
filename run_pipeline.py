@@ -105,8 +105,80 @@ def step1_acquire_rates(target_year: int, force: bool):
     return fetch_rate_data(target_year, RATE_HIST_START, force=force)
 
 
+def step1b_inject_mle(hit_df: pd.DataFrame, pit_df: pd.DataFrame,
+                      target_year: int, force: bool):
+    """Translate minor-league lines into synthetic MLB-equivalent history rows
+    for players with NO MLB history, and append them to the rate frames.
+
+    Returns (hit_combined, pit_combined, hit_bip, pit_bip, mle_hitter_ids,
+    mle_pitcher_ids). When MLE is disabled or no minors data is available, the
+    original frames are returned unchanged with empty BIP frames / id sets.
+    """
+    from pipeline_config import (
+        MLE_ENABLE, MLE_LEVELS, MLE_SEASON_OFFSET, MLE_LOCAL_FEED,
+    )
+    empty = (pd.DataFrame(), pd.DataFrame())
+    if not MLE_ENABLE:
+        return hit_df, pit_df, empty[0], empty[1], set(), set()
+
+    print("\n" + "═" * 70)
+    print("STEP 1b: Minor-league translations (MLE) for no-MLB-history players")
+    print("═" * 70)
+    from data_acquisition import fetch_chadwick_lookup, fetch_minors
+    from mle_translations import build_name_to_mlbam, build_synthetic_rows
+
+    feed_season = target_year - MLE_SEASON_OFFSET
+    feed = fetch_minors(feed_season, levels=MLE_LEVELS,
+                        local_feed=MLE_LOCAL_FEED, force=force)
+    n_records = sum(len((feed.get(lv, {}) or {}).get(role, []) or [])
+                    for lv in feed for role in ("hitters", "pitchers"))
+    if n_records == 0:
+        print("  No minors data available (live blocked + no local feed) — skipping MLE")
+        return hit_df, pit_df, empty[0], empty[1], set(), set()
+
+    chadwick = fetch_chadwick_lookup(force=force)
+    name_idx = build_name_to_mlbam(chadwick)
+    if not name_idx:
+        print("  Chadwick lookup empty — cannot resolve RotoWire ids to MLBAM; skipping MLE")
+        return hit_df, pit_df, empty[0], empty[1], set(), set()
+
+    hit_ids = set(pd.to_numeric(hit_df["PlayerId"], errors="coerce").dropna().astype(int))
+    pit_ids = set(pd.to_numeric(pit_df["PlayerId"], errors="coerce").dropna().astype(int))
+
+    hrows, hbip, hstats = build_synthetic_rows(
+        feed, "hitter", target_year, name_idx, chadwick,
+        existing_ids=hit_ids, season_offset=MLE_SEASON_OFFSET, levels=MLE_LEVELS)
+    prows, pbip, pstats = build_synthetic_rows(
+        feed, "pitcher", target_year, name_idx, chadwick,
+        existing_ids=pit_ids, season_offset=MLE_SEASON_OFFSET, levels=MLE_LEVELS)
+
+    print(f"  Hitters : matched={hstats['matched']} "
+          f"unresolved={hstats['skipped_unresolved']} "
+          f"already-MLB={hstats['skipped_existing']} → injected {hstats['used']}")
+    print(f"  Pitchers: matched={pstats['matched']} "
+          f"unresolved={pstats['skipped_unresolved']} "
+          f"already-MLB={pstats['skipped_existing']} → injected {pstats['used']}")
+
+    hit_comb = pd.concat([hit_df, hrows], ignore_index=True) if len(hrows) else hit_df
+    pit_comb = pd.concat([pit_df, prows], ignore_index=True) if len(prows) else pit_df
+
+    hit_mle_ids = set(hrows["PlayerId"].astype(int)) if len(hrows) else set()
+    pit_mle_ids = set(prows["PlayerId"].astype(int)) if len(prows) else set()
+    return hit_comb, pit_comb, hbip, pbip, hit_mle_ids, pit_mle_ids
+
+
 def step2_build_rate_models(hit_df: pd.DataFrame, pit_df: pd.DataFrame,
-                            target_year: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+                            target_year: int,
+                            hit_fit_df: pd.DataFrame | None = None,
+                            pit_fit_df: pd.DataFrame | None = None
+                            ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build the K%/BB%/HBP%/SF% projections.
+
+    hit_df / pit_df may carry synthetic minor-league-translation rows appended
+    to the real statsapi history. When they do, pass the real-only frames as
+    hit_fit_df / pit_fit_df so model calibration and the league means stay
+    uncontaminated; the synthetic rows still seed each rookie's own projection.
+    """
     print("\n" + "═" * 70)
     print(f"STEP 2: Rate models (K%, BB%, HBP%, SF%) → {target_year}")
     print("═" * 70)
@@ -116,7 +188,7 @@ def step2_build_rate_models(hit_df: pd.DataFrame, pit_df: pd.DataFrame,
     )
     from rate_models import fit_and_predict_decay_rate
 
-    def _do(role_df, shrink_dict, pa_col, role_name, rate_shrink_k):
+    def _do(role_df, shrink_dict, pa_col, role_name, rate_shrink_k, fit_df):
         print(f"\n  Building {role_name} panel...")
         panel = build_rate_panel(role_df, pa_col, shrink_dict)
         print(f"  Panel: {len(panel):,} player-season rows")
@@ -135,6 +207,7 @@ def step2_build_rate_models(hit_df: pd.DataFrame, pit_df: pd.DataFrame,
                 role_df, target_year, pa_col, rate,
                 prior_k=rate_shrink_k, decay=RATE_DECAY, infer=infer,
                 max_history_years=RATE_MAX_HISTORY_YEARS,
+                fit_df=fit_df,
             )
             if len(metrics):
                 print(metrics.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
@@ -147,14 +220,16 @@ def step2_build_rate_models(hit_df: pd.DataFrame, pit_df: pd.DataFrame,
             print(f"\n  -- {role_name} {rate} (beta-binomial shrinkage) --")
             infer = project_simple_rate(
                 role_df, target_year, pa_col, rate,
-                prior_k=shrink_dict[rate], infer=infer
+                prior_k=shrink_dict[rate], infer=infer, fit_df=fit_df,
             )
             print(f"  Mean Pred_{rate}: {infer[f'Pred_{rate}'].mean():.4f}  "
                   f"Mean SD: {infer[f'SD_{rate}'].mean():.4f}")
         return infer
 
-    hit_rates = _do(hit_df, SHRINK_K, "PA", "Hitter", RATE_SHRINK_K_HITTER)
-    pit_rates = _do(pit_df, SHRINK_K_PITCHER, "TBF", "Pitcher", RATE_SHRINK_K_PITCHER)
+    hit_rates = _do(hit_df, SHRINK_K, "PA", "Hitter", RATE_SHRINK_K_HITTER,
+                    hit_fit_df)
+    pit_rates = _do(pit_df, SHRINK_K_PITCHER, "TBF", "Pitcher",
+                    RATE_SHRINK_K_PITCHER, pit_fit_df)
     return hit_rates, pit_rates
 
 
@@ -458,7 +533,8 @@ def _format_output(df: pd.DataFrame) -> pd.DataFrame:
     for c in round_cols:
         if c in df.columns:
             df[c] = df[c].round(5)
-    keep_meta = ["PlayerId", "Name", "Team", "Age", "Last_PA", "Career_PA", "N_BIP"]
+    keep_meta = ["PlayerId", "Name", "Team", "Age", "Last_PA", "Career_PA",
+                 "N_BIP", "mle_source"]
     extra_sb = [c for c in SB_COLS if c in df.columns]
     extra_rr = [c for c in RUNS_RBI_COLS if c in df.columns]
     extra_park_prob = [c for c in PARK_PROB_COLS if c in df.columns]
@@ -902,8 +978,16 @@ def main():
     # Step 1
     hit_df, pit_df = step1_acquire_rates(target, args.force)
 
+    # Step 1b — translate minor-league lines into synthetic MLB-equivalent
+    # "prior season" rows for players with no MLB history (rookies). The
+    # combined frames feed the projection; the original real-only frames feed
+    # model calibration / league means so the synthetic rows can't contaminate.
+    (hit_comb, pit_comb, hit_mle_bip, pit_mle_bip,
+     hit_mle_ids, pit_mle_ids) = step1b_inject_mle(hit_df, pit_df, target, args.force)
+
     # Step 2
-    hit_rates, pit_rates = step2_build_rate_models(hit_df, pit_df, target)
+    hit_rates, pit_rates = step2_build_rate_models(
+        hit_comb, pit_comb, target, hit_fit_df=hit_df, pit_fit_df=pit_df)
 
     # Step 3 — load BIP
     bip_all, bip_imp_pool = step3_load_bip_data(
@@ -948,16 +1032,33 @@ def main():
     # Step 7 — combine
     h_final, p_final = step7_combine(hit_rates, pit_rates, hitters_bip, pitchers_bip)
 
-    # Step 8 — SB projection (hitters only)
-    h_final = step8_project_sb(h_final, hit_df, sprint, target)
+    # Step 7b — MLE players have no MLB batted-ball data, so step 7 fell them
+    # back to the league-average BIP distribution. Override that with their
+    # minor-league-translated per-BIP profile so a slugging prospect keeps his
+    # power signal. The rate side (K/BB/HBP/SF) is untouched; only the
+    # batted-ball mass is re-apportioned, so the 9 events still sum to 1.0.
+    from mle_translations import apply_mle_bip_override
+    h_final = apply_mle_bip_override(h_final, hit_mle_bip)
+    p_final = apply_mle_bip_override(p_final, pit_mle_bip)
+
+    # Step 8 — SB projection (hitters only). Uses the combined frame so a
+    # rookie's translated SB/CS history seeds his steal projection.
+    h_final = step8_project_sb(h_final, hit_comb, sprint, target)
 
     # Step 9 — R/RBI projection (hitters only). Fetches team RPG for
     # historical seasons; uses most-recent team RPG as the target-year forecast.
+    # Run on real-only history (a rookie's synthetic R=RBI=0 would bias the
+    # detrended rate low); rookies are filled with the league average below.
     team_rpg = fetch_team_rpg(
         sorted(set(hit_df["Season"].astype(int))),
         force=args.force,
     )
     h_final = step9_project_runs_rbi(h_final, hit_df, team_rpg, target)
+    # Fill R/RBI for MLE rookies (absent from the real R/RBI history) with the
+    # league-average projected rate so downstream consumers never see NaN.
+    for _col in ("P_R", "P_RBI", "Pred_R_per_PA_neutral", "Pred_RBI_per_PA_neutral"):
+        if _col in h_final.columns and h_final[_col].notna().any():
+            h_final[_col] = h_final[_col].fillna(h_final[_col].mean())
 
     # Step 10 — Park factor adjustment (both hitters and pitchers).
     # Produces _park columns alongside neutral projections.
@@ -968,12 +1069,22 @@ def main():
     # Step 11 — Pitcher summary outputs (RA9, TBF/IP, WP/PA, HBP%).
     # Uses linear weights × per-PA probabilities; produces both neutral and
     # park-adjusted RA9. WP/PA projected via shrinkage on pitcher history.
-    p_final = step11_pitcher_summary_outputs(p_final, pit_df, target)
+    p_final = step11_pitcher_summary_outputs(p_final, pit_comb, target)
 
     # Step 12 — Per-side platoon splits (vL/vR) for daily projections.
     # Each rate metric is projected per side and anchored back to the main
     # projection. Also fetches each player's handedness for downstream use.
     h_final, p_final = step12_project_splits(h_final, p_final, target, args.force)
+
+    # Flag minor-league-translated players so downstream consumers can treat
+    # them as low-confidence, MLE-derived baselines.
+    h_final["mle_source"] = np.where(
+        h_final["PlayerId"].isin(hit_mle_ids), "MiLB", "")
+    p_final["mle_source"] = np.where(
+        p_final["PlayerId"].isin(pit_mle_ids), "MiLB", "")
+    if hit_mle_ids or pit_mle_ids:
+        print(f"\n  MLE baselines in output: {len(hit_mle_ids)} hitters, "
+              f"{len(pit_mle_ids)} pitchers")
 
     # Names
     chadwick = fetch_chadwick_lookup(force=args.force)

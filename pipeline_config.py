@@ -38,6 +38,66 @@ RATE_MIN_PA_TRAIN  = 50   # PA threshold to enter K%/BB% training panel
 RATE_MIN_PA_ACTIVE = 25   # PA threshold to be projected for the target year
 RATE_ACTIVE_LOOKBACK = 2  # Active = appeared within this many years before TARGET
 
+# ── Minor-league translations (MLE) for no-MLB-history players ────────────────
+# The rate/BIP models only project players with prior MLB data — a debut rookie
+# has none, so they are dropped entirely (build_inference_panel's `len(prior)==0`
+# gate). To give those players a credible baseline we translate their most-recent
+# minor-league line into a Major-League-Equivalent (MLE) "prior season" row and
+# feed it through the SAME shrinkage/decay machinery as everyone else.
+#
+# MLE_ENABLE toggles the whole feature. When on, run_pipeline loads a minors
+# feed (RotoWire minors tables), translates each hitter/pitcher line per the
+# per-level, per-stat factors below, links the RotoWire id to an MLBAM id via
+# the Chadwick lookup, and injects a synthetic prior row for any player NOT
+# already present in the statsapi history. Every injected player is flagged
+# with mle_source in the output so downstream consumers can treat them as
+# low-confidence.
+MLE_ENABLE          = True
+MLE_LEVELS          = ("AAA", "AA")   # levels to translate (highest signal first)
+MLE_SEASON_OFFSET   = 1               # inject as (target_year - offset) season row
+
+# Per-level, per-component multipliers applied to a player's observed minor-
+# league RATE (per PA for hitters, per TBF for pitchers) to estimate the MLB
+# equivalent. These are published-consensus starting points (Davenport / Szymborski
+# style component MLEs, adjusted for the modern AAA offensive environment) and are
+# meant to be TUNED once you can validate against players who graduated. Values
+# > 1.0 mean the event gets MORE frequent in MLB, < 1.0 LESS frequent.
+#
+# Hitters (from the batter's perspective):
+#   K%   rises going up a level (better pitching) → factor > 1
+#   BB%  falls slightly (fewer free passes) → factor < 1
+#   HR / 2B / 3B / BABIP all regress down (better defense + pitching) → < 1
+#   SB attempt rate roughly holds
+MLE_HITTER_FACTORS = {
+    "AAA": {"K%": 1.20, "BB%": 0.92, "HR": 0.80, "2B": 0.90, "3B": 0.85,
+            "BABIP": 0.95, "SB": 0.90},
+    "AA":  {"K%": 1.28, "BB%": 0.88, "HR": 0.70, "2B": 0.85, "3B": 0.80,
+            "BABIP": 0.93, "SB": 0.85},
+}
+# Pitchers (events the pitcher ALLOWS, per TBF):
+#   K%   allowed falls in MLB (hitters harder to miss) → factor < 1
+#   BB%  allowed rises (better plate discipline against them) → > 1
+#   HR   allowed rises → > 1
+MLE_PITCHER_FACTORS = {
+    "AAA": {"K%": 0.85, "BB%": 1.08, "HR": 1.15, "BABIP": 1.02},
+    "AA":  {"K%": 0.78, "BB%": 1.12, "HR": 1.25, "BABIP": 1.03},
+}
+
+# Credibility discount: a full minor-league season is NOT worth a full MLB
+# season of evidence. We deflate the plate-appearance (hitter) / batters-faced
+# (pitcher) count carried by the synthetic row so the shrinkage machinery pulls
+# these players harder toward the league mean. AAA carries more weight than AA.
+MLE_PA_CREDIBILITY = {"AAA": 0.55, "AA": 0.35}
+
+# Default age for a translated player when the Chadwick lookup has no birth year
+# (prospects skew young; this only affects display + the unused ML rate path).
+MLE_DEFAULT_AGE     = 24
+
+# Local fallback feed used when the live RotoWire fetch is blocked (as it is in
+# the hosted web sandbox). Point MLE at a JSON export with the same shape as the
+# live endpoint: {level: {"hitters": [...], "pitchers": [...]}}.
+MLE_LOCAL_FEED      = Path("./minors_inputs/minors_<season>.json")
+
 # Bayesian shrinkage prior weights (PA-equivalent) for each rate.
 # Note: K% and BB% no longer use these — they use the simpler PA-weighted
 # recency-decay projection (RATE_DECAY_*, RATE_SHRINK_K_*) below. SHRINK_K

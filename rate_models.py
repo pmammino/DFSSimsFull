@@ -307,7 +307,8 @@ def predict_rates(infer: pd.DataFrame, models: dict, scale: float,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def project_simple_rate(df: pd.DataFrame, target_year: int, pa_col: str,
-                        rate_col: str, prior_k: float, infer: pd.DataFrame
+                        rate_col: str, prior_k: float, infer: pd.DataFrame,
+                        fit_df: pd.DataFrame | None = None
                         ) -> pd.DataFrame:
     """Beta-binomial shrinkage. Returns infer with Pred_<rate>, SD_<rate>.
 
@@ -315,9 +316,16 @@ def project_simple_rate(df: pd.DataFrame, target_year: int, pa_col: str,
     The SD is the analytical posterior SD of a Beta(α, β) where α and β
     come from the observed events and the prior — this naturally inflates
     SD for players with few PA.
+
+    fit_df, when given, is the frame used to compute the league mean μ (the
+    beta-binomial prior). It defaults to ``df``. Pass a real-only frame here
+    when ``df`` carries synthetic minor-league-translation rows so those rows
+    still contribute to a player's own career total (via ``df``) but do not
+    move the league prior.
     """
     df_sorted = df.sort_values(["PlayerId", "Season"]).copy()
-    mu = league_mean(df, target_year, rate_col, pa_col)
+    mu = league_mean(fit_df if fit_df is not None else df,
+                     target_year, rate_col, pa_col)
 
     # Map each rate_col back to the underlying counting stat to get successes
     rate_to_count = {"K%": "K", "BB%": "BB", "HBP%": "HBP", "SF%": "SF"}
@@ -355,8 +363,15 @@ def project_simple_rate(df: pd.DataFrame, target_year: int, pa_col: str,
 def project_rate_with_decay(df: pd.DataFrame, target_year: int, pa_col: str,
                             rate_col: str, prior_k: float, decay: float,
                             infer: pd.DataFrame,
-                            max_history_years: int | None = None) -> pd.DataFrame:
+                            max_history_years: int | None = None,
+                            mu_df: pd.DataFrame | None = None) -> pd.DataFrame:
     """Per-player PA-weighted, recency-decayed projection.
+
+    mu_df, when given, is the frame used to compute the league mean the model
+    shrinks toward. It defaults to ``df``. Pass a real-only frame here when
+    ``df`` also carries synthetic minor-league-translation rows, so those
+    synthetic rows still act as a player's own prior (via ``df``) but do NOT
+    shift the league mean.
 
     Replaces the Ridge+HGB approach for K% and BB% — empirically it has
     nearly identical MAE (within ~1 point) but substantially less bias on
@@ -382,7 +397,7 @@ def project_rate_with_decay(df: pd.DataFrame, target_year: int, pa_col: str,
     df_sorted = df.sort_values(["PlayerId", "Season"]).copy()
     if max_history_years is not None:
         df_sorted = df_sorted[df_sorted["Season"] >= target_year - max_history_years]
-    mu = league_mean(df, target_year, rate_col, pa_col)
+    mu = league_mean(mu_df if mu_df is not None else df, target_year, rate_col, pa_col)
     priors = df_sorted[df_sorted["Season"] < target_year].copy()
 
     rows = []
@@ -496,7 +511,8 @@ def calibrate_decay_sd(df: pd.DataFrame, pa_col: str, rate_col: str,
 def fit_and_predict_decay_rate(df: pd.DataFrame, target_year: int, pa_col: str,
                                 rate_col: str, prior_k: float, decay: float,
                                 infer: pd.DataFrame,
-                                max_history_years: int | None = None
+                                max_history_years: int | None = None,
+                                fit_df: pd.DataFrame | None = None
                                 ) -> tuple[pd.DataFrame, pd.DataFrame, float]:
     """End-to-end: validate via walk-forward, then project for target_year.
 
@@ -507,15 +523,23 @@ def fit_and_predict_decay_rate(df: pd.DataFrame, target_year: int, pa_col: str,
         available history; setting it to e.g. 5 means only the last 5
         seasons contribute. Combined with a lower prior_k, this is
         empirically better for players whose true skill has been evolving.
+    fit_df : DataFrame | None
+        Frame used for walk-forward SD calibration and the league mean. Defaults
+        to ``df``. Pass a real-only frame here when ``df`` carries synthetic
+        minor-league-translation rows: the synthetic rows then serve only as a
+        player's own prior in the projection and never leak into calibration or
+        the league mean.
 
     Returns (infer_with_predictions, walk_forward_metrics, sd_scale).
     """
-    metrics, sd_scale = calibrate_decay_sd(df, pa_col, rate_col, prior_k, decay,
+    fit = fit_df if fit_df is not None else df
+    metrics, sd_scale = calibrate_decay_sd(fit, pa_col, rate_col, prior_k, decay,
                                             max_history_years=max_history_years)
 
     out = project_rate_with_decay(df, target_year, pa_col, rate_col,
                                    prior_k, decay, infer,
-                                   max_history_years=max_history_years)
+                                   max_history_years=max_history_years,
+                                   mu_df=fit)
     # Standard error from binomial: sqrt(p(1-p)/N) with N = n_eff + prior_k
     p = out[f"Pred_{rate_col}"].values
     n_total = (out["_n_eff"].fillna(0).values + prior_k)

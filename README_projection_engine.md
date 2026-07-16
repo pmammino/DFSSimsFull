@@ -104,7 +104,8 @@ Each row is one player. Columns are grouped:
 | File | Role |
 |---|---|
 | `pipeline_config.py` | All tunable constants (decay, shrinkage strength, history window, etc.) — every magic number documented inline |
-| `data_acquisition.py` | All external data fetches: statsapi (rates + splits), team RPG, Statcast park factors, sprint speeds, Chadwick names, player handedness; everything cached as parquet |
+| `data_acquisition.py` | All external data fetches: statsapi (rates + splits), team RPG, Statcast park factors, sprint speeds, Chadwick names, player handedness, minor-league stat tables (RotoWire); everything cached as parquet |
+| `mle_translations.py` | Minor-league translations (MLE): turns a minor-league line into a synthetic MLB-equivalent "prior season" row + per-BIP power profile, so debut rookies with no MLB history still get a baseline |
 | `rate_models.py` | K%/BB%/HBP%/SF% projections via PA-weighted recency-decay shrinkage with an adaptive divergence boost |
 | `bip_imputation.py` | 3-layer BIP imputation (own player → handedness pool → league) targeting 150 BIPs for hitters / 400 for pitchers |
 | `bip_outcomes.py` | XGBoost classifier on 738K real BIPs predicting 1B/2B/3B/HR/Out from launch speed, launch angle, spray angle (~82% test acc) |
@@ -144,9 +145,56 @@ PITCHER_WP_K_PA          = 600      # heavy WP shrinkage (sparse data)
 
 SPLITS_DECAY             = 0.85
 SPLITS_MAX_HISTORY_YEARS = 5
+
+# Minor-league translations (MLE) for no-MLB-history players
+MLE_ENABLE               = True
+MLE_LEVELS               = ("AAA", "AA")
+MLE_SEASON_OFFSET        = 1        # inject as a (target_year - 1) season row
+MLE_HITTER_FACTORS       = {...}    # per-level K%/BB%/HR/2B/3B/BABIP/SB factors
+MLE_PITCHER_FACTORS      = {...}    # per-level K%/BB%/HR/BABIP factors (allowed)
+MLE_PA_CREDIBILITY       = {"AAA": 0.55, "AA": 0.35}   # sample-size discount
+MLE_LOCAL_FEED           = Path("./minors_inputs/minors_<season>.json")
 ```
 
 All other constants are inline-documented at point of use.
+
+## Players with no MLB history — minor-league translations (MLE)
+
+The rate and BIP models only project players who have prior MLB data — a debut
+rookie has none, so without help he is dropped entirely (`build_inference_panel`'s
+`len(prior) == 0` gate, plus the ≥25-MLB-PA active filter). Step **1b** closes
+that gap using Major-League Equivalencies:
+
+1. **Fetch** the minor-league stat tables (RotoWire minors tables, AAA + AA by
+   default) via `data_acquisition.fetch_minors`. Direct fetch → maintainer proxy
+   → local-file fallback (`minors_inputs/minors_<season>.json`) so it still works
+   where the live host is blocked. See `minors_inputs/sample_minors_2026.json`
+   for the feed shape.
+2. **Translate** each hitter/pitcher line to an MLB-equivalent per-PA (per-TBF)
+   rate profile with published-consensus, per-level, per-stat factors
+   (`MLE_HITTER_FACTORS` / `MLE_PITCHER_FACTORS`): K% rises going up a level,
+   BB%/HR/BABIP regress, etc. A credibility discount (`MLE_PA_CREDIBILITY`)
+   deflates the PA/TBF the synthetic row carries so shrinkage regresses these
+   players appropriately hard.
+3. **Link** the RotoWire id to an MLBAM id via the Chadwick name lookup
+   (ambiguous / unresolved names are skipped, and any player already in the MLB
+   history is skipped — MLE only ever *adds* no-history players).
+4. **Inject** the result as a synthetic `target_year − 1` "prior season" row in
+   the exact statsapi schema, so it flows through the same shrinkage / recency
+   decay / SB machinery as everyone else. Model calibration and league means run
+   on the real-only frame (`fit_df`), so synthetic rows seed a rookie's own
+   projection without contaminating anyone else's.
+5. **Power override** — because a rookie has no MLB batted balls, his
+   BIP-derived HR/2B/3B/1B/out would otherwise fall back to league average.
+   `apply_mle_bip_override` replaces that batted-ball mass with his
+   minor-league-translated per-BIP profile, so a slugging prospect keeps his
+   power and a slap hitter keeps his lack of it. The 9 events still sum to 1.0.
+
+Every translated player is flagged with an **`mle_source`** column (`"MiLB"`) in
+the output so downstream consumers can treat them as low-confidence baselines.
+Toggle the whole feature with `MLE_ENABLE`. Known v1 limits: R/RBI fall back to
+league average for these players (no clean MiLB translation), platoon vL/vR
+splits are absent (no minor-league split feed), and only AAA/AA are translated.
 
 ## What the projection actually represents
 
@@ -191,6 +239,7 @@ park_factors_<target-1>_rolling_<n>.parquet
 sprint_speed_<start>_to_<target-1>.parquet
 player_handedness.parquet
 chadwick_lookup.parquet
+minors_<target-1>.json          # cached RotoWire minors feed (MLE step)
 ```
 
 Refresh policy: rate + split files should be re-fetched daily during the
