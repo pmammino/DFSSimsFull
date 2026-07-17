@@ -189,13 +189,17 @@ def filter_slate_doubleheaders(games, slate_players):
     (confirmed) pitcher as if it applied to the slate, and lets the wrong
     matchup drive the sims.
 
-    The two games of a double-header share the same two lineups, so hitters
-    can't tell them apart — only the PITCHERS differ. `slate_players` is the set
-    of players actually on the slate (the DK slate / uploaded file, which lists
-    each game's probable pitcher by name), so the on-slate game is the one whose
-    starter/opener/primary is in that set. When no game's pitcher matches (e.g.
-    neither is confirmed yet and the names don't line up), the earliest game by
-    start time is kept as a best guess.
+    `slate_players` is the set of players actually on the slate (the DK slate /
+    uploaded file). The on-slate game is the one whose roster overlaps that set
+    the most: the two games of a double-header have DIFFERENT lineups (teams
+    rotate pitchers and rest/swap hitters between games), so both the probable
+    pitchers AND the batting orders help identify which game is on the slate.
+    Scoring on the full roster — not just the pitchers — matters because a
+    nightcap's probable starter is often still TBD in the DK file, and because a
+    night slate's on-slate game is usually the LATER one, so a start-time
+    tiebreak would pick the wrong game. Only when NO game's roster overlaps the
+    slate at all (the matchup isn't on the slate) do we fall back to keeping the
+    earliest game.
 
     `games` is {gid: rec}; `slate_players` an iterable of raw player names.
     Returns a new {gid: rec} with the off-slate double-header games removed.
@@ -212,13 +216,18 @@ def filter_slate_doubleheaders(games, slate_players):
     for gid, rec in games.items():
         groups.setdefault(_canon_matchup(rec), []).append(gid)
 
-    def _pitcher_hits(gid):
+    def _slate_hits(gid):
+        """How many of this game's players (pitchers + hitters) are on the slate."""
         rec = games[gid]
         hits = 0
         for side in ('away', 'home'):
             roles = rec.get('pitchers', {}).get(side) or {}
             for role in ('starter', 'opener', 'primary'):
                 nm = roles.get(role)
+                if nm and _norm(nm) in sp:
+                    hits += 1
+            for p in rec.get('lineups', {}).get(side) or []:
+                nm = p.get('name')
                 if nm and _norm(nm) in sp:
                     hits += 1
         return hits
@@ -228,9 +237,9 @@ def filter_slate_doubleheaders(games, slate_players):
         if len(gids) == 1:                       # not a double-header
             keep.update(gids)
             continue
-        scored = {gid: _pitcher_hits(gid) for gid in gids}
+        scored = {gid: _slate_hits(gid) for gid in gids}
         best = max(scored.values())
-        if best > 0:                             # keep the game whose SP is on the slate
+        if best > 0:                             # keep the game most present on the slate
             keep.update(gid for gid, s in scored.items() if s == best)
         else:                                    # can't disambiguate — keep the earliest
             keep.add(min(gids, key=lambda g: (games[g].get('datetime') or '')))
