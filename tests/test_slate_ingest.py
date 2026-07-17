@@ -118,6 +118,21 @@ def test_team_code_fallback_when_gids_do_not_match():
     assert g['lineup_source']['away'] == 'expected'
 
 
+def test_doubleheader_hitters_disambiguate_when_pitchers_tbd():
+    """The nightcap's probable pitcher is often still TBD in the DK file, so the
+    slate lists only the night game's HITTERS. The on-slate game must still be
+    identified from the batting orders — NOT fall back to keeping the earliest
+    (afternoon) game, which would surface the off-slate game's pitchers."""
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", write=False,
+                           slate_players=["Ryan Vilade", "Willson Contreras"])
+    assert "76269" in slate['games']          # night game kept
+    assert "77699" not in slate['games']      # afternoon game dropped
+    pitchers = {slate['games']["76269"]['pitchers'][s].get(r)
+                for s in ('away', 'home') for r in ('starter', 'opener', 'primary')}
+    assert "Griffin Jax" not in pitchers      # game-1 (off-slate) pitchers gone
+    assert "Jake Bennett" not in pitchers
+
+
 if __name__ == '__main__':
     for name, fn in sorted(globals().items()):
         if name.startswith('test_') and callable(fn):
