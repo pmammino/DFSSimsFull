@@ -122,6 +122,11 @@ def main():
                     'on the DFS slate. Used to drop the off-slate game of a '
                     'double-header so its pitcher/matchup does not leak into the '
                     'sims (see slate_ingest.filter_slate_doubleheaders).')
+    ap.add_argument('--slate-window', help='JSON {"start":...,"end":...} with the '
+                    'DK slate SlateStart/SlateEnd timestamps. Games starting '
+                    'outside this window are dropped — the precise way to pick '
+                    'the on-slate game of a double-header (see '
+                    'slate_ingest.filter_slate_by_window).')
     ap.add_argument('--total-baseline', type=float, default=LEAGUE_AVG_RUNS,
                     help=f'Implied-total that maps to a neutral 1.0 offense scale '
                          f'(default {LEAGUE_AVG_RUNS}, the league average). Each '
@@ -146,8 +151,9 @@ def main():
     ex = open(args.expected).read() if args.expected else None
     vj = open(args.vegas).read() if args.vegas else None
     sp = json.load(open(args.slate_players)) if args.slate_players else None
+    sw = json.load(open(args.slate_window)) if args.slate_window else None
     slate = slate_ingest.build_slate(cx, ex, vegas_json=vj, date=args.date,
-                                     slate_players=sp)
+                                     slate_players=sp, slate_window=sw)
     print(f"   date={slate['date']} games={len(slate['games'])}")
     if args.date and not slate['games']:
         print(f"   WARNING: no games returned for {args.date} — the feed may not "

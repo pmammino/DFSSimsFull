@@ -133,6 +133,48 @@ def test_doubleheader_hitters_disambiguate_when_pitchers_tbd():
     assert "Jake Bennett" not in pitchers
 
 
+def test_parse_dt_naive_handles_feed_shapes():
+    p = SI._parse_dt_naive
+    assert p("2026-07-17T19:10:00-04:00").hour == 19     # game DateTime (ET)
+    assert p("2026-07-17T19:05:00-07:00").hour == 19     # ownership SlateStart
+    assert p("07/17/2026 7:05 PM").hour == 19            # salaries SlateStart
+    assert p("2026-07-17T13:35:00-04:00").hour == 13
+    assert p("") is None and p(None) is None and p("nonsense") is None
+
+
+def test_window_drops_off_window_doubleheader_game():
+    """The DK slate list carries BOTH doubleheader games' players, so only the
+    slate time window can tell them apart. The 13:35 game must be dropped and its
+    pitchers (Jax/Bennett) must not survive — even when they're in slate_players."""
+    window = {"start": "2026-07-17T19:05:00-07:00", "end": "2026-07-17T22:10:00-07:00"}
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", write=False,
+                           slate_players=["Griffin Jax", "Jake Bennett",
+                                          "Mason Englert", "Eduardo Rivera"],
+                           slate_window=window)
+    assert "76269" in slate['games']          # 19:10 nightcap kept
+    assert "77699" not in slate['games']      # 13:35 game dropped by window
+    assert "76267" in slate['games']          # 19:05 single game kept
+    ps = {slate['games']["76269"]['pitchers'][s].get('starter')
+          for s in ('away', 'home')}
+    assert "Griffin Jax" not in ps and "Jake Bennett" not in ps
+
+
+def test_window_none_is_a_noop():
+    """No window (e.g. CSV upload) leaves the games untouched by the window filter."""
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", write=False,
+                           slate_window=None)
+    assert {"76269", "77699", "76267"} <= set(slate['games'])
+
+
+def test_window_never_empties_the_slate():
+    """A window that matches nothing (bad/again-shaped feed) must not wipe the
+    slate — all games are kept as a safety fallback."""
+    bad = {"start": "2020-01-01T00:00:00-04:00", "end": "2020-01-01T01:00:00-04:00"}
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", write=False,
+                           slate_window=bad)
+    assert len(slate['games']) == 3           # nothing dropped
+
+
 if __name__ == '__main__':
     for name, fn in sorted(globals().items()):
         if name.startswith('test_') and callable(fn):

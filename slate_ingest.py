@@ -18,6 +18,7 @@ an optional pre-fetched JSON payload (vegas_json) so the caller can paste the
 feed when direct fetch fails. If neither works, implied totals fall back to
 DEFAULT_TEAM_RUNS and the pipeline still runs.
 """
+import datetime
 import json, os, re, sys
 import unicodedata
 import xml.etree.ElementTree as ET
@@ -251,8 +252,95 @@ def filter_slate_doubleheaders(games, slate_players):
     return {gid: rec for gid, rec in games.items() if gid in keep}
 
 
+def _parse_dt_naive(s):
+    """Parse a feed timestamp to a naive datetime (wall-clock, tzinfo dropped).
+
+    Handles the two shapes the RotoWire feeds emit:
+      * ISO 8601 with an offset — game DateTime ('2026-07-17T19:10:00-04:00')
+        and the ownership-feed SlateStart/SlateEnd ('...T19:05:00-07:00').
+      * 'MM/DD/YYYY h:mm AM/PM' — the salaries-feed SlateStart/SlateEnd.
+
+    The offset is intentionally discarded: the DK slate window and the lineup
+    feed stamp the SAME slate but with inconsistent zone offsets, while their
+    wall-clock times agree (both are the slate's local first-pitch clock), so a
+    naive comparison is what lines them up. Returns None if unparseable.
+    """
+    if not s:
+        return None
+    s = str(s).strip()
+    if not s:
+        return None
+    if 'T' in s:                                  # ISO 8601 (maybe with offset)
+        try:
+            return datetime.datetime.fromisoformat(s).replace(tzinfo=None)
+        except ValueError:
+            pass
+    for fmt in ('%m/%d/%Y %I:%M %p', '%m/%d/%Y %I:%M:%S %p',
+                '%m/%d/%Y %H:%M', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M'):
+        try:
+            return datetime.datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+# Games are kept if their start falls within [start - PAD, end + PAD]. The pad
+# only absorbs seconds/rounding at the exact boundary games (a slate's first and
+# last first-pitch); it is far smaller than the multi-hour gap to a
+# double-header's off-slate game, so it never pulls an off-slate game back in.
+_WINDOW_PAD = datetime.timedelta(minutes=5)
+
+
+def filter_slate_by_window(games, slate_window):
+    """Drop games whose start time falls outside the DFS slate's time window.
+
+    `slate_window` is (start, end) as raw feed timestamps (the DK slate's
+    SlateStart / SlateEnd). This is the precise way to pick the on-slate games on
+    a double-header day: the DK slate's player list is a broad catalog that
+    contains BOTH games of a double-header (each game's probable pitchers and
+    hitters, most at ~0 ownership), so it can't tell the two apart — but only the
+    on-slate game's start falls inside the slate window. Comparison is on naive
+    wall-clock times (see _parse_dt_naive).
+
+    A game with an unparseable start time is KEPT (we don't drop on uncertainty),
+    and if the window can't be parsed or the filter would remove every game the
+    original set is returned unchanged (with a warning) so a bad/again-shaped
+    feed never empties the slate. Returns a new {gid: rec}.
+    """
+    if not slate_window:
+        return games
+    start_raw, end_raw = (slate_window if not isinstance(slate_window, dict)
+                          else (slate_window.get('start'), slate_window.get('end')))
+    start, end = _parse_dt_naive(start_raw), _parse_dt_naive(end_raw)
+    if start is None or end is None:
+        print(f"  [slate] window: couldn't parse slate window "
+              f"({start_raw!r}..{end_raw!r}); keeping all games", file=sys.stderr)
+        return games
+    if end < start:
+        start, end = end, start
+    lo, hi = start - _WINDOW_PAD, end + _WINDOW_PAD
+
+    keep = {}
+    dropped = []
+    for gid, rec in games.items():
+        gdt = _parse_dt_naive(rec.get('datetime'))
+        if gdt is None or lo <= gdt <= hi:       # keep if in-window OR unknown
+            keep[gid] = rec
+        else:
+            dropped.append(gid)
+    if not keep:                                 # never empty the slate on a filter
+        print(f"  [slate] window {start}..{end}: would drop ALL "
+              f"{len(games)} game(s); keeping them (check the slate window)",
+              file=sys.stderr)
+        return games
+    if dropped:
+        print(f"  [slate] window {start}..{end}: kept {len(keep)} game(s), "
+              f"dropped {len(dropped)} off-window game(s) {dropped}", file=sys.stderr)
+    return keep
+
+
 def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=True,
-                date=None, slate_players=None):
+                date=None, slate_players=None, slate_window=None):
     """Merge everything into one normalized slate.
 
     `date` (YYYY-MM-DD, optional): rebuild a *historical* slate. When given and
@@ -260,10 +348,17 @@ def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=Tr
     fetched with a &date= parameter and Vegas totals are fetched for that date,
     so the pipeline reproduces a past day's slate (lineups + matchups + Vegas).
 
+    `slate_window` (optional): (start, end) as the DK slate's raw SlateStart /
+    SlateEnd timestamps. Games whose start falls outside this window are dropped
+    (filter_slate_by_window) — the precise way to pick the on-slate game of a
+    double-header, since the slate's player list carries both games. Applied
+    before `slate_players` and ignored when not provided (e.g. CSV upload).
+
     `slate_players` (optional): raw player names that are on the DFS slate (the
     DK slate / uploaded file). Used to drop the off-slate game of a
     double-header so its pitcher isn't treated as a slate starter — see
-    filter_slate_doubleheaders(). Ignored when the day has no double-header.
+    filter_slate_doubleheaders(). Falls back for slates with no window and is
+    ignored when the day has no double-header.
 
     Returns slate = {
         'date': 'YYYY-MM-DD',
@@ -336,6 +431,7 @@ def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=Tr
         out['implied'] = {'away': a_imp, 'home': h_imp, 'total': a_imp + h_imp}
         games[gid] = out
 
+    games = filter_slate_by_window(games, slate_window)
     games = filter_slate_doubleheaders(games, slate_players)
 
     slate = {'date': date, 'games': games}
