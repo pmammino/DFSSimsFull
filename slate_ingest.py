@@ -275,10 +275,19 @@ def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=Tr
     # Prefer the feed's own date; fall back to the requested historical date.
     date = (next(iter(conf.values()))['date'] if conf else None) or date
 
-    # Build an index of expected lineups by (team_code) for fallback matching,
-    # since expected gids won't match confirmed gids on different dates.
+    # Index expected lineups two ways for the batting-order fallback:
+    #  - by game id (then team code): the authoritative match on a normal
+    #    same-day slate. This is essential on double-header days, where a team
+    #    plays the same opponent twice: a team-code-only lookup collides between
+    #    the two games and can pull the OFF-slate game's expected lineup into the
+    #    on-slate game, injecting hitters who aren't in the slate game at all.
+    #  - by team code alone: fallback for historical rebuilds where the expected
+    #    feed's gids may not line up with the confirmed feed's.
+    exp_by_gid = {}
     exp_by_team = {}
     for gid, rec in exp.items():
+        exp_by_gid[gid] = {rec['away']: rec['lineups']['away'],
+                           rec['home']: rec['lineups']['home']}
         for side in ('away', 'home'):
             exp_by_team[rec[side]] = rec['lineups'][side]
 
@@ -295,8 +304,15 @@ def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=Tr
             if order:
                 out['lineups'][side] = order
                 out['lineup_source'][side] = 'confirmed'
-            elif exp_by_team.get(rec[side]):
-                out['lineups'][side] = exp_by_team[rec[side]]
+                continue
+            # Prefer the expected lineup for THIS exact game (gid + team code),
+            # so a double-header can't cross-contaminate the two games' hitters;
+            # fall back to the team-code index for historical rebuilds where
+            # gids may not match.
+            exp_order = exp_by_gid.get(gid, {}).get(rec[side]) \
+                or exp_by_team.get(rec[side])
+            if exp_order:
+                out['lineups'][side] = exp_order
                 out['lineup_source'][side] = 'expected'
             else:
                 out['lineups'][side] = []
