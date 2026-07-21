@@ -2240,6 +2240,16 @@ with tabs[0]:
                      "posted lineups are available from the live feed. 0 = "
                      "order-blind; 0.15 (default) = a gentle top-of-order lean. No "
                      "effect until lineups are posted.")
+            ace_pitcher = st.slider(
+                "Candidate ace-pitcher rate", min_value=0.0, max_value=1.0,
+                value=0.6, step=0.05,
+                help="Chance a candidate's FIRST pitcher is drawn from the top-"
+                     "ceiling tier of arms, so the lineup carries at least one true "
+                     "ceiling/strikeout pitcher. Both pitcher slots are already "
+                     "weighted by ceiling (p90) rather than ownership. In real "
+                     "standings winners almost always roster >=1 ace arm and almost "
+                     "never pair two middling pitchers; 0.6 (default) leans that "
+                     "way. 0 = pure ceiling-weighted draw with no forced ace.")
 
         force_refresh = st.checkbox(
             "Force full refresh (rebuild projections + sims now)", value=False,
@@ -2474,13 +2484,15 @@ with tabs[0]:
                     float(np.exp(float(talent_tilt) *
                                  (zp if r.Pos == "P" else zh).get(r.Name, 0.0)))
                     for r in cdf.itertuples()]
-                # Upside = ceiling-tilted weight for HITTERS; pitchers keep their
-                # talent weight (unused for pitcher selection but keeps the column
-                # well-defined for the Builder's namedtuples).
+                # Upside = ceiling (p90) tilted weight, computed within hitters and
+                # within pitchers. Drives the Builder's ceiling-weighted stack/one-
+                # off bats AND its ceiling-weighted pitcher picks + ace bias, so the
+                # arms are high-ceiling rather than middling ownership draws.
                 zc = zmap(hset, cel)
+                zcp = zmap(set(cdf[cdf["Pos"] == "P"]["Name"]), cel)
                 cdf["Upside"] = [
-                    (float(np.exp(float(talent_tilt) * zc.get(r.Name, 0.0)))
-                     if r.Pos != "P" else float(r.Ownership))
+                    float(np.exp(float(talent_tilt) *
+                                 (zcp if r.Pos == "P" else zc).get(r.Name, 0.0)))
                     for r in cdf.itertuples()]
             else:
                 cdf["Ownership"] = 1.0   # projection-blind uniform players
@@ -2512,7 +2524,8 @@ with tabs[0]:
                 f"Candidates: talent tilt={talent_tilt:g}, stack-team tilt={team_tilt:g} "
                 f"({'favor better offenses' if team_tilt > 0 else 'teams uniform'}), "
                 f"stack aggressiveness={stack_aggr:g} (→ bigger primaries), "
-                f"bring-back={bringback:g}, game-stack={game_stack:g}"
+                f"bring-back={bringback:g}, game-stack={game_stack:g}, "
+                f"ace-pitcher={ace_pitcher:g}"
                 + (f", order tilt={order_tilt:g} on {n_order} posted bats"
                    if order_tilt > 0 and n_order else "")
                 + ".")
@@ -2520,7 +2533,8 @@ with tabs[0]:
                          team_weights=team_weights, jitter=float(cand_jitter),
                          upside_attr="Upside", bringback_prob=float(bringback),
                          game_stack_prob=float(game_stack),
-                         order_weight=float(order_tilt))
+                         order_weight=float(order_tilt),
+                         ace_pitcher_prob=float(ace_pitcher))
             cands, c_att = build_many(cb, int(num_candidates), "Candidates")
             if not cands:
                 status.update(label="Could not build candidate lineups", state="error")

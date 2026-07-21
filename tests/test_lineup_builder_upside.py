@@ -47,9 +47,15 @@ def make_pool(*, elite_oneoff=False, order=False):
     if elite_oneoff:
         rows.append({'Name': 'STUD_OF', 'Pos': 'OF', 'Team': 'STD', 'Opp': 'ZZZ',
                      'Salary': 3000, 'Ownership': 5.0, 'Upside': 40.0, 'Order': 0})
+    # 4 arms with a clear ceiling ranking that is DECORRELATED from ownership:
+    # P0 is the ace (top ceiling, low owned); P3 is a middling chalk arm.
+    p_up = {'P0': 30.0, 'P1': 12.0, 'P2': 8.0, 'P3': 6.0}
+    p_own = {'P0': 3.0, 'P1': 6.0, 'P2': 20.0, 'P3': 25.0}
     for j in range(4):
-        rows.append({'Name': f'P{j}', 'Pos': 'P', 'Team': f'PT{j}', 'Opp': 'NON',
-                     'Salary': 6000, 'Ownership': 5.0, 'Upside': 5.0, 'Order': 0})
+        nm = f'P{j}'
+        rows.append({'Name': nm, 'Pos': 'P', 'Team': f'PT{j}', 'Opp': 'NON',
+                     'Salary': 6000, 'Ownership': p_own[nm], 'Upside': p_up[nm],
+                     'Order': 0})
     return Pool(pd.DataFrame(rows))
 
 
@@ -178,6 +184,44 @@ def test_order_weight_prefers_top_of_order():
         (mean_stack_order(flat), mean_stack_order(tilt))
 
 
+def test_pitcher_ceiling_weighting_prefers_high_ceiling_arms():
+    """Ownership-weighted (field) rarely rosters the low-owned ace P0; ceiling
+    (upside) weighting rosters it far more often."""
+    pool = make_pool()
+    field = build_n(pool, 300)                      # upside_attr None -> Ownership
+    cand = build_n(pool, 300, upside_attr='Upside')
+
+    def ace_rate(ls):
+        return np.mean([any(p.Name == 'P0' for p in lu['players']) for lu in ls])
+    assert ace_rate(cand) > ace_rate(field) + 0.10, (ace_rate(field), ace_rate(cand))
+
+
+def test_ace_pitcher_prob_forces_a_ceiling_arm():
+    """Forcing the first arm from the top-ceiling tier raises the best-arm ceiling
+    and all but eliminates the two-middling-arms lineup."""
+    pool = make_pool()
+    off = build_n(pool, 300, upside_attr='Upside', ace_pitcher_prob=0.0)
+    on = build_n(pool, 300, upside_attr='Upside', ace_pitcher_prob=1.0,
+                 ace_pool_frac=0.5)
+
+    def best_arm_ceiling(ls):
+        return np.mean([max(getattr(p, 'Upside', 0.0)
+                            for p in lu['players'] if p.Pos == 'P') for lu in ls])
+
+    def both_middling(ls):
+        c = 0
+        for lu in ls:
+            ups = [getattr(p, 'Upside', 0.0) for p in lu['players'] if p.Pos == 'P']
+            if ups and all(v <= 8.0 for v in ups):   # both P2/P3-class arms
+                c += 1
+        return c / len(ls)
+
+    assert best_arm_ceiling(on) > best_arm_ceiling(off) + 1.0, \
+        (best_arm_ceiling(off), best_arm_ceiling(on))
+    assert both_middling(on) < both_middling(off), \
+        (both_middling(off), both_middling(on))
+
+
 def test_field_builder_unaffected_by_defaults():
     """A Builder with no new kwargs must behave exactly as before: same lineups
     for the same seed, using ownership weighting and the field's game-stack rate."""
@@ -190,6 +234,7 @@ def test_field_builder_unaffected_by_defaults():
     # and the defaults leave the upside knobs off
     assert a.upside_attr is None and a.bringback_prob == 0.0
     assert a.game_stack_prob is None and a.order_weight == 0.0
+    assert a.ace_pitcher_prob == 0.0
 
 
 if __name__ == '__main__':
