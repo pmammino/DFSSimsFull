@@ -32,7 +32,7 @@ import streamlit as st
 
 from stage_d import (load_sims, build_pool, lineups_to_df, score_matrix,
                      norm as normname, COLS, HITC, SLOT)
-from mlb_lineup_builder import Pool, Builder
+from mlb_lineup_builder import Pool, Builder, candidate_stack_structures
 from portfolio import select_portfolio, select_portfolio_ev, detect_value_groups
 import portfolio_ev as pev
 import dk_ids
@@ -1454,6 +1454,8 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
     proj_date = projections_built_date()
 
     # --- live feed (lineups + matchups + starters), compared against the API ---
+    # reset the batting-order map each run so a failed feed can't reuse a stale one
+    st.session_state["batting_order_map"] = {}
     live = live_sig = live_starters = live_playable = None
     try:
         status.write("Reading the live lineup/matchup feed…")
@@ -1475,6 +1477,14 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
                     if nm:
                         live_playable.add(normname(nm))
         n_lu = sum(1 for tg in live_sig["teams"].values() if tg["order"])
+        # stash a batting-order map (normname -> 1-9 slot) for the candidate
+        # builder's order tilt; empty when no lineups are posted (a no-op there).
+        order_map = {}
+        for tg in live_sig["teams"].values():
+            for i, nm in enumerate(tg.get("order") or []):
+                if nm:
+                    order_map[normname(nm)] = i + 1
+        st.session_state["batting_order_map"] = order_map
         status.write(f"Live feed: slate {live_sig.get('date')}, "
                      f"{len(live_sig['teams'])} teams, {n_lu} lineups posted, "
                      f"{len(live_starters)} starting pitchers, "
@@ -2163,12 +2173,13 @@ with tabs[0]:
                      "uniform; ~0.7 moderate; higher = sharply favor elite players.")
             team_tilt = st.slider(
                 "Candidate stack-team tilt (Vegas/talent)", min_value=0.0,
-                max_value=2.0, value=0.0, step=0.1,
+                max_value=2.0, value=0.6, step=0.1,
                 help="How strongly candidates STACK higher-projected TEAMS (team "
                      "scoring power from the sims, which embed Vegas/park/matchup). "
-                     "0 (default) = every team equally likely to be stacked, so teams "
-                     "stay diverse; higher = concentrate stacks on the best offenses. "
-                     "Separate from the player tilt above.")
+                     "0 = every team equally likely to be stacked (max diversity); "
+                     "~0.6 (default) leans stacks toward the best offenses — the win "
+                     "region in real standings is concentrated on high-total teams; "
+                     "higher concentrates further. Separate from the player tilt.")
             cand_jitter = st.slider(
                 "Candidate diversity jitter", min_value=0.0, max_value=1.5,
                 value=0.0, step=0.1,
@@ -2195,6 +2206,40 @@ with tabs[0]:
                      "higher. 0 = off (pure projection); 0.05 (default) = a gentle "
                      "nudge, never a driver. Correlation is preserved (a stack still "
                      "booms together).")
+            stack_aggr = st.slider(
+                "Candidate stack aggressiveness", min_value=0.0, max_value=2.0,
+                value=0.8, step=0.1,
+                help="Tilts your candidates' STACK-SHAPE distribution toward bigger "
+                     "primary stacks, decoupled from the field. 0 = sample the "
+                     "field's observed shapes (many 3-and-smaller primaries); ~0.8 "
+                     "(default) concentrates on 5- and 4-man primaries, which is "
+                     "where contest standings show the win region lives; higher = "
+                     "almost exclusively 5-stacks. The FIELD is always built from the "
+                     "observed shapes regardless of this control.")
+            bringback = st.slider(
+                "Candidate bring-back rate", min_value=0.0, max_value=1.0,
+                value=0.3, step=0.05,
+                help="Chance a one-off slot is filled by a bat from the PRIMARY "
+                     "stack's opponent, forming a primary + bring-back mini "
+                     "game-stack that correlates when that game turns into a "
+                     "shootout. 0 = never; 0.3 (default) = a healthy share of "
+                     "leverage game-stack builds.")
+            game_stack = st.slider(
+                "Candidate game-stack rate (secondary)", min_value=0.05,
+                max_value=0.95, value=0.5, step=0.05,
+                help="How often a candidate's SECONDARY 2+ stack is allowed to be "
+                     "the primary's opponent (a full game stack). The field "
+                     "suppresses this to ~0.12 (imitation); your candidates default "
+                     "to 0.5 (neutral) so the high-ceiling game stack is available "
+                     "rather than penalized. Higher favors it.")
+            order_tilt = st.slider(
+                "Candidate batting-order tilt", min_value=0.0, max_value=0.6,
+                value=0.15, step=0.05,
+                help="Biases stack members and one-offs toward the top of the "
+                     "batting order (more PAs, tighter run/RBI correlation), when "
+                     "posted lineups are available from the live feed. 0 = "
+                     "order-blind; 0.15 (default) = a gentle top-of-order lean. No "
+                     "effect until lineups are posted.")
 
         force_refresh = st.checkbox(
             "Force full refresh (rebuild projections + sims now)", value=False,
@@ -2399,26 +2444,52 @@ with tabs[0]:
                     tal[nm] = 0.5 * float(np.mean(a)) + 0.5 * float(np.percentile(a, 90))
             base = float(np.median(list(tal.values()))) if tal else 1.0
 
-            def zmap(names):
-                """z-score of talent within a player group (hitters or pitchers)."""
-                vals = np.array([tal[n] for n in names if n in tal], float)
+            # pure-ceiling value per player (p90) — used to weight the non-stack
+            # (one-off) and intra-stack bat selection toward real UPSIDE rather
+            # than the mean/floor blend, so those spots are elite-upside bats.
+            cel = {}
+            for nm in cdf["Name"].unique():
+                a = score_k.get(normname(nm))
+                if a is not None and len(a):
+                    cel[nm] = float(np.percentile(a, 90))
+
+            def zmap(names, vmap=None):
+                """z-score of a value map within a player group (hitters/pitchers);
+                defaults to the mean/ceiling talent blend `tal`."""
+                vmap = tal if vmap is None else vmap
+                vals = np.array([vmap[n] for n in names if n in vmap], float)
                 if len(vals) == 0:
                     return {}
                 mu, sd = float(vals.mean()), float(vals.std()) + 1e-9
-                return {n: (tal.get(n, mu) - mu) / sd for n in names}
+                return {n: (vmap.get(n, mu) - mu) / sd for n in names}
 
+            hset = set(cdf[cdf["Pos"] != "P"]["Name"])
             if talent_tilt > 0:
                 # weight = exp(tilt · z); scale-invariant so `tilt` is a temperature.
                 # z computed within hitters and within pitchers so each selection
                 # context (intra-stack, one-off, pitcher) is calibrated on its own.
-                zh = zmap(set(cdf[cdf["Pos"] != "P"]["Name"]))
+                zh = zmap(hset)
                 zp = zmap(set(cdf[cdf["Pos"] == "P"]["Name"]))
                 cdf["Ownership"] = [
                     float(np.exp(float(talent_tilt) *
                                  (zp if r.Pos == "P" else zh).get(r.Name, 0.0)))
                     for r in cdf.itertuples()]
+                # Upside = ceiling-tilted weight for HITTERS; pitchers keep their
+                # talent weight (unused for pitcher selection but keeps the column
+                # well-defined for the Builder's namedtuples).
+                zc = zmap(hset, cel)
+                cdf["Upside"] = [
+                    (float(np.exp(float(talent_tilt) * zc.get(r.Name, 0.0)))
+                     if r.Pos != "P" else float(r.Ownership))
+                    for r in cdf.itertuples()]
             else:
                 cdf["Ownership"] = 1.0   # projection-blind uniform players
+                cdf["Upside"] = 1.0
+
+            # batting-order slots (1-9) from posted lineups, when available; 0/absent
+            # -> order-blind. Drives the Builder's order tilt for stacks/one-offs.
+            order_map = st.session_state.get("batting_order_map", {}) or {}
+            cdf["Order"] = [float(order_map.get(normname(n), 0)) for n in cdf["Name"]]
 
             # stack-TEAM weights via a z-score softmax of team scoring power (sum of
             # hitters' talent): weight = exp(tilt · z). 0 (default) => uniform teams.
@@ -2431,11 +2502,25 @@ with tabs[0]:
                 mu, sd = float(vals.mean()), float(vals.std()) + 1e-9
                 team_weights = {t: float(np.exp(float(team_tilt) * (v - mu) / sd))
                                 for t, v in tteam.items()}
-            st.caption(f"Candidates: player talent tilt={talent_tilt:g}, "
-                       f"stack-team tilt={team_tilt:g} "
-                       f"({'teams favor better offenses' if team_tilt > 0 else 'teams uniform'}).")
-            cb = Builder(Pool(cdf), params, seed=int(seed_cand), uniform=True,
-                         team_weights=team_weights, jitter=float(cand_jitter))
+            # candidate-specific shape distribution: tilt toward 5/4 primaries
+            # (the field keeps the observed shapes via `params`).
+            cand_params = dict(params)
+            cand_params["stack_structures"] = candidate_stack_structures(
+                params["stack_structures"], float(stack_aggr))
+            n_order = int((cdf["Order"] > 0).sum())
+            st.caption(
+                f"Candidates: talent tilt={talent_tilt:g}, stack-team tilt={team_tilt:g} "
+                f"({'favor better offenses' if team_tilt > 0 else 'teams uniform'}), "
+                f"stack aggressiveness={stack_aggr:g} (→ bigger primaries), "
+                f"bring-back={bringback:g}, game-stack={game_stack:g}"
+                + (f", order tilt={order_tilt:g} on {n_order} posted bats"
+                   if order_tilt > 0 and n_order else "")
+                + ".")
+            cb = Builder(Pool(cdf), cand_params, seed=int(seed_cand), uniform=True,
+                         team_weights=team_weights, jitter=float(cand_jitter),
+                         upside_attr="Upside", bringback_prob=float(bringback),
+                         game_stack_prob=float(game_stack),
+                         order_weight=float(order_tilt))
             cands, c_att = build_many(cb, int(num_candidates), "Candidates")
             if not cands:
                 status.update(label="Could not build candidate lineups", state="error")

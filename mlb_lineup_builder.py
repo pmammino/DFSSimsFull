@@ -54,6 +54,63 @@ DEFAULT_PARAMS = {  # used if field_params.json is absent
 }
 
 
+def candidate_stack_structures(structs, strength=0.0):
+    """Reshape a shape distribution toward bigger PRIMARY stacks for our
+    candidate lineups.
+
+    The field builder samples the empirically-observed shape distribution (lots
+    of 3-and-smaller primaries) because it is modelling the crowd. Our own
+    lineups should not: contest standings show the win region is dominated by
+    4- and 5-man primaries. This multiplies each shape's weight by
+    ``exp(strength * (max(shape) - 3))`` so a 5-primary shape gets the largest
+    boost, a 4-primary a smaller one, a 3-primary is unchanged and 2-primary
+    shapes are suppressed, then renormalizes.
+
+    ``strength = 0`` returns the input distribution unchanged (just renormalized),
+    so the default reproduces the prior field-shaped behaviour exactly. `structs`
+    is ``[(shape_list, weight), ...]``; returns a new list of the same form.
+    """
+    out = []
+    for shape, w in structs:
+        primary = max(shape) if shape else 0
+        out.append((list(shape), max(float(w), 1e-12) *
+                    float(np.exp(strength * (primary - 3)))))
+    tot = sum(w for _, w in out)
+    return [(sh, w / tot) for sh, w in out]
+
+
+def _hit_weight(r, weight_attr=None, order_weight=0.0, base_attr='Ownership'):
+    """Selection weight for a HITTER.
+
+    Uses the player's projected value — an "upside" column (``weight_attr``, e.g.
+    a ceiling-tilted weight) when one is supplied, otherwise ``base_attr``
+    (Ownership, the field-imitation weight). The result is optionally tilted by
+    batting-order slot: a top-of-order bat is up-weighted because it gets more
+    plate appearances and anchors the run/RBI correlation that makes a stack
+    boom together. Missing/absent upside or order fields degrade gracefully to
+    the base weight with no order tilt, so field lineups (which carry neither)
+    are unaffected."""
+    w = None
+    if weight_attr is not None:
+        w = getattr(r, weight_attr, None)
+    if w is None:
+        w = getattr(r, base_attr, 1.0)
+    try:
+        w = max(float(w), 1e-9)
+    except (TypeError, ValueError):
+        w = 1e-9
+    if order_weight:
+        slot = getattr(r, 'Order', None)
+        try:
+            slot = float(slot)
+        except (TypeError, ValueError):
+            slot = 0.0
+        if slot and slot > 0:
+            # centre on slot 5: slot 1 -> up, slot 9 -> down; gentle & bounded.
+            w *= float(np.exp(order_weight * (5.0 - slot)))
+    return w
+
+
 # ----------------------------------------------------------------------------- 
 # Pool handling
 # ----------------------------------------------------------------------------- 
@@ -98,14 +155,20 @@ def wchoice(rng, items, weights):
     return items[rng.choice(len(items), p=w / w.sum())]
 
 
-def fill_team_stack(rng, pool, team, k, open_slots, used_names, jitter=0.0):
+def fill_team_stack(rng, pool, team, k, open_slots, used_names, jitter=0.0,
+                    weight_attr=None, order_weight=0.0):
     """Pick k hitters from `team` filling k distinct still-open slots,
     weighted by ownership, never reusing a player name. Returns list or None.
 
     `jitter` (>=0) multiplies each candidate's weight by a per-draw lognormal
     shock exp(jitter * N(0,1)); >0 lets near-equally-weighted teammates trade
     places between lineups, so a team's stack uses varied members across the
-    portfolio instead of the same highest-weighted bats every time."""
+    portfolio instead of the same highest-weighted bats every time.
+
+    `weight_attr` / `order_weight` are passed through to :func:`_hit_weight`:
+    the former swaps the ownership weight for an upside (ceiling) column so the
+    bats chosen inside a stack target real upside rather than chalk; the latter
+    tilts toward the top of the batting order (default 0 = order-blind)."""
     slots = dict(open_slots)
     avail = {p: [r for r in rows if r.Name not in used_names]
              for p, rows in pool.team_pos[team].items()}
@@ -117,7 +180,7 @@ def fill_team_stack(rng, pool, team, k, open_slots, used_names, jitter=0.0):
                 if r.Name not in {c[1].Name for c in chosen}]
         if not cand:
             return False
-        weights = [r.Ownership for _, r in cand]
+        weights = [_hit_weight(r, weight_attr, order_weight) for _, r in cand]
         if jitter:
             noise = np.exp(jitter * rng.standard_normal(len(weights)))
             weights = [wv * float(nz) for wv, nz in zip(weights, noise)]
@@ -142,7 +205,8 @@ def fill_team_stack(rng, pool, team, k, open_slots, used_names, jitter=0.0):
 # ----------------------------------------------------------------------------- 
 class Builder:
     def __init__(self, pool, params, seed=None, uniform=False, team_weights=None,
-                 jitter=0.0):
+                 jitter=0.0, upside_attr=None, bringback_prob=0.0,
+                 game_stack_prob=None, order_weight=0.0):
         self.pool = pool
         self.rng = np.random.default_rng(seed)
         self.uniform = uniform   # if True, pick stack TEAMS uniformly (ignore ownership)
@@ -157,6 +221,24 @@ class Builder:
         # near-equally-ranked options trade places between lineups, which spreads
         # near-twin players, stack composition, and primary/secondary pairings.
         self.jitter = float(jitter)
+        # ---- candidate upside controls (all default to OFF = field imitation) ----
+        # upside_attr: name of a per-player column used to weight HITTER selection
+        #   (stack members + one-off bats) instead of Ownership — e.g. a ceiling
+        #   (p90) tilt so non-stack spots are elite-upside bats, not cheap filler.
+        # bringback_prob: chance a one-off slot is forced onto the PRIMARY stack's
+        #   opponent, making a primary + bring-back mini game-stack that correlates
+        #   when that game erupts.
+        # game_stack_prob: overrides rules["secondary_is_game_stack_prob"] so a
+        #   secondary 2+ stack being the primary's opponent can be neutral/favored
+        #   for our candidates (the field still suppresses it). None => inherit.
+        # order_weight: batting-order tilt for hitter selection (needs an `Order`
+        #   column on the pool; 0 => order-blind).
+        self.upside_attr = upside_attr
+        self.bringback_prob = float(bringback_prob)
+        self.game_stack_prob = (None if game_stack_prob is None
+                                else float(min(max(game_stack_prob, 1e-6),
+                                               1 - 1e-6)))
+        self.order_weight = float(order_weight)
         structs = params["stack_structures"]
         self.struct_shapes = [tuple(s) for s, _ in structs]
         p = np.array([w for _, w in structs], float); self.struct_probs = p / p.sum()
@@ -195,19 +277,23 @@ class Builder:
                     wt = max(self.team_weights.get(t, 1e-6), 1e-6)
                 else:
                     wt = 1.0 if self.uniform else pool.team_weight[t]
-                # secondary stacks: usually NOT the primary's opponent (game stack rare)
+                # secondary stacks: usually NOT the primary's opponent (game stack
+                # rare in the field). game_stack_prob lets our candidates override
+                # that suppression (None => inherit the field's rate).
                 if gi > 0 and hitters:
                     prim_team = hitters[0][1].Team
+                    gsp = (self.game_stack_prob if self.game_stack_prob is not None
+                           else self.rules["secondary_is_game_stack_prob"])
                     if t == pool.opp.get(prim_team):
-                        wt *= self.rules["secondary_is_game_stack_prob"] / \
-                              (1 - self.rules["secondary_is_game_stack_prob"])
+                        wt *= gsp / (1 - gsp)
                 w.append(max(wt, 1e-6))
             if self.jitter:
                 noise = np.exp(self.jitter * rng.standard_normal(len(w)))
                 w = [wi * float(nz) for wi, nz in zip(w, noise)]
             team = wchoice(rng, cands, w)
             picked = fill_team_stack(rng, pool, team, k, open_slots, used_names,
-                                     self.jitter)
+                                     self.jitter, weight_attr=self.upside_attr,
+                                     order_weight=self.order_weight)
             if picked is None:
                 return None
             for p, r in picked:
@@ -216,14 +302,27 @@ class Builder:
             used_teams.add(team)
 
         # ---- fill the one-off hitters into remaining slots ----
-        # eligible singletons for open slots, off the existing stack teams
-        for _ in range(len(ones)):
+        # eligible singletons for open slots, off the existing stack teams.
+        # Weighted by _hit_weight so (for candidates) these are ceiling/order-
+        # tilted ELITE one-offs rather than ownership-drawn cheap filler.
+        prim_team = hitters[0][1].Team if hitters else None
+        opp_team = pool.opp.get(prim_team) if prim_team else None
+        for oi in range(len(ones)):
             elig = [r for p in open_slots if open_slots[p] > 0
                     for r in pool.team_pos_all.get(p, [])
                     if r.Team not in used_teams and r.Name not in used_names]
             if not elig:
                 return None
-            weights = np.array([r.Ownership for r in elig], float)
+            # bring-back: with prob `bringback_prob`, force the FIRST one-off to be
+            # a bat from the primary stack's opponent, so a primary + bring-back
+            # mini game-stack correlates in the sims where that game erupts.
+            if (oi == 0 and opp_team and self.bringback_prob
+                    and rng.random() < self.bringback_prob):
+                bb = [r for r in elig if r.Team == opp_team]
+                if bb:
+                    elig = bb
+            weights = np.array([_hit_weight(r, self.upside_attr, self.order_weight)
+                                for r in elig], float)
             if self.jitter:
                 weights = weights * np.exp(self.jitter * rng.standard_normal(len(weights)))
             r = elig[rng.choice(len(elig), p=weights/weights.sum())]
