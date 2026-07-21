@@ -206,7 +206,8 @@ def fill_team_stack(rng, pool, team, k, open_slots, used_names, jitter=0.0,
 class Builder:
     def __init__(self, pool, params, seed=None, uniform=False, team_weights=None,
                  jitter=0.0, upside_attr=None, bringback_prob=0.0,
-                 game_stack_prob=None, order_weight=0.0):
+                 game_stack_prob=None, order_weight=0.0,
+                 ace_pitcher_prob=0.0, ace_pool_frac=0.35):
         self.pool = pool
         self.rng = np.random.default_rng(seed)
         self.uniform = uniform   # if True, pick stack TEAMS uniformly (ignore ownership)
@@ -233,12 +234,21 @@ class Builder:
         #   for our candidates (the field still suppresses it). None => inherit.
         # order_weight: batting-order tilt for hitter selection (needs an `Order`
         #   column on the pool; 0 => order-blind).
+        # ace_pitcher_prob: chance the FIRST pitcher is drawn from the top-ceiling
+        #   tier of the arm pool, so the lineup carries >=1 real ceiling/K arm.
+        #   The field routinely pairs two middling arms; winners almost never do.
+        #   Both pitcher slots are also ceiling-weighted (via upside_attr) rather
+        #   than ownership-weighted. 0 => prior ownership-weighted behaviour.
+        # ace_pool_frac: size of that top-ceiling "ace" tier as a fraction of the
+        #   eligible arm pool (e.g. 0.35 => the top ~third of arms by ceiling).
         self.upside_attr = upside_attr
         self.bringback_prob = float(bringback_prob)
         self.game_stack_prob = (None if game_stack_prob is None
                                 else float(min(max(game_stack_prob, 1e-6),
                                                1 - 1e-6)))
         self.order_weight = float(order_weight)
+        self.ace_pitcher_prob = float(ace_pitcher_prob)
+        self.ace_pool_frac = float(min(max(ace_pool_frac, 1e-6), 1.0))
         structs = params["stack_structures"]
         self.struct_shapes = [tuple(s) for s, _ in structs]
         p = np.array([w for _, w in structs], float); self.struct_probs = p / p.sum()
@@ -346,10 +356,25 @@ class Builder:
                 cand = filt
         if len(cand) < 2:
             return None
-        w1 = np.array([p.Ownership for p in cand], float)
-        if self.jitter:
-            w1 = w1 * np.exp(self.jitter * rng.standard_normal(len(w1)))
-        p1 = cand[rng.choice(len(cand), p=w1/w1.sum())]
+        # Both arms are weighted by _hit_weight, so for our candidates they use the
+        # ceiling (upside) column instead of ownership — the field pairs two
+        # middling arms far more often than winners, who carry a true ceiling arm.
+        def pw(ps):
+            w = np.array([_hit_weight(p, self.upside_attr) for p in ps], float)
+            if self.jitter:
+                w = w * np.exp(self.jitter * rng.standard_normal(len(w)))
+            return w
+        p1_pool = cand
+        # ace bias: force the first pitcher from the top-ceiling tier of the arm
+        # pool so the lineup carries >=1 real ceiling/K arm. Only meaningful with an
+        # upside column (candidates); default prob 0 => prior behaviour for the field.
+        if (self.upside_attr is not None and self.ace_pitcher_prob
+                and len(cand) > 2 and rng.random() < self.ace_pitcher_prob):
+            up = np.array([_hit_weight(p, self.upside_attr) for p in cand], float)
+            k = max(1, int(round(self.ace_pool_frac * len(cand))))
+            p1_pool = [cand[i] for i in np.argsort(-up)[:k]]
+        w1 = pw(p1_pool)
+        p1 = p1_pool[rng.choice(len(p1_pool), p=w1/w1.sum())]
         rest = [p for p in cand if p.Name != p1.Name]
         if rng.random() > self.rules["two_pitchers_same_game_prob"]:
             r2 = [p for p in rest if p.Team != p1.Opp]   # avoid P-vs-P same game
@@ -357,9 +382,7 @@ class Builder:
                 rest = r2
         if not rest:
             return None
-        w2 = np.array([p.Ownership for p in rest], float)
-        if self.jitter:
-            w2 = w2 * np.exp(self.jitter * rng.standard_normal(len(w2)))
+        w2 = pw(rest)
         p2 = rest[rng.choice(len(rest), p=w2/w2.sum())]
         pitchers = [p1, p2]
 
