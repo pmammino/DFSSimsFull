@@ -220,3 +220,74 @@ export function fetchPlaceDist(
     `/api/run/${encodeURIComponent(runId)}/candidate/${candidate}/place-distribution`,
   );
 }
+
+// ---- Results filtering (Phase 2) ----
+
+export interface RunFacets {
+  pool_players: string[];
+  stacks: string[];
+  teams: string[];
+  sizes: number[];
+  own_sum: { min: number; max: number };
+  salary: { min: number; max: number };
+  n_candidates: number;
+}
+
+export interface ResultsFilter {
+  players?: string[];
+  match_mode?: "all" | "any";
+  exclude?: string[];
+  stacks?: string[];
+  teams?: string[];
+  sizes?: number[];
+  own_min?: number | null;
+  own_max?: number | null;
+  sal_min?: number | null;
+  sal_max?: number | null;
+  min_win?: number;
+  min_top10?: number;
+  min_top100?: number;
+  limit?: number;
+}
+
+export interface FilteredResults {
+  run_id: string;
+  total: number;
+  count: number;
+  all_ids: number[];
+  results: Record<string, number | string>[];
+  columns: string[];
+}
+
+export function fetchFacets(runId: string): Promise<RunFacets> {
+  return getJson<RunFacets>(`/api/run/${encodeURIComponent(runId)}/facets`);
+}
+
+export async function fetchFilteredResults(
+  runId: string,
+  filter: ResultsFilter,
+): Promise<FilteredResults> {
+  const res = await fetch(`/api/run/${encodeURIComponent(runId)}/results`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(filter),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      detail = (await res.json()).detail ?? detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<FilteredResults>;
+}
+
+export function candidatesCsvUrl(runId: string): string {
+  return `/api/run/${encodeURIComponent(runId)}/candidates.csv`;
+}
+
+export function fieldCsvUrl(runId: string): string {
+  return `/api/run/${encodeURIComponent(runId)}/field.csv`;
+}

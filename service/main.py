@@ -296,6 +296,73 @@ def get_run(run_id: str, limit: int = Query(500, ge=1, le=5000)):
     }
 
 
+@app.get("/run/{run_id}/facets")
+def run_facets(run_id: str):
+    """Filter-control options for the Results tab (players, stacks, teams,
+    sizes, ownership/salary ranges)."""
+    from service import runner
+    payload = runstore.get(run_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Run not found (expired).")
+    return runner.facets(payload)
+
+
+class ResultsFilter(BaseModel):
+    players: list[str] = []
+    match_mode: str = "all"           # "all" | "any"
+    exclude: list[str] = []
+    stacks: list[str] = []
+    teams: list[str] = []
+    sizes: list[int] = []
+    own_min: float | None = None
+    own_max: float | None = None
+    sal_min: float | None = None
+    sal_max: float | None = None
+    min_win: float = 0.0
+    min_top10: float = 0.0
+    min_top100: float = 0.0
+    limit: int = 1000
+
+
+@app.post("/run/{run_id}/results")
+def run_results(run_id: str, f: ResultsFilter):
+    """Filtered candidate results (server-side, mirrors app.py's Results mask)."""
+    from service import runner
+    payload = runstore.get(run_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Run not found (expired).")
+    limit = max(1, min(int(f.limit), 5000))
+    out = runner.filter_results(payload, f.model_dump(), limit=limit)
+    out["run_id"] = run_id
+    return out
+
+
+def _csv_response(df, filename: str):
+    from fastapi.responses import Response
+    return Response(
+        content=df.to_csv(index=False),
+        media_type="text/csv",
+        headers={"content-disposition": f'attachment; filename="{filename}"'})
+
+
+@app.get("/run/{run_id}/candidates.csv")
+def run_candidates_csv(run_id: str):
+    """All candidate lineups (the app's 'Download all candidate lineups')."""
+    payload = runstore.get(run_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Run not found (expired).")
+    return _csv_response(payload["res"], f"candidates_{len(payload['res'])}.csv")
+
+
+@app.get("/run/{run_id}/field.csv")
+def run_field_csv(run_id: str):
+    """The simulated field (the app's 'Download field')."""
+    payload = runstore.get(run_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Run not found (expired).")
+    return _csv_response(payload["field_df"], f"field_{payload['field_n']}.csv")
+
+
 @app.get("/run/{run_id}/candidate/{candidate}/place-distribution")
 def candidate_place_distribution(run_id: str, candidate: int):
     """Finishing-place histogram for one candidate (data behind

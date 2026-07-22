@@ -34,6 +34,9 @@ Open http://localhost:8000/docs for the interactive OpenAPI UI.
 | `POST /run` | ✅ | field build + `run_contest_dist` (→ run_id) |
 | `GET /run/{id}` | ✅ | re-fetch a run summary |
 | `GET /run/{id}/candidate/{c}/place-distribution` | ✅ | `place_distribution_chart` data |
+| `GET /run/{id}/facets` | ✅ | Results filter options |
+| `POST /run/{id}/results` | ✅ | server-side filtered candidates |
+| `GET /run/{id}/candidates.csv`, `/field.csv` | ✅ | Results CSV downloads |
 | `GET /slate/catalog` | ✅ | `dk_slate_feed.build_catalog` (live, cached) |
 | `POST /slate/upload` | ✅ | parse DK export / clean CSV |
 | `GET /slate/sample` | ✅ | bundled sample slate (offline dev) |

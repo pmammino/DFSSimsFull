@@ -20,9 +20,13 @@ type TabKey = (typeof TABS)[number]["key"];
 export default function Workspace() {
   const [active, setActive] = useState<TabKey>("setup");
   const [run, setRun] = useState<RunSummary | null>(null);
+  // Marked candidate ids live here so the Export tab (Phase 3) can consume the
+  // Results tab's selection — the app's st.session_state["picked"].
+  const [marked, setMarked] = useState<Set<number>>(new Set());
 
   function handleRun(summary: RunSummary) {
     setRun(summary);
+    setMarked(new Set()); // fresh run clears prior marks (mirrors app.py)
     setActive("results"); // jump to Results as the "done" signal (like the app)
   }
 
@@ -64,7 +68,7 @@ export default function Workspace() {
         <PlayersTab />
       </div>
       <div className={active === "results" ? "" : "hidden"}>
-        <ResultsTab run={run} />
+        <ResultsTab run={run} marked={marked} onMarked={setMarked} />
       </div>
       {active === "export" && (
         <Placeholder

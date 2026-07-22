@@ -296,6 +296,7 @@ def run_slate(dk_df: pd.DataFrame, sims: dict, params: RunParams,
     res["PrimaryStack"] = prim_size
     res = res.sort_values(["Wins", "Top10", "Top100", "AvgPlace"],
                           ascending=[False, False, False, True]).reset_index(drop=True)
+    res["Rank"] = np.arange(1, len(res) + 1)   # global rank in the sorted order
 
     players_meta = {}
     for r in pool.itertuples():
@@ -345,9 +346,9 @@ def _headline_metrics(res: pd.DataFrame, K: int) -> dict:
 
 
 # Columns returned to the client for the results table (JSON-safe subset).
-_RESULT_COLS = ["Candidate", "Stack", "Salary", "PrimaryTeam", "PrimaryStack",
-                "OwnSum", "Win%", "Top10%", "Top100%", "AvgPlace",
-                "BestPlace", "WorstPlace"]
+_RESULT_COLS = ["Rank", "Candidate", "Stack", "Salary", "PrimaryTeam",
+                "PrimaryStack", "OwnSum", "Win%", "Top10%", "Top100%",
+                "AvgPlace", "BestPlace", "WorstPlace"]
 
 
 def _results_rows(res: pd.DataFrame, limit: int = 500) -> list[dict]:
@@ -357,3 +358,72 @@ def _results_rows(res: pd.DataFrame, limit: int = 500) -> list[dict]:
         {k: (v.item() if hasattr(v, "item") else v) for k, v in row.items()}
         for row in out.to_dict("records")
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Results filtering (Phase 2) — server-side over the cached payload, so the
+# include/exclude-player filters can use each lineup's membership set.
+# Mirrors the mask logic in app.py's Results tab.
+# --------------------------------------------------------------------------- #
+def facets(payload: dict) -> dict:
+    """Filter-control options for a run: player pool, stack shapes, primary
+    teams/sizes, and the ownership/salary ranges."""
+    res = payload["res"]
+    return {
+        "pool_players": payload["pool_players"],
+        "stacks": sorted(res["Stack"].unique().tolist()),
+        "teams": sorted(t for t in res["PrimaryTeam"].unique().tolist() if t),
+        "sizes": sorted(res["PrimaryStack"].unique().tolist(), reverse=True),
+        "own_sum": {"min": float(res["OwnSum"].min()),
+                    "max": float(res["OwnSum"].max())},
+        "salary": {"min": int(res["Salary"].min()),
+                   "max": int(res["Salary"].max())},
+        "n_candidates": int(len(res)),
+    }
+
+
+def filter_results(payload: dict, f: dict, limit: int = 1000) -> dict:
+    """Apply the Results-tab filters to a run's candidates. Returns matching
+    rows (up to `limit`), the total match count, and every matching Candidate id
+    (so the UI's 'mark all' covers matches beyond the returned page)."""
+    import numpy as _np
+    res = payload["res"]
+    c2p = payload["cand_to_players"]
+    mask = _np.ones(len(res), dtype=bool)
+    cand = res["Candidate"]
+
+    players = set(f.get("players") or [])
+    if players:
+        mode = f.get("match_mode", "all")
+        mask &= cand.map(
+            lambda c: (players.issubset(c2p[int(c)]) if mode == "all"
+                       else bool(players & c2p[int(c)]))).to_numpy()
+    exclude = set(f.get("exclude") or [])
+    if exclude:
+        mask &= cand.map(lambda c: not (exclude & c2p[int(c)])).to_numpy()
+    if f.get("stacks"):
+        mask &= res["Stack"].isin(f["stacks"]).to_numpy()
+    if f.get("teams"):
+        mask &= res["PrimaryTeam"].isin(f["teams"]).to_numpy()
+    if f.get("sizes"):
+        mask &= res["PrimaryStack"].isin(f["sizes"]).to_numpy()
+    if f.get("own_min") is not None:
+        mask &= (res["OwnSum"] >= float(f["own_min"])).to_numpy()
+    if f.get("own_max") is not None:
+        mask &= (res["OwnSum"] <= float(f["own_max"])).to_numpy()
+    if f.get("sal_min") is not None:
+        mask &= (res["Salary"] >= float(f["sal_min"])).to_numpy()
+    if f.get("sal_max") is not None:
+        mask &= (res["Salary"] <= float(f["sal_max"])).to_numpy()
+    if f.get("min_win"):
+        mask &= (res["Win%"] >= float(f["min_win"])).to_numpy()
+    if f.get("min_top10"):
+        mask &= (res["Top10%"] >= float(f["min_top10"])).to_numpy()
+    if f.get("min_top100"):
+        mask &= (res["Top100%"] >= float(f["min_top100"])).to_numpy()
+
+    fres = res[mask]
+    all_ids = [int(x) for x in fres["Candidate"].tolist()]
+    return {"total": int(len(fres)), "count": min(len(fres), limit),
+            "all_ids": all_ids, "results": _results_rows(fres, limit=limit),
+            "columns": [c for c in _RESULT_COLS if c in res.columns]}

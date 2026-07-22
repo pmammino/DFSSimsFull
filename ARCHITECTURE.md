@@ -140,7 +140,8 @@ npm run dev                        # http://localhost:3000
 | Worker: `POST /run`, `/run/{id}`, place-distribution, `/slate/*` | ✅ Phase 1 |
 | Worker: async `POST /refresh` + `/refresh/status/{id}` job | ✅ Phase 1 |
 | Web: **Setup tab** (slate/upload, params, Run) + **Results** render | ✅ Phase 1 |
-| Results tab: filters, marks, richer detail | ⏳ Phase 2 |
+| Worker: `/run/{id}/facets`, `/results` (filter), `candidates`/`field` CSV | ✅ Phase 2 |
+| Web: **Results tab** filters, lineup marking, CSV downloads | ✅ Phase 2 |
 | Export tab (DK upload, EV, exposure caps) | ⏳ Phase 3 |
 | Showdown branch | ⏳ Phase 4 |
 | Worker deploy hardening (Docker, cron, auth) | ⏳ Phase 5 |
