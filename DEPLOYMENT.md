@@ -1,179 +1,134 @@
-# Deployment runbook — going live
+# Deployment runbook — Streamlit app
 
-A step-by-step to get the migrated app running in production. Three things get
-stood up, in this order:
+How to run the DFS contest simulator (the Streamlit app in `app.py`) in
+production. There are two pieces, and only the first is required:
 
-1. **Object store** (Cloudflare R2) — holds the sim artifacts.
-2. **Worker** (Render) — the Python API that reads those artifacts and runs sims.
-3. **Web app** (Vercel) — the UI, pointed at the worker.
+1. **The app itself** — `streamlit run app.py`.
+2. **An optional object store** (Cloudflare R2 / S3) — so multiple users share
+   one refreshed build and it survives restarts, plus a **scheduled morning
+   refresh** so the slow projection rebuild (Stage B) is done ahead of time.
 
-You'll also wire an optional **daily refresh** (GitHub Actions). Budget ~30–45
-minutes the first time. Everything below uses the free/low tiers.
-
-> Prerequisites: a machine that can already run the pipeline today (the repo as
-> you use it now), plus a **Render**, **Vercel**, and **Cloudflare** account.
-> No CLI needed — Render and Vercel are configured entirely in the browser.
->
-> Render deploys straight from GitHub, so make sure this branch is pushed (it
-> is) — you'll point Render at it, or merge to `main` first and deploy from
-> there.
+If you run the app on a single always-on machine, you can skip the object store
+entirely and use a local cron for the refresh (see Step 4).
 
 ---
 
-## Step 1 — Create the object store (Cloudflare R2)
-
-R2 is S3-compatible and has no egress fees. (Plain AWS S3 works too — skip the
-`ENDPOINT` bits if you use S3.)
-
-1. Cloudflare dashboard → **R2** → **Create bucket**. Name it e.g. `dfs-sims`.
-   Note your **Account ID** (top of the R2 page).
-2. R2 → **Manage R2 API Tokens** → **Create API token**:
-   - Permission: **Object Read & Write**, scoped to the `dfs-sims` bucket.
-   - Save the **Access Key ID** and **Secret Access Key** (shown once).
-3. Your S3 endpoint is `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
-
-You now have five values you'll reuse everywhere:
-
-| Name | Example |
-|---|---|
-| `SHARED_STORE_BUCKET` | `dfs-sims` |
-| `SHARED_STORE_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` |
-| `AWS_ACCESS_KEY_ID` | `…` |
-| `AWS_SECRET_ACCESS_KEY` | `…` |
-| `AWS_REGION` | `auto` (R2 ignores it; any value is fine) |
-
----
-
-## Step 2 — Seed the store with today's artifacts
-
-Run the pipeline once locally as you do now, then publish. From the repo root:
+## Step 1 — Run the app
 
 ```bash
-# produce fresh artifacts (whatever you normally run), e.g.:
-python refresh_and_run.py            # or: python run_slate.py
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-# point at the store and upload
+The app loads the sims in `deliverables/` and the projections in `out/`. On a
+single machine those files on disk are shared across every browser session, so
+one refresh is seen by everyone hitting that instance. To host it, any platform
+that runs a long-lived Python process works (Streamlit Community Cloud, a VM,
+a container). Streamlit needs a persistent WebSocket connection, so a stateless
+serverless host is not suitable.
+
+Theme tokens live in `.streamlit/config.toml`; brand fonts are served from
+`static/fonts/`. The app is Windows-portable.
+
+---
+
+## Step 2 — (Optional) Shared object store for multi-user / persistence
+
+On an ephemeral or multi-replica host the local filesystem doesn't persist, so
+configure an **S3-compatible bucket** to share one build across all users and
+survive restarts. R2 is S3-compatible with no egress fees (plain AWS S3 works
+too — skip the `ENDPOINT` bits).
+
+1. Cloudflare dashboard → **R2** → **Create bucket** (e.g. `dfs-sims`). Note your
+   **Account ID**.
+2. R2 → **Manage R2 API Tokens** → **Create API token** (Object Read & Write,
+   scoped to the bucket). Save the **Access Key ID** and **Secret Access Key**.
+3. Your endpoint is `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
+
+Give the app the config via **Streamlit secrets** (`.streamlit/secrets.toml`, or
+the app's Settings → Secrets on Streamlit Cloud):
+
+```toml
+[shared_store]
+bucket = "dfs-sims"
+prefix = "dfs"                                          # optional
+region = "auto"                                         # R2 ignores it
+endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
+access_key_id = "..."
+secret_access_key = "..."
+```
+
+Requires `boto3` (already in `requirements.txt`). With no `[shared_store]` config
+the app runs purely on the local filesystem, unchanged. See
+`.streamlit/secrets.toml.example` and the *Sharing across users* section of
+`README_app.md` for how the app pulls/pushes.
+
+---
+
+## Step 3 — Seed the store with today's artifacts
+
+Run the pipeline once, then publish. The same env-var schema also drives the
+scheduled Action in Step 4:
+
+```bash
+python refresh_and_run.py            # produce fresh projections + sims
+
 export SHARED_STORE_BUCKET=dfs-sims
 export SHARED_STORE_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
 export AWS_ACCESS_KEY_ID=…
 export AWS_SECRET_ACCESS_KEY=…
-python scripts/push_artifacts.py            # add --check first to preview
+python scripts/push_artifacts.py     # add --check first to preview
 ```
 
-You should see the six artifacts upload (two `.npy` sims, two projection CSVs,
-the build stamp, the slate JSON). This is the data the worker will serve.
+You should see the shared artifact set upload (two `.npy` sims, two projection
+CSVs, the build stamp, the slate JSON).
 
 ---
 
-## Step 3 — Deploy the worker (Render)
+## Step 4 — Schedule the morning refresh (so Stage B never blocks a Run)
 
-All in the browser at https://render.com (sign in with GitHub so it can see the
-repo). The repo already contains `service/Dockerfile` and `render.yaml`.
+The projection rebuild (Stage B) is by far the slowest part of a cold Run. A
+scheduled job rebuilds it every morning and publishes, so an interactive Run
+finds today's projections already dated today and **skips Stage B entirely** —
+at most it does a fast Stage C re-sim if lineups moved.
 
-1. **New → Web Service** → connect this GitHub repo → pick the branch
-   (`claude/streamlit-vercel-migration-sn9ely`, or `main` after you merge).
-2. On the settings screen:
-   - **Language / Runtime**: **Docker**.
-   - **Dockerfile Path**: `./service/Dockerfile`
-   - **Docker Build Context Directory**: `.` (the repo root — the image imports
-     the repo's modules).
-   - **Instance Type**: **Free** to start. (Free spins down after ~15 min idle;
-     the next request cold-starts and re-pulls artifacts from R2 — fine for
-     testing. Choose **Starter** to keep it warm and get more RAM.)
-   - **Health Check Path**: `/health`
-3. **Environment** → add these variables (values from Steps 1–2; generate the
-   key with any random-string tool, e.g. `openssl rand -hex 24`):
-   | Key | Value |
-   |---|---|
-   | `SHARED_STORE_BUCKET` | `dfs-sims` |
-   | `SHARED_STORE_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` |
-   | `AWS_ACCESS_KEY_ID` | … |
-   | `AWS_SECRET_ACCESS_KEY` | … |
-   | `AWS_REGION` | `auto` |
-   | `WORKER_API_KEY` | a random string — **save it, Vercel needs the same one** |
-   | `CORS_ALLOW_ORIGINS` | `*` for now (tighten in Step 4.5) |
-   You don't set `PORT` — Render injects it and the Dockerfile already binds it.
-4. **Create Web Service**. Render builds the image and deploys.
-5. Note the URL Render gives you, e.g. `https://dfs-worker.onrender.com`.
-   Check it: `curl https://dfs-worker.onrender.com/health` → `{"status":"ok",…}`.
-   (`/health` is intentionally open; every other route needs the key.)
+**With the object store (GitHub Actions).** Add the store config as repo secrets
+(**Settings → Secrets and variables → Actions**): `SHARED_STORE_BUCKET`,
+`SHARED_STORE_ENDPOINT`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_REGION` (and `SHARED_STORE_PREFIX` if used). The workflow
+`.github/workflows/refresh.yml` then runs **daily at 13:00 UTC (~9am ET)**:
 
-> Prefer one-click? **New → Blueprint → pick this repo** instead — Render reads
-> `render.yaml`, creates the service, and prompts you for the same secrets.
+- It rebuilds **projections + sims** (`refresh_and_run.py --skip-bip`, reusing the
+  committed `bip_inputs/`), stamps the build (`scripts/stamp_build.py
+  --projections`), and publishes to the store.
+- **Run workflow** (manual) offers three modes: **projections** (default, what
+  the schedule runs), **sims** (fast Stage C only), and **full** (Stage A+B+C
+  including the heavy Statcast **BIP scrape** — run occasionally, e.g. weekly, to
+  refresh the underlying data).
+- Change the time by editing the `schedule:` cron; projections don't need posted
+  lineups, so an earlier slot (e.g. `0 11 * * *` ≈ 7am ET) gives users a bigger
+  head start.
 
-> (Fly.io works too and `fly.toml` is included, but this runbook uses Render.)
+**Single server (no object store).** Schedule the same commands with cron so they
+write straight to the app's `deliverables/` and `out/`:
 
----
-
-## Step 4 — Deploy the web app (Vercel)
-
-1. https://vercel.com → **Add New… → Project** → import this GitHub repo.
-2. **Root Directory**: set to **`web`** (click Edit, pick the `web` folder).
-   Framework auto-detects as Next.js.
-3. **Environment Variables** (Project → Settings → Environment Variables):
-   | Key | Value |
-   |---|---|
-   | `WORKER_API_URL` | `https://dfs-worker.onrender.com` (your worker URL) |
-   | `WORKER_API_KEY` | the same random string from Step 3 |
-4. **Deploy**. Open the resulting URL. The header badge should read
-   `10,000 sims · N players` — that means the browser → Vercel → worker → R2
-   path is live.
-5. If you set CORS to `*` earlier, now lock it down: in Render → your service →
-   **Environment**, set `CORS_ALLOW_ORIGINS=https://<your-app>.vercel.app` and
-   save (Render redeploys automatically).
-
-Smoke test in the browser: **Setup → Load bundled sample slate → Run
-simulation** → **Results** shows metrics; **Export** builds a portfolio.
-
----
-
-## Step 5 — Automate the daily refresh (optional but recommended)
-
-So you don't have to run the pipeline by hand each day:
-
-1. GitHub → repo **Settings → Secrets and variables → Actions → New repository
-   secret**, add: `SHARED_STORE_BUCKET`, `SHARED_STORE_ENDPOINT`,
-   `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`
-   (and `SHARED_STORE_PREFIX` if you used one).
-2. The workflow `.github/workflows/refresh.yml` already runs daily at 13:00 UTC
-   (~9am ET) and can be run on demand: **Actions → refresh-sims → Run
-   workflow**. It rebuilds and publishes to R2; the worker picks up the new
-   build automatically on its next request.
-3. Adjust the cron time by editing the `schedule:` line in that file.
-
-The in-app **Rebuild sims** button (Setup tab) triggers the worker's own
-on-demand rebuild job for the same effect between scheduled runs.
-
----
-
-## How it fits together (recap)
-
-```
- daily cron / Rebuild button ─▶ pipeline ─▶ R2 (artifacts + build stamp)
-                                              │
- browser ─▶ Vercel (web/, /api proxy + key) ─▶ Render worker ─▶ reads R2, runs sims
+```cron
+# 7am daily — rebuild projections + sims for the app on this box
+0 7 * * *  cd /path/to/DFSSimsFull && /usr/bin/python refresh_and_run.py --skip-bip \
+             && /usr/bin/python scripts/stamp_build.py --projections >> refresh.log 2>&1
 ```
 
-- The browser never sees the worker URL or key — the Vercel `/api` routes add
-  the key server-side.
-- The worker keeps the sims warm in memory and re-pulls from R2 whenever a
-  newer build stamp appears.
+The app reads the same `out/.build_stamp.json`, so it skips Stage B on Runs the
+same way — no object store required. The app's build banner shows when the
+baselines (Stage B) were last refreshed.
+
+---
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| Header badge says "worker offline" | `curl <worker>/health`; check `WORKER_API_URL` in Vercel and the Render service status (Render dashboard → your service → Events/Logs). On the free plan the first request after idle is a slow cold start — retry after ~30–60s. |
-| Everything 401s | `WORKER_API_KEY` differs between Render and Vercel — set them to the same value. |
-| `/status` → 503 "artifacts not found" | Step 2 didn't publish; re-run `scripts/push_artifacts.py` and check the bucket. |
-| CORS error in browser console | `CORS_ALLOW_ORIGINS` on the worker must include your exact Vercel origin (or `*`). |
-| Slate catalog / team-totals empty | Those hit live RotoWire/Vegas feeds; use the sample slate or an uploaded CSV if a feed is down. |
-| Showdown upload CSV missing | Expected — showdown needs a DK showdown DKSalaries template for captain ids (a follow-up); the portfolio + exposure still render. |
-
-## What is NOT covered yet
-
-- **Showdown DK-upload CSV**: needs a DKSalaries showdown template upload for
-  captain ids (classic upload CSVs work when the slate carries ids).
-- **Auth for humans**: the worker uses a shared API key for the Vercel↔worker
-  hop; add Vercel Authentication (Settings → Deployment Protection) if you want
-  to gate who can open the site.
+| Banner: baselines not from today | The morning refresh didn't run/publish — trigger **Actions → refresh-sims → Run workflow** (or your cron), or tick **Force full refresh** on a Run. |
+| Shared build not appearing for a user | Hit **↻ Refresh** on the Setup tab (pulls the latest build); confirm the `[shared_store]` secrets match the store the Action publishes to. |
+| Slate catalog / team-totals empty | Those hit live RotoWire/Vegas feeds; retry when the feed is back. |
+| Stage B rebuild fails in the app | Needs `scikit-learn`/`xgboost`/`pybaseball`/`pyarrow` and reachable `statsapi.mlb.com`; on Python 3.14 those wheels may be missing — run on Python 3.11–3.12. The sims still rebuild on the existing projections. |

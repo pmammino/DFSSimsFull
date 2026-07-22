@@ -1067,28 +1067,43 @@ def sims_present():
     return bool(h and p)
 
 
-def sim_build_info():
-    """Summarize the current sim build for the freshness indicator so a second
-    user can see whether today's sims already exist (built by someone else) and
-    can be reused without forcing a rebuild.
+def _fmt_ts(ts):
+    """Human timestamp for a stored epoch seconds value ("" if missing/bad).
+    Zero-padded format — portable across Linux and Windows."""
+    if not ts:
+        return ""
+    try:
+        return datetime.datetime.fromtimestamp(float(ts)).strftime("%b %d, %H:%M")
+    except Exception:
+        return ""
 
-    Returns (fresh_today, slate_date, built_when) where `fresh_today` is True
-    when the sims on hand were built from a slate dated today, `slate_date` is
-    that slate's game date (or None), and `built_when` is a human timestamp of
-    the build (or "")."""
+
+def sim_build_info():
+    """Summarize the current build for the freshness indicator so a second user
+    can see whether today's sims already exist (built by someone else) and can be
+    reused without forcing a rebuild — and when the slow baselines (Stage B
+    projections) were last refreshed.
+
+    Returns a dict:
+      * sims_fresh    — sims on hand were built from a slate dated today
+      * slate_date    — that slate's game date (or None)
+      * sims_when     — human timestamp of the last sim/slate build (or "")
+      * proj_fresh    — projections (Stage B baselines) are dated today
+      * proj_date     — projections' build date (or None)
+      * proj_when     — human timestamp of the last Stage B build (or "")
+    """
     stamp = read_build_stamp()
+    today = datetime.date.today().isoformat()
     slate_date = stamp.get("slate_date")
-    built_when = ""
-    ts = stamp.get("ts")
-    if ts:
-        try:
-            # zero-padded format — portable across Linux and Windows
-            built_when = datetime.datetime.fromtimestamp(
-                float(ts)).strftime("%b %d, %H:%M")
-        except Exception:
-            built_when = ""
-    fresh_today = bool(slate_date and slate_date == datetime.date.today().isoformat())
-    return fresh_today, slate_date, built_when
+    proj_date = stamp.get("projections_date")
+    return {
+        "sims_fresh": bool(slate_date and slate_date == today),
+        "slate_date": slate_date,
+        "sims_when": _fmt_ts(stamp.get("ts")),
+        "proj_fresh": bool(proj_date and proj_date == today),
+        "proj_date": proj_date,
+        "proj_when": _fmt_ts(stamp.get("projections_ts")),
+    }
 
 
 def load_stored_slate():
@@ -1399,7 +1414,10 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
                 ok, out = run_script(PROJ_CMD, label, status)
                 if ok:
                     proj_date = today; projections_rebuilt = True
-                    write_build_stamp(projections_date=today)
+                    # record the precise build time for the "baselines last built"
+                    # line in the app's build banner
+                    write_build_stamp(projections_date=today,
+                                      projections_ts=time.time())
                     notes.append("Rebuilt projections.")
                 elif proj_date is None:
                     st.error("No projections exist and the projection build failed — "
@@ -1414,7 +1432,13 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
                     notes.append(f"⚠️ Projection rebuild failed; using existing "
                                  f"projections from {proj_date}.")
         elif stamp.get("projections_date") != today:
-            write_build_stamp(projections_date=today)
+            # projections are already dated today (e.g. built by the scheduled
+            # job and pulled) but the stamp didn't record it — backfill the date,
+            # estimating the build time from the projection files' mtime
+            _pfs = glob.glob(os.path.join(HERE, "out", "*pa_projections*.csv"))
+            _pts = max((os.path.getmtime(f) for f in _pfs), default=None)
+            write_build_stamp(projections_date=today,
+                              **({"projections_ts": _pts} if _pts else {}))
 
         # --- 2) sims: rebuild from today's live slate whenever it moved --------
         new_game_day = bool(slate_day and stamp.get("slate_date")
@@ -1681,11 +1705,13 @@ c3.metric("Sims available", f"{n_sim:,}")
 # so everyone using the app runs the SAME set. This line tells a user whether
 # today's sims already exist — built by them or by anyone else earlier — so a
 # second user can just make their selections and run rather than rebuilding.
-_fresh, _sl_date, _built_when = sim_build_info()
+_bi = sim_build_info()
+_sl_date = _bi["slate_date"]
+_built_when = _bi["sims_when"]
 _shared_note = (" These sims are shared with everyone using the app."
                 if shared_store.enabled() else
                 " These sims are shared across everyone on this app.")
-if _fresh:
+if _bi["sims_fresh"]:
     st.success(
         f"✅ Today's sims are current — built for the {_sl_date} slate"
         + (f" at {_built_when}" if _built_when else "") + "."
@@ -1701,6 +1727,24 @@ else:
     st.info(
         "↻ No dated build recorded yet — the first run today builds today's sims "
         "and shares them with everyone using the app." + _shared_note)
+
+# Baselines = the slow Stage B projections. They change little day to day and are
+# meant to be rebuilt by the scheduled morning job, so surface when they last ran
+# — if this is today, an interactive Run skips the slow step entirely.
+if _bi["proj_date"]:
+    _when = f" at {_bi['proj_when']}" if _bi["proj_when"] else ""
+    if _bi["proj_fresh"]:
+        st.caption(f"🧬 Baselines (Stage B projections) last refreshed **today** "
+                   f"({_bi['proj_date']}{_when}) — a Run will skip the slow "
+                   "projection rebuild.")
+    else:
+        st.caption(f"🧬 Baselines (Stage B projections) last refreshed "
+                   f"**{_bi['proj_date']}**{_when} — the next Run will rebuild "
+                   "them for today (the slow step) unless the morning job runs "
+                   "first.")
+else:
+    st.caption("🧬 Baselines (Stage B projections) have no recorded build date — "
+               "the next Run will build them (the slow step).")
 
 
 tabs = st.tabs(["⚙️  Setup", "📊  Players", "🏆  Results", "⬇️  Export"])

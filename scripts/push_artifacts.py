@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""push_artifacts.py — seed the object store (R2/S3) with the artifacts the
-Vercel web app + worker read.
+"""push_artifacts.py — publish the pipeline artifacts to the object store (R2/S3)
+that the Streamlit app pulls from.
 
-This is the bridge between the heavy pipeline (which you run locally or on the
-worker container) and the web tier. After a pipeline run produces fresh sims
-and projections, this uploads exactly the shared artifact set so the deployed
-worker picks them up on its next pull.
+This is the bridge between the heavy pipeline (run locally or by the scheduled
+GitHub Action) and the running app. After a pipeline run produces fresh sims and
+projections, this uploads exactly the shared artifact set so every app
+instance/session picks them up on its next pull.
 
-It reuses ``shared_store.push()`` — the same code path the Streamlit app used —
+It reuses ``shared_store.push()`` — the same code path the Streamlit app uses —
 so the artifact list and key layout stay in one place.
 
 Usage
@@ -70,7 +70,7 @@ def main():
     print("\nUploading to object store …")
     ok = shared_store.push()
     if ok:
-        print("Done. The build stamp was written last, so the worker will "
+        print("Done. The build stamp was written last, so the app will "
               "pull the new build atomically on its next sync.")
         return 0
     print("Upload reported errors — check credentials/endpoint.", file=sys.stderr)
