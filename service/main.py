@@ -43,6 +43,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Optional shared-secret gate. When WORKER_API_KEY is set, every request must
+# carry a matching `x-api-key` header (the Vercel proxy adds it). Health checks
+# and CORS preflights are always allowed. Unset ⇒ open (local dev).
+_API_KEY = os.environ.get("WORKER_API_KEY", "")
+_OPEN_PATHS = {"/health", "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
+
+
+@app.middleware("http")
+async def _api_key_guard(request, call_next):
+    if _API_KEY and request.method != "OPTIONS":
+        path = request.url.path
+        if path not in _OPEN_PATHS and not path.startswith("/docs"):
+            if request.headers.get("x-api-key") != _API_KEY:
+                from fastapi.responses import JSONResponse
+                return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    return await call_next(request)
+
 _PARAMS_PATH = os.path.join(_REPO_ROOT, "field_params.json")
 _DATA_DIR = os.path.join(_REPO_ROOT, "data")
 SIZE_PRESETS = [150, 1000, 6000, 20000, 50000, 150000]

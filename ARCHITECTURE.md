@@ -145,7 +145,7 @@ npm run dev                        # http://localhost:3000
 | Worker: `POST /run/{id}/export` (ranked + EV portfolio, caps, exposure) | ✅ Phase 3 |
 | Web: **Export tab** — DK upload, Portfolio EV, exposure/diversity caps | ✅ Phase 3 |
 | Showdown branch (worker runner + format-aware Results/Export UI) | ✅ Phase 4 |
-| Worker deploy hardening (Docker, cron, auth) | ⏳ Phase 5 |
+| Worker deploy hardening (Docker, Fly config, API-key auth, cron) | ✅ Phase 5 |
 
 ### Run path (Phase 1) at a glance
 
@@ -157,6 +157,39 @@ caches the full payload by `run_id` (`runstore`), and returns a JSON summary →
 `Results` renders metrics, the candidate table, and each lineup's
 finishing-place distribution (`GET /run/{id}/candidate/{c}/place-distribution`).
 Heavy rebuilds go through the async job (`jobs.start_refresh`).
+
+## Deploy
+
+**1. Object store (Cloudflare R2 or S3).** Create a bucket. From a machine that
+can run the pipeline, seed it: set the `SHARED_STORE_*` / `AWS_*` env vars and
+run `python scripts/push_artifacts.py`.
+
+**2. Worker (Fly.io).** `fly.toml` builds `service/Dockerfile`.
+```
+fly launch --no-deploy            # create the app (edit the name in fly.toml)
+fly secrets set SHARED_STORE_BUCKET=… SHARED_STORE_ENDPOINT=… \
+    AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… \
+    WORKER_API_KEY=<random> CORS_ALLOW_ORIGINS=https://<your-vercel-app>
+fly deploy
+```
+The worker pulls the latest artifacts from R2 on startup and on each refresh.
+One machine stays warm so the sim arrays stay resident (fast `/run`). Render or
+Railway work equally well — any host that runs the Dockerfile.
+
+**3. Web (Vercel).** Import the repo, set **Root Directory = `web/`**, and set
+env vars `WORKER_API_URL=https://<worker-host>` and `WORKER_API_KEY=<same
+random>`. Deploy. The browser only ever talks to the Vercel app; the key is
+attached server-side by the `/api` proxy.
+
+**4. Auth.** With `WORKER_API_KEY` set on both sides, every worker request must
+carry a matching `x-api-key` (added by the Vercel proxy). `/health` stays open
+for load-balancer checks. Unset ⇒ open (local dev only).
+
+**5. Scheduled refresh.** `.github/workflows/refresh.yml` runs the pipeline on a
+daily cron (or manual dispatch), then `push_artifacts.py` publishes to R2 — no
+human in the loop. Add the same `SHARED_STORE_*` / `AWS_*` values as repo
+Action secrets. (The in-app **Rebuild sims** button triggers the worker's own
+async job for on-demand rebuilds.)
 
 ## Backend improvements this unlocks
 
