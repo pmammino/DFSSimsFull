@@ -1,0 +1,40 @@
+# Fly.io config for the DFS worker (the FastAPI service in service/).
+# Deploy:
+#   fly launch --no-deploy            # once, to create the app (edit app name)
+#   fly secrets set SHARED_STORE_BUCKET=... SHARED_STORE_ENDPOINT=... \
+#       AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
+#       WORKER_API_KEY=... CORS_ALLOW_ORIGINS=https://<your-vercel-app>
+#   fly deploy
+app = "dfs-worker"
+primary_region = "iad"
+
+[build]
+  dockerfile = "service/Dockerfile"
+
+[env]
+  PORT = "8000"
+  # SHARED_STORE_*, AWS_*, WORKER_API_KEY, CORS_ALLOW_ORIGINS come from
+  # `fly secrets` (never commit them).
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Keep one machine warm so the sim arrays stay resident (fast /run). Set
+  # min_machines_running = 0 to scale to zero for cost — the trade-off is a
+  # cold start that re-pulls artifacts from R2 on the next request.
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    path = "/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+
+[[vm]]
+  # 1 GB comfortably holds the ~24 MB sim arrays plus lineup construction and
+  # the contest-scoring matrices for typical runs.
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1

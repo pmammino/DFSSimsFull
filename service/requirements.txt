@@ -1,0 +1,12 @@
+# Worker service deps — LIGHT numeric API only.
+# Deliberately excludes xgboost / scikit-learn / pybaseball: those are needed
+# only by the heavy pipeline (Stage A/B), which the worker launches as a
+# subprocess/job using the repo's root requirements.txt — not at API time.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+numpy
+scipy
+pandas
+pyarrow
+boto3
