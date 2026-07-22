@@ -129,20 +129,44 @@ simulation** → **Results** shows metrics; **Export** builds a portfolio.
 
 ## Step 5 — Automate the daily refresh (optional but recommended)
 
-So you don't have to run the pipeline by hand each day:
+So you don't have to run the pipeline by hand each day — and, crucially, so the
+**slow projection rebuild (Stage B) happens ahead of time** rather than on
+whoever clicks Run first:
 
 1. GitHub → repo **Settings → Secrets and variables → Actions → New repository
    secret**, add: `SHARED_STORE_BUCKET`, `SHARED_STORE_ENDPOINT`,
    `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`
    (and `SHARED_STORE_PREFIX` if you used one).
-2. The workflow `.github/workflows/refresh.yml` already runs daily at 13:00 UTC
-   (~9am ET) and can be run on demand: **Actions → refresh-sims → Run
-   workflow**. It rebuilds and publishes to R2; the worker picks up the new
-   build automatically on its next request.
-3. Adjust the cron time by editing the `schedule:` line in that file.
+2. The workflow `.github/workflows/refresh.yml` runs **daily at 13:00 UTC
+   (~9am ET)** and can be run on demand: **Actions → refresh-sims → Run
+   workflow**. Each morning it rebuilds the **projections (Stage B) + sims
+   (Stage C)**, writes the build stamp (`scripts/stamp_build.py`), and publishes
+   to R2. Because the build stamp records `projections_date = today`, an
+   interactive Run in the app finds projections already fresh and **skips Stage
+   B entirely** — at most it does a fast Stage C re-sim if lineups moved.
+3. The **Run workflow** dispatch has three modes:
+   - **projections** (default, what the schedule runs) — Stage B + C, reusing
+     the committed `bip_inputs/` (no Statcast scrape, so it's reliable).
+   - **sims** — Stage C only, a fast re-sim from existing projections.
+   - **full** — Stage A + B + C including the heavy Statcast **BIP scrape**; run
+     this occasionally (e.g. weekly, or add a second `schedule:` cron) to
+     refresh the underlying BIP data.
+4. Adjust the time by editing the `schedule:` cron in that file — projections
+   don't need posted lineups, so an earlier slot (e.g. `0 11 * * *` ≈ 7am ET)
+   gives users a bigger head start.
 
-The in-app **Rebuild sims** button (Setup tab) triggers the worker's own
-on-demand rebuild job for the same effect between scheduled runs.
+**No object store? / single-server deploy.** If you run the Streamlit app on one
+persistent machine instead of the R2 + worker setup, schedule the rebuild
+locally with cron so it writes straight to the app's `deliverables/` and `out/`:
+
+```cron
+# 7am daily — rebuild projections + sims for the app on this box
+0 7 * * *  cd /path/to/DFSSimsFull && /usr/bin/python refresh_and_run.py --skip-bip \
+             && /usr/bin/python scripts/stamp_build.py --projections >> refresh.log 2>&1
+```
+
+The app reads the same `out/.build_stamp.json`, so it skips Stage B on Runs the
+same way — no S3 required.
 
 ---
 

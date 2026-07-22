@@ -117,10 +117,13 @@ compares it against a build stamp (`out/.build_stamp.json`) that records the
 game day, every team's batting order, and every team's starting pitcher as of
 the last build. The projection rebuild and the sim rebuild are **decoupled**:
 
-1. **Projections (Stage B, best-effort).** If projections aren't from today it
-   tries to rebuild them (`run_pipeline.py`). If that fails, it **keeps going**
-   on the existing projections (they change little day to day) and shows the
-   error; it won't re-attempt the same day.
+1. **Projections (Stage B, best-effort — the SLOW step).** If projections aren't
+   from today it tries to rebuild them (`run_pipeline.py`). If that fails, it
+   **keeps going** on the existing projections (they change little day to day)
+   and shows the error; it won't re-attempt the same day. **This is the
+   expensive stage**, so it's best done ahead of time by the scheduled morning
+   job (see *Scheduled morning rebuild* below) — when that has run, projections
+   are already dated today and this step is skipped on every interactive Run.
 2. **Correlated sims (Stage C, the daily essential).** It rebuilds the sims from
    **today's live slate** — lineups, starting-pitcher matchups, and Vegas game
    totals (`run_slate.py`, using the existing projections) — whenever the slate
@@ -131,6 +134,31 @@ the last build. The projection rebuild and the sim rebuild are **decoupled**:
 A **Force full refresh** checkbox (in step 2) rebuilds both projections and
 sims regardless of staleness and bypasses the once-a-day projection-retry guard
 — use it right after fixing a data/connection issue.
+
+### Scheduled morning rebuild (so Stage B never blocks a Run)
+
+The projection rebuild (Stage B) is by far the slowest part of a cold Run. To
+keep it off the interactive path, a scheduled job rebuilds the projections
+**every morning** and publishes them; the app then finds them already dated
+today and skips Stage B, leaving only the fast Stage C re-sim when lineups move.
+
+- **Deployed (R2/S3 + Actions):** `.github/workflows/refresh.yml` runs daily at
+  13:00 UTC (~9am ET). It runs `refresh_and_run.py --skip-bip` (Stage B + C,
+  reusing the committed BIP inputs), stamps the build with
+  `scripts/stamp_build.py --projections`, and pushes to the object store. The
+  **full** dispatch mode additionally runs the Statcast BIP scrape (Stage A);
+  run it occasionally to refresh the underlying data. See DEPLOYMENT.md, Step 5.
+- **Single server (no object store):** schedule the same two commands with cron
+  so they write to the app's `deliverables/`+`out/` directly:
+
+  ```cron
+  0 7 * * *  cd /path/to/DFSSimsFull && python refresh_and_run.py --skip-bip \
+               && python scripts/stamp_build.py --projections >> refresh.log 2>&1
+  ```
+
+`scripts/stamp_build.py` writes the same `out/.build_stamp.json` the app writes
+itself (`projections_date`, `slate_date`, `slate_sig`), which is exactly what
+the freshness check above reads to decide the rebuild can be skipped.
 
 Because Stage B and Stage C run independently, a projection-build failure no
 longer blocks the sim rebuild. The progress panel shows the live slate it read

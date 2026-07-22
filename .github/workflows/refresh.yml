@@ -1,7 +1,9 @@
-# Scheduled "morning refresh": rebuild projections + correlated sims and publish
-# the artifacts to the object store (R2/S3). The deployed worker pulls the new
-# build on its next request (gated on the build stamp), so the web app serves
-# fresh sims without a human running the pipeline.
+# Scheduled "morning refresh": rebuild the projections (Stage B — the SLOW step)
+# and the correlated sims (Stage C) every morning and publish the artifacts to
+# the object store (R2/S3). The Streamlit app / worker pull the new build on
+# their next request (gated on the build stamp), so an interactive Run finds
+# today's projections already built and NEVER has to run Stage B itself — the
+# only thing a Run may still do is a fast Stage C re-sim if lineups have moved.
 #
 # Required repo secrets (Settings → Secrets and variables → Actions):
 #   SHARED_STORE_BUCKET, SHARED_STORE_ENDPOINT (for R2), SHARED_STORE_PREFIX (opt),
@@ -10,15 +12,25 @@ name: refresh-sims
 
 on:
   schedule:
-    # 13:00 UTC ≈ 9am ET — after morning lineups/Vegas are typically posted.
+    # 13:00 UTC ≈ 9am ET — rebuild projections early so they're ready before the
+    # day's users arrive. Projections don't need posted lineups; shift this
+    # earlier (e.g. "0 11 * * *" ≈ 7am ET) for a bigger head start if you like.
     - cron: "0 13 * * *"
   workflow_dispatch:
     inputs:
       stage:
-        description: "full (Stage A+B+C) or sims (Stage C only)"
-        default: "sims"
+        description: "what to rebuild"
+        default: "projections"
         type: choice
-        options: [sims, full]
+        options:
+          # projections: Stage B + C, reusing the committed BIP inputs (default,
+          #   reliable — no Statcast scrape). This is what the schedule runs.
+          # sims:        Stage C only — fast re-sim from existing projections.
+          # full:        Stage A + B + C, including the heavy Statcast BIP scrape
+          #   (use to refresh the underlying BIP data, e.g. weekly).
+          - projections
+          - sims
+          - full
 
 concurrency:
   group: refresh-sims
@@ -51,11 +63,28 @@ jobs:
 
       - name: Rebuild
         run: |
-          if [ "${{ github.event.inputs.stage }}" = "full" ]; then
-            python refresh_and_run.py
+          # Scheduled runs have no dispatch input → default to rebuilding
+          # projections so the slow Stage B is done every morning.
+          STAGE="${{ github.event.inputs.stage }}"
+          if [ -z "$STAGE" ]; then STAGE="projections"; fi
+          echo "Rebuild stage: $STAGE"
+          case "$STAGE" in
+            full)        python refresh_and_run.py ;;            # Stage A+B+C (BIP scrape)
+            projections) python refresh_and_run.py --skip-bip ;; # Stage B+C, reuse BIP
+            sims)        python run_slate.py ;;                  # Stage C only
+          esac
+          # remember which stage ran so the stamp step knows if Stage B rebuilt
+          echo "STAGE=$STAGE" >> "$GITHUB_ENV"
+
+      - name: Stamp the build (freshness signal the app reads)
+        run: |
+          # Mark projections fresh only when Stage B actually ran, so an
+          # interactive Run skips Stage B today; a sims-only run just refreshes
+          # the slate signature.
+          if [ "$STAGE" = "sims" ]; then
+            python scripts/stamp_build.py
           else
-            # Stage C only: re-sim today's slate from existing projections.
-            python run_slate.py
+            python scripts/stamp_build.py --projections
           fi
 
       - name: Publish artifacts to the object store
