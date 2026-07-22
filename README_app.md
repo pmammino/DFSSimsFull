@@ -31,7 +31,8 @@ and tables.
 
 The flow is organized as a **Tabbed Workspace** (design Option C):
 
-- **⚙️ Setup** — upload the slate file; review the day's **Vegas team totals**.
+- **⚙️ Setup** — pick the slate from the **RotoWire feed**; review the day's
+  **Vegas team totals**.
   The loaded totals **drive the sim by default**: each team's offense is scaled
   by its implied total vs a fixed 4.2-run league average, so a high-total team
   gets a higher **mean and a fatter ceiling** (its lineup booms together more on
@@ -40,8 +41,7 @@ The flow is organized as a **Tabbed Workspace** (design Option C):
   low-total team is suppressed — no editing required. Editing is **optional** and
   just replaces a team's total before that same scaling (it rebuilds the sims and
   visibly reshapes that team's player projections). Only a flat/failed feed
-  forces ≥2 manual edits before Run enables; a **🔬 Diagnose the live Vegas feed**
-  expander shows what the feed returns if the totals look flat. Then configure
+  forces ≥2 manual edits before Run enables. Then configure
   contest size / sim runs / candidates / tilts, and Run.
 - **📊 Players** — per-player projected ranges & thresholds. (The app jumps here
   automatically when a run finishes, as a "done" indicator.)
@@ -179,15 +179,27 @@ secret_access_key = "..."
 ```
 
 When configured, the app:
-- **pulls** the latest shared sims/projections/stamp on load and before each Run
-  (downloading only when the shared build is newer than local),
+- **pulls** the latest shared sims/projections/stamp on load (re-syncing once per
+  day per session, so a tab left open across someone else's refresh still picks up
+  the newer build) and again before each Run — downloading only when the shared
+  build is newer than local. The Setup tab's **↻ Refresh** button also pulls on
+  demand, so a second user can grab a freshly published build without running a
+  rebuild themselves,
 - **rebuilds under a lock** — an in-process lock plus an S3 lock object — so two
   users can't trigger the heavy rebuild at once; a user who arrives mid-rebuild
   just gets the shared result,
 - **pushes** the regenerated artifacts back to S3 after a successful refresh.
 
+A **freshness banner** at the top of the app states whether today's sims already
+exist (built by anyone earlier) and are shared — so if a teammate has already run
+the refresh for the day, the next user just makes their selections and runs the
+scoring on those same sims, no rebuild needed.
+
 So one daily refresh is shared by everyone and survives restarts. With no
-`[shared_store]` config the app runs purely on the local filesystem (unchanged).
+`[shared_store]` config the app runs purely on the local filesystem, where all
+sessions on that one instance still share the same on-disk sims (via the build
+stamp + mtime-keyed cache); the S3 store is what extends that sharing across
+restarts and replicas.
 Requires `boto3` (in `requirements.txt`). See `.streamlit/secrets.toml.example`.
 
 ## Download a filled DraftKings upload file (step 3)

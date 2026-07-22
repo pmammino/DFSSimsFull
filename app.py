@@ -23,7 +23,7 @@ finishing-place distribution across all sim runs shown.
 Launch:
     streamlit run app.py
 """
-import csv, datetime, glob, io, json, os, re, subprocess, sys, tempfile, time
+import csv, datetime, glob, io, json, os, subprocess, sys, tempfile, time
 from collections import Counter
 import altair as alt
 import numpy as np
@@ -57,7 +57,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DELIV = os.path.join(HERE, "deliverables")
 ASSETS = os.path.join(HERE, "assets")
 PARAMS_PATH = os.path.join(HERE, "field_params.json")
-REQ_COLS = ["FullName", "Team", "Position", "Salary", "Ownership"]
 SIZE_PRESETS = [150, 1000, 6000, 20000, 50000, 150000]
 
 # Brand palette — navy / red
@@ -300,135 +299,6 @@ def parse_dk_template(text):
             # Keyed with team/pos/salary so same-named players stay distinct.
             dk_ids.add_id(dkid, r[13], r[18], r[14], pos=r[11], salary=r[16])
     return dkid
-
-
-def parse_dk_export(text):
-    """Parse a raw DKSalaries export into (slate_df, id_map) or None.
-    slate_df has FullName, Team, Position, Salary; id_map is name -> DK ID.
-    Lets the user upload ONE DraftKings slate file that drives both the
-    simulation pool and the upload export (no separate template needed)."""
-    rows = list(csv.reader(io.StringIO(text)))
-    hdr = next((i for i, r in enumerate(rows)
-                if len(r) >= 20 and r[11] == "Position"), None)
-    if hdr is None:
-        return None
-    recs, idmap = [], {}
-    for r in rows[hdr + 1:]:
-        if len(r) >= 20 and r[13].strip() and r[14].strip():
-            nm = r[13].strip()
-            try:
-                sal = int(float(r[16])) if r[16].strip() else 0
-            except ValueError:
-                sal = 0
-            recs.append({"FullName": nm, "Team": r[18].strip(),
-                         "Position": r[11].strip(), "Salary": sal})
-            dk_ids.add_id(idmap, nm, r[18], r[14], pos=r[11], salary=sal)
-    if not recs:
-        return None
-    return pd.DataFrame(recs), idmap
-
-
-def _norm_col(c):
-    return re.sub(r"\s+", " ", str(c).strip().lower())
-
-
-# canonical column -> accepted aliases (matched case/space-insensitively)
-COL_ALIASES = {
-    "FullName": ["fullname", "name", "player", "player name", "playername"],
-    "Team": ["team", "teamabbrev", "team abbrev", "tm"],
-    "Position": ["position", "pos", "roster position"],
-    "Salary": ["salary", "sal"],
-    "Ownership": ["ownership", "own", "own%", "owned", "pown", "proj own",
-                  "projected ownership", "projown", "%drafted", "drafted%",
-                  "ownership%", "proj. own", "ros own"],
-}
-# column-name tokens that denote a DraftKings player ID
-ID_NAMES = {"id", "playerid", "player id", "dk id", "dkid", "player_id",
-            "playerid#", "contest id", "contestid", "draftkings id",
-            "draftkingsid", "dkplayerid", "player id #"}
-
-
-def _clean_id(v):
-    v = str(v).strip()
-    if not v or v.lower() == "nan":
-        return None
-    m = re.search(r"(\d{4,})", v)          # handles 12345, 12345.0, "Name (12345)"
-    return m.group(1) if m else None
-
-
-def alias_columns(df):
-    """Rename a slate dataframe's columns to canonical names where a known alias
-    is found (case/whitespace-insensitive). Returns a new dataframe; original
-    columns without a known alias are left as-is."""
-    lut = {_norm_col(c): c for c in df.columns}
-    rename = {}
-    for canon, aliases in COL_ALIASES.items():
-        if canon in df.columns:
-            continue
-        for a in aliases:
-            if a in lut:
-                rename[lut[a]] = canon
-                break
-    return df.rename(columns=rename) if rename else df
-
-
-def ids_from_clean(df):
-    """Pull a name -> DK upload ID map from a clean CSV. Prefers a CONTEST /
-    draftable ID (e.g. PlayerContestID, Contest ID) over a generic player ID,
-    because the DraftKings upload needs the slate-specific contest ID. Falls
-    back to a generic ID column or a DK 'Name + ID' column. Returns
-    (idmap, source_col)."""
-    if "FullName" not in df.columns:
-        return {}, None
-    cols = {_norm_col(c): c for c in df.columns}
-
-    has_team = "Team" in df.columns
-    has_pos = "Position" in df.columns
-    has_sal = "Salary" in df.columns
-
-    def harvest(orig):
-        m = {}
-        for _, r in df.iterrows():
-            cid = _clean_id(r[orig])
-            if cid:
-                # key by team/pos/salary so two same-named players stay distinct
-                dk_ids.add_id(m, r["FullName"], r["Team"] if has_team else "", cid,
-                              pos=r["Position"] if has_pos else "",
-                              salary=r["Salary"] if has_sal else None)
-        return m
-
-    # priority 1 — a contest / draftable ID column (what DK uploads require)
-    for token in ("contest", "draftable"):
-        for key, orig in cols.items():
-            if token in key and "id" in key:
-                m = harvest(orig)
-                if m:
-                    return m, orig
-
-    # priority 2 — an explicit generic ID column (ID, Id, Player ID, DK ID, …)
-    for key, orig in cols.items():
-        nospace = key.replace(" ", "")
-        if key in ID_NAMES or nospace in {k.replace(" ", "") for k in ID_NAMES}:
-            m = harvest(orig)
-            if m:
-                return m, orig
-
-    # priority 3 — a DK-style "Name + ID" column ("Player Name (1234567)")
-    for key, orig in cols.items():
-        if "name" in key and "id" in key:
-            m = harvest(orig)
-            if m:
-                return m, orig
-
-    # priority 4 — any 'id'-token column whose values are mostly long integers
-    for key, orig in cols.items():
-        if "id" in key.split() or key.endswith(" id") or key == "id":
-            vals = [_clean_id(v) for v in df[orig].head(50)]
-            if sum(v is not None for v in vals) >= max(3, 0.5 * len(vals)):
-                m = harvest(orig)
-                if m:
-                    return m, orig
-    return {}, None
 
 
 def _split_cell(cell):
@@ -1197,6 +1067,30 @@ def sims_present():
     return bool(h and p)
 
 
+def sim_build_info():
+    """Summarize the current sim build for the freshness indicator so a second
+    user can see whether today's sims already exist (built by someone else) and
+    can be reused without forcing a rebuild.
+
+    Returns (fresh_today, slate_date, built_when) where `fresh_today` is True
+    when the sims on hand were built from a slate dated today, `slate_date` is
+    that slate's game date (or None), and `built_when` is a human timestamp of
+    the build (or "")."""
+    stamp = read_build_stamp()
+    slate_date = stamp.get("slate_date")
+    built_when = ""
+    ts = stamp.get("ts")
+    if ts:
+        try:
+            # zero-padded format — portable across Linux and Windows
+            built_when = datetime.datetime.fromtimestamp(
+                float(ts)).strftime("%b %d, %H:%M")
+        except Exception:
+            built_when = ""
+    fresh_today = bool(slate_date and slate_date == datetime.date.today().isoformat())
+    return fresh_today, slate_date, built_when
+
+
 def load_stored_slate():
     p = os.path.join(HERE, "data", "slate.json")
     if os.path.exists(p):
@@ -1295,53 +1189,6 @@ def parse_team_totals_csv(raw_text, valid_teams=None):
 TOTALS_OVERRIDE_PATH = os.path.join(HERE, "data", "team_totals_override.json")
 SLATE_PLAYERS_PATH = os.path.join(HERE, "data", "slate_players.json")
 SLATE_WINDOW_PATH = os.path.join(HERE, "data", "slate_window.json")
-
-
-def run_vegas_diagnostic(date=None):
-    """Live probe of the FantasyLabs Vegas feed → human-readable report lines.
-    Runs on the host machine (needs egress to www.fantasylabs.com)."""
-    import urllib.request
-    import slate_config as C
-    date = date or datetime.date.today().isoformat()
-    url = C.FEED_VEGAS_TMPL.format(date=date)
-    out = [f"URL: {url}"]
-    ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-          "Chrome/124.0 Safari/537.36")
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": ua})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            status = getattr(r, "status", r.getcode())
-            ctype = r.headers.get("Content-Type")
-            body = r.read().decode("utf-8", "replace")
-        out.append(f"HTTP {status} | {ctype} | {len(body)} bytes")
-        out.append(f"body head: {body[:240]}")
-    except Exception as e:
-        out.append(f"FETCH FAILED: {type(e).__name__}: {e}")
-        return "\n".join(out)
-    try:
-        data = json.loads(body)
-        rows = data if isinstance(data, list) else (
-            data.get("Events") or data.get("data") or data.get("events") or [])
-        out.append(f"JSON: {type(data).__name__}, {len(rows)} event rows")
-        if rows:
-            out.append(f"first-event keys: {sorted(rows[0].keys())}")
-    except Exception as e:
-        out.append(f"NOT JSON ({e}) — may need auth/cookies or returns HTML")
-        return "\n".join(out)
-    try:
-        parsed = slate_ingest.fetch_vegas(date)
-        out.append(f"fetch_vegas parsed {len(parsed)} teams; "
-                   f"sample: {dict(list(parsed.items())[:6])}")
-        slate = load_stored_slate() or {}
-        teams = [g[s] for g in slate.get("games", {}).values()
-                 for s in ("away", "home")]
-        miss = [t for t in teams if C.canonical_team(t) not in parsed]
-        if teams:
-            out.append(f"slate team-matches: {len(teams)-len(miss)}/{len(teams)} "
-                       f"matched; unmatched→default: {miss}")
-    except Exception as e:
-        out.append(f"parse/match step failed: {type(e).__name__}: {e}")
-    return "\n".join(out)
 
 
 def _tail(text, n=15):
@@ -1789,14 +1636,19 @@ st.caption(
     "size, the number of sim runs, and how many candidate lineups to develop."
 )
 
-# ---- shared store: pull the latest shared sims/projections once per session ----
-if shared_store.enabled() and not st.session_state.get("_shared_pulled"):
+# ---- shared store: pull the latest shared sims/projections. Re-sync once per
+# day per session (not just once ever) so a session left open across another
+# user's refresh still picks up the newer shared build. pull() is cheap when the
+# local build is already current — it only reads the small build stamp and
+# downloads nothing unless the remote build is newer. ----
+_today_iso = datetime.date.today().isoformat()
+if shared_store.enabled() and st.session_state.get("_shared_pulled") != _today_iso:
     try:
         with st.spinner("Syncing shared sims from the team store…"):
             shared_store.pull()
     except Exception as e:
         st.caption(f"(shared-store sync skipped: {type(e).__name__})")
-    st.session_state["_shared_pulled"] = True
+    st.session_state["_shared_pulled"] = _today_iso
 
 # ---- sim universe (from deliverables/) ----
 hpath, ppath = find_sims()
@@ -1824,6 +1676,32 @@ c1.metric("Hitters simmed", n_hit)
 c2.metric("Pitchers simmed", n_pit)
 c3.metric("Sims available", f"{n_sim:,}")
 
+# ---- freshness / sharing indicator ---------------------------------------- #
+# Sims live on disk and (when a shared store is configured) in the team store,
+# so everyone using the app runs the SAME set. This line tells a user whether
+# today's sims already exist — built by them or by anyone else earlier — so a
+# second user can just make their selections and run rather than rebuilding.
+_fresh, _sl_date, _built_when = sim_build_info()
+_shared_note = (" These sims are shared with everyone using the app."
+                if shared_store.enabled() else
+                " These sims are shared across everyone on this app.")
+if _fresh:
+    st.success(
+        f"✅ Today's sims are current — built for the {_sl_date} slate"
+        + (f" at {_built_when}" if _built_when else "") + "."
+        + _shared_note
+        + " If someone already refreshed today, just make your selections and run.")
+elif _sl_date:
+    st.info(
+        f"↻ The sims on hand are from the {_sl_date} slate"
+        + (f" (built {_built_when})" if _built_when else "")
+        + ". Running a simulation rebuilds them for today's slate and publishes "
+        "the result for everyone." + _shared_note)
+else:
+    st.info(
+        "↻ No dated build recorded yet — the first run today builds today's sims "
+        "and shares them with everyone using the app." + _shared_note)
+
 
 tabs = st.tabs(["⚙️  Setup", "📊  Players", "🏆  Results", "⬇️  Export"])
 
@@ -1833,155 +1711,66 @@ with tabs[0]:
     dk_df = None
     csv_ok = False
     id_map = {}
-    id_col = None
 
-    source = st.radio(
-        "How do you want to load players?",
-        ["Pick a slate (RotoWire feed)", "Upload your own file"],
-        horizontal=True, label_visibility="collapsed", key="slate_source")
-
-    if source == "Pick a slate (RotoWire feed)":
-        top = st.columns([6, 1])
-        if top[1].button("↻ Refresh", help="Re-fetch today's slates"):
-            _load_slate_catalog.clear()
-        catalog = None
-        try:
-            with st.spinner("Loading today's DraftKings slates…"):
-                catalog = _load_slate_catalog()
-        except Exception as e:
-            st.error(f"Couldn't load the slate feed: {e}. Switch to "
-                     "“Upload your own file” to proceed.")
-        if catalog and catalog["slates"]:
-            slates = catalog["slates"]
-            labels = {s["slate_id"]: s["label"] for s in slates}
-            sid = top[0].selectbox(
-                "Slate", [s["slate_id"] for s in slates],
-                format_func=lambda i: labels.get(i, i), key="slate_pick")
-            slate = next(s for s in slates if s["slate_id"] == sid)
-            dk_df, id_map = dk_slate_feed.to_dk_df(slate)
-            st.session_state["_slate_fmt"] = slate.get("format", "classic")
-            # the slate's time window pins which games are actually on the slate —
-            # essential on a double-header day, where the player list carries both
-            # games (see slate_ingest.filter_slate_by_window)
-            st.session_state["_slate_window"] = (
-                {"start": slate.get("start"), "end": slate.get("end")}
-                if slate.get("start") and slate.get("end") else None)
-            unowned = slate["n_players"] - slate["n_owned"]
-            games_lbl = ("1 game (Showdown)" if slate.get("format") == "showdown"
-                         else f"{slate['n_games']} games")
-            st.caption(
-                f"Slate **{sid}** ({catalog.get('date', '')}) — "
-                f"{games_lbl}, {slate['n_players']} players, "
-                f"{slate['n_owned']} with feed ownership"
-                + (f" ({unowned} defaulted to 0%)." if unowned else "."))
-        elif catalog is not None:
-            st.warning("No slates are available from the feed right now — "
-                       "switch to “Upload your own file”.")
-    else:
-        st.caption(
-            "Upload either a **DraftKings salaries export** (the `DKSalaries.csv` with "
-            "the player table — it already carries salary, position, team **and player "
-            "IDs**, so it powers both the simulation and the upload export), or a "
-            "**clean CSV** with columns " + ", ".join(f"`{c}`" for c in REQ_COLS) +
-            " (add an `ID` column to enable the DK upload without a separate template). "
-            "Ownership is the projected draft % (0–100).")
-        st.session_state["_slate_fmt"] = "classic"   # uploads run the classic path
-        st.session_state["_slate_window"] = None      # CSV uploads carry no window
-        upload = st.file_uploader("Slate file", type=["csv"], label_visibility="collapsed")
-        if upload is not None:
+    top = st.columns([6, 1])
+    if top[1].button("↻ Refresh",
+                     help="Re-fetch today's slates and pull the latest shared sims"):
+        _load_slate_catalog.clear()
+        # also pick up a newer shared build another user may have published since
+        # this session loaded — pull() downloads only if the remote build is newer
+        if shared_store.enabled():
             try:
-                raw = upload.getvalue().decode("latin-1", "replace")
-                export = parse_dk_export(raw)
-                if export is not None:
-                    # raw DKSalaries export: has salary/pos/team/ID but no ownership
-                    base_df, id_map = export
-                    st.info(f"Detected a DraftKings salaries export — "
-                            f"{len(base_df)} players, {dk_ids.count_ids(id_map)} IDs captured for the "
-                            "upload export. Now add ownership for these players.")
-                    own_up = st.file_uploader(
-                        "Ownership CSV (columns: FullName, Ownership)", type=["csv"],
-                        key="ownership_for_export")
-                    if own_up is None:
-                        st.warning("Upload an ownership CSV to continue.")
-                    else:
-                        own = pd.read_csv(own_up, encoding="latin-1")
-                        own.columns = [c.strip() for c in own.columns]
-                        if "FullName" not in own.columns or "Ownership" not in own.columns:
-                            st.error("Ownership CSV needs `FullName` and `Ownership` columns.")
-                        else:
-                            omap = {normname(r.FullName): float(r.Ownership)
-                                    for r in own.itertuples()
-                                    if str(r.Ownership).strip() not in ("", "nan")}
-                            base_df["Ownership"] = base_df["FullName"].map(
-                                lambda n: omap.get(normname(n)))
-                            dk_df = base_df.dropna(subset=["Ownership"]).copy()
-                else:
-                    # clean CSV — accept DK/own column-name variants via aliasing
-                    raw_df = pd.read_csv(io.StringIO(raw))
-                    raw_df.columns = [str(c).strip() for c in raw_df.columns]
-                    dk_df = alias_columns(raw_df)
-                    id_map, id_col = ids_from_clean(dk_df)
-                    missing = [c for c in REQ_COLS if c not in dk_df.columns]
-                    if "Ownership" in missing and len([m for m in missing if m != "Ownership"]) == 0:
-                        # everything but ownership is present (e.g. a DK salaries export)
-                        st.info("This looks like a salaries/slate file without ownership. "
-                                "Add ownership for these players below.")
-                        own_up = st.file_uploader(
-                            "Ownership CSV (columns: FullName, Ownership)", type=["csv"],
-                            key="ownership_for_clean")
-                        if own_up is None:
-                            st.warning("Upload an ownership CSV to continue.")
-                            dk_df = None
-                        else:
-                            own = alias_columns(pd.read_csv(own_up, encoding="latin-1"))
-                            own.columns = [str(c).strip() for c in own.columns]
-                            own = alias_columns(own)
-                            if "FullName" not in own.columns or "Ownership" not in own.columns:
-                                st.error("Ownership CSV needs `FullName` and `Ownership` columns.")
-                                dk_df = None
-                            else:
-                                omap = {normname(r.FullName): float(r.Ownership)
-                                        for r in own.itertuples()
-                                        if str(r.Ownership).strip() not in ("", "nan")}
-                                dk_df["Ownership"] = dk_df["FullName"].map(
-                                    lambda n: omap.get(normname(n)))
-                                dk_df = dk_df.dropna(subset=["Ownership"]).copy()
-                    elif missing:
-                        st.error("CSV is missing required column(s): " + ", ".join(missing)
-                                 + f". Columns found: {', '.join(map(str, raw_df.columns))}")
-                        dk_df = None
-            except Exception as e:
-                st.error(f"Could not read slate file: {e}")
+                with st.spinner("Checking for a newer shared build…"):
+                    shared_store.pull()
+            except Exception:
+                pass
+        # force the daily page-load sync + sim cache to re-evaluate on rerun
+        st.session_state.pop("_shared_pulled", None)
+        st.rerun()
+    catalog = None
+    try:
+        with st.spinner("Loading today's DraftKings slates…"):
+            catalog = _load_slate_catalog()
+    except Exception as e:
+        st.error(f"Couldn't load the slate feed: {e}. Try refreshing in a moment.")
+    if catalog and catalog["slates"]:
+        slates = catalog["slates"]
+        labels = {s["slate_id"]: s["label"] for s in slates}
+        sid = top[0].selectbox(
+            "Slate", [s["slate_id"] for s in slates],
+            format_func=lambda i: labels.get(i, i), key="slate_pick")
+        slate = next(s for s in slates if s["slate_id"] == sid)
+        dk_df, id_map = dk_slate_feed.to_dk_df(slate)
+        st.session_state["_slate_fmt"] = slate.get("format", "classic")
+        # the slate's time window pins which games are actually on the slate —
+        # essential on a double-header day, where the player list carries both
+        # games (see slate_ingest.filter_slate_by_window)
+        st.session_state["_slate_window"] = (
+            {"start": slate.get("start"), "end": slate.get("end")}
+            if slate.get("start") and slate.get("end") else None)
+        unowned = slate["n_players"] - slate["n_owned"]
+        games_lbl = ("1 game (Showdown)" if slate.get("format") == "showdown"
+                     else f"{slate['n_games']} games")
+        st.caption(
+            f"Slate **{sid}** ({catalog.get('date', '')}) — "
+            f"{games_lbl}, {slate['n_players']} players, "
+            f"{slate['n_owned']} with feed ownership"
+            + (f" ({unowned} defaulted to 0%)." if unowned else "."))
+    elif catalog is not None:
+        st.warning("No slates are available from the feed right now — "
+                   "try refreshing in a moment.")
 
     if dk_df is not None:
         simset = set(score)
         covered = int(dk_df["FullName"].map(lambda n: normname(n) in simset).sum())
         csv_ok = covered > 0
-        cc1, cc2, cc3 = st.columns(3)
-        cc1.metric("Players in slate", len(dk_df))
-        cc2.metric("Matched to sims", covered)
-        cc3.metric("DK IDs available", dk_ids.count_ids(id_map) if id_map else 0)
         if covered == 0:
             st.error("None of the players in this slate matched the sim "
                      "universe — check names/teams. Nothing to simulate.")
-        else:
-            st.dataframe(dk_df.head(15), width="stretch")
-            if id_map:
-                if source.startswith("Pick"):
-                    st.caption("✓ Player IDs from the RotoWire feed "
-                               "(DraftKingsDraftableID) — the DK upload export "
-                               "will use them automatically.")
-                else:
-                    src = f"column **{id_col}**" if id_col else "the slate file"
-                    st.caption(f"✓ Player IDs detected (from {src}) — "
-                               "the DK upload export will use them automatically.")
-            else:
-                st.caption("No player IDs detected in this file. Columns found: "
-                           f"`{', '.join(map(str, dk_df.columns))}`. To enable "
-                           "the one-file DK export, include a player-ID column "
-                           "(named e.g. `ID`, `Player ID`, `DK ID`, or a DK "
-                           "`Name + ID` column); otherwise you can supply a "
-                           "DKSalaries template at export time.")
+        elif id_map:
+            st.caption("✓ Player IDs from the RotoWire feed "
+                       "(DraftKingsDraftableID) — the DK upload export "
+                       "will use them automatically.")
 
     # --------------------------------------------------------------------------- #
     # Team totals (Vegas) — shown + editable. The loaded Vegas totals DRIVE the
@@ -2007,8 +1796,7 @@ with tabs[0]:
             feed_flat = True
             st.warning(f"⚠️ The live Vegas feed looks unavailable — every team "
                        f"defaulted to **{vals[0]:.1f}** runs, so Vegas can't drive "
-                       "the sim. Edit at least 2 totals manually (or use the "
-                       "diagnostic below) before running.")
+                       "the sim. Edit at least 2 totals manually before running.")
         else:
             st.caption("Today's Vegas implied run totals **drive the sim by "
                        "default** — each team's offense is scaled by its total vs a "
@@ -2017,14 +1805,6 @@ with tabs[0]:
                        "faces). Editing is **optional**: any change replaces that "
                        "team's total before the same scaling, rebuilds the sims, and "
                        "reshapes its player projections.")
-
-        with st.expander("🔬 Diagnose the live Vegas feed"):
-            st.caption("Probes www.fantasylabs.com live (from this host) and "
-                       "shows the status, JSON shape, and whether the totals "
-                       "match the slate. Use it to see why totals look flat.")
-            if st.button("Run Vegas feed diagnostic", key="vdiag"):
-                with st.spinner("Probing the Vegas feed…"):
-                    st.code(run_vegas_diagnostic(), language="text")
 
         # --- Upload team totals to pre-fill the overrides ------------------- #
         # A CSV of teams + implied totals seeds the editor below; matching teams
@@ -2272,7 +2052,7 @@ with tabs[0]:
         # ---- hard-gate on every decision ----
         errs = []
         if not csv_ok:
-            errs.append("Upload a valid slate file that matches the sim universe (step 1).")
+            errs.append("Pick a slate that matches the sim universe (step 1).")
         if contest_size is None:
             errs.append("Choose a contest size.")
         if sim_runs is None:
@@ -2686,7 +2466,7 @@ with tabs[1]:
 sim = st.session_state.get("sim")
 with tabs[2]:
     if sim is None:
-        st.info("On the **Setup** tab, upload your slate file and make all three "
+        st.info("On the **Setup** tab, pick your slate and make all three "
                 "selections, then press **Run simulation**.")
     elif sim.get("format") == "showdown":
         render_showdown_results(sim)
