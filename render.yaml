@@ -1,0 +1,33 @@
+# Render blueprint for the DFS worker (the FastAPI service in service/).
+# Use it one of two ways:
+#   • Dashboard: New → Web Service → pick this repo (steps in DEPLOYMENT.md), or
+#   • Blueprint: New → Blueprint → pick this repo; Render reads this file.
+# Secrets (sync:false) are entered in the Render dashboard, never committed.
+services:
+  - type: web
+    name: dfs-worker
+    runtime: docker
+    dockerfilePath: ./service/Dockerfile
+    dockerContext: .            # build from the repo root so it can import the modules
+    plan: free                  # free spins down when idle (cold start re-pulls from R2);
+                                # bump to "starter" to keep it warm + more RAM
+    healthCheckPath: /health    # Render only routes traffic once this returns 200
+    autoDeploy: true            # redeploy on push to the connected branch
+    envVars:
+      # Render injects PORT automatically; the Dockerfile CMD already binds it.
+      - key: SHARED_STORE_BUCKET
+        sync: false
+      - key: SHARED_STORE_ENDPOINT
+        sync: false
+      - key: SHARED_STORE_PREFIX
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_REGION
+        sync: false
+      - key: WORKER_API_KEY
+        sync: false
+      - key: CORS_ALLOW_ORIGINS
+        sync: false

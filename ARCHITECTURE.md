@@ -164,17 +164,13 @@ Heavy rebuilds go through the async job (`jobs.start_refresh`).
 can run the pipeline, seed it: set the `SHARED_STORE_*` / `AWS_*` env vars and
 run `python scripts/push_artifacts.py`.
 
-**2. Worker (Fly.io).** `fly.toml` builds `service/Dockerfile`.
-```
-fly launch --no-deploy            # create the app (edit the name in fly.toml)
-fly secrets set SHARED_STORE_BUCKET=… SHARED_STORE_ENDPOINT=… \
-    AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… \
-    WORKER_API_KEY=<random> CORS_ALLOW_ORIGINS=https://<your-vercel-app>
-fly deploy
-```
-The worker pulls the latest artifacts from R2 on startup and on each refresh.
-One machine stays warm so the sim arrays stay resident (fast `/run`). Render or
-Railway work equally well — any host that runs the Dockerfile.
+**2. Worker (Render — see `DEPLOYMENT.md` for the click-by-click).** Render
+deploys `service/Dockerfile` from the repo root (a `render.yaml` blueprint is
+included); set the `SHARED_STORE_*` / `AWS_*` / `WORKER_API_KEY` /
+`CORS_ALLOW_ORIGINS` env vars in its dashboard. The worker pulls the latest
+artifacts from R2 on startup and on each refresh; a warm instance keeps the sim
+arrays resident (fast `/run`). Fly.io (`fly.toml` included) and Railway work
+equally well — any host that runs the Dockerfile.
 
 **3. Web (Vercel).** Import the repo, set **Root Directory = `web/`**, and set
 env vars `WORKER_API_URL=https://<worker-host>` and `WORKER_API_KEY=<same

@@ -4,15 +4,19 @@ A step-by-step to get the migrated app running in production. Three things get
 stood up, in this order:
 
 1. **Object store** (Cloudflare R2) — holds the sim artifacts.
-2. **Worker** (Fly.io) — the Python API that reads those artifacts and runs sims.
+2. **Worker** (Render) — the Python API that reads those artifacts and runs sims.
 3. **Web app** (Vercel) — the UI, pointed at the worker.
 
 You'll also wire an optional **daily refresh** (GitHub Actions). Budget ~30–45
 minutes the first time. Everything below uses the free/low tiers.
 
 > Prerequisites: a machine that can already run the pipeline today (the repo as
-> you use it now), plus the `fly` CLI and a Vercel + Cloudflare account. Install
-> the Fly CLI from https://fly.io/docs/hurry/ .
+> you use it now), plus a **Render**, **Vercel**, and **Cloudflare** account.
+> No CLI needed — Render and Vercel are configured entirely in the browser.
+>
+> Render deploys straight from GitHub, so make sure this branch is pushed (it
+> is) — you'll point Render at it, or merge to `main` first and deploy from
+> there.
 
 ---
 
@@ -61,34 +65,43 @@ the build stamp, the slate JSON). This is the data the worker will serve.
 
 ---
 
-## Step 3 — Deploy the worker (Fly.io)
+## Step 3 — Deploy the worker (Render)
 
-From the repo root (`fly.toml` is already here):
+All in the browser at https://render.com (sign in with GitHub so it can see the
+repo). The repo already contains `service/Dockerfile` and `render.yaml`.
 
-```bash
-fly auth login
-fly launch --no-deploy          # creates the app; keep the generated name or
-                                # edit `app = "…"` in fly.toml to something unique
+1. **New → Web Service** → connect this GitHub repo → pick the branch
+   (`claude/streamlit-vercel-migration-sn9ely`, or `main` after you merge).
+2. On the settings screen:
+   - **Language / Runtime**: **Docker**.
+   - **Dockerfile Path**: `./service/Dockerfile`
+   - **Docker Build Context Directory**: `.` (the repo root — the image imports
+     the repo's modules).
+   - **Instance Type**: **Free** to start. (Free spins down after ~15 min idle;
+     the next request cold-starts and re-pulls artifacts from R2 — fine for
+     testing. Choose **Starter** to keep it warm and get more RAM.)
+   - **Health Check Path**: `/health`
+3. **Environment** → add these variables (values from Steps 1–2; generate the
+   key with any random-string tool, e.g. `openssl rand -hex 24`):
+   | Key | Value |
+   |---|---|
+   | `SHARED_STORE_BUCKET` | `dfs-sims` |
+   | `SHARED_STORE_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` |
+   | `AWS_ACCESS_KEY_ID` | … |
+   | `AWS_SECRET_ACCESS_KEY` | … |
+   | `AWS_REGION` | `auto` |
+   | `WORKER_API_KEY` | a random string — **save it, Vercel needs the same one** |
+   | `CORS_ALLOW_ORIGINS` | `*` for now (tighten in Step 4.5) |
+   You don't set `PORT` — Render injects it and the Dockerfile already binds it.
+4. **Create Web Service**. Render builds the image and deploys.
+5. Note the URL Render gives you, e.g. `https://dfs-worker.onrender.com`.
+   Check it: `curl https://dfs-worker.onrender.com/health` → `{"status":"ok",…}`.
+   (`/health` is intentionally open; every other route needs the key.)
 
-# give the worker its secrets (never commit these):
-fly secrets set \
-  SHARED_STORE_BUCKET=dfs-sims \
-  SHARED_STORE_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com \
-  AWS_ACCESS_KEY_ID=… \
-  AWS_SECRET_ACCESS_KEY=… \
-  WORKER_API_KEY=$(openssl rand -hex 24) \
-  CORS_ALLOW_ORIGINS=https://<your-vercel-app>.vercel.app
+> Prefer one-click? **New → Blueprint → pick this repo** instead — Render reads
+> `render.yaml`, creates the service, and prompts you for the same secrets.
 
-fly deploy
-```
-
-- Save the **`WORKER_API_KEY`** you generated — Vercel needs the same value.
-- Note the worker URL Fly prints, e.g. `https://dfs-worker.fly.dev`.
-- Check it: `curl https://dfs-worker.fly.dev/health` → `{"status":"ok",…}`.
-  (`/health` is intentionally open; every other route needs the key.)
-
-> Don't yet know your Vercel URL for `CORS_ALLOW_ORIGINS`? Set it to `*` for
-> now and tighten it after Step 4 with another `fly secrets set`.
+> (Fly.io works too and `fly.toml` is included, but this runbook uses Render.)
 
 ---
 
@@ -100,13 +113,14 @@ fly deploy
 3. **Environment Variables** (Project → Settings → Environment Variables):
    | Key | Value |
    |---|---|
-   | `WORKER_API_URL` | `https://dfs-worker.fly.dev` (your worker URL) |
+   | `WORKER_API_URL` | `https://dfs-worker.onrender.com` (your worker URL) |
    | `WORKER_API_KEY` | the same random string from Step 3 |
 4. **Deploy**. Open the resulting URL. The header badge should read
    `10,000 sims · N players` — that means the browser → Vercel → worker → R2
    path is live.
-5. If you set CORS to `*` earlier, now run
-   `fly secrets set CORS_ALLOW_ORIGINS=https://<your-app>.vercel.app`.
+5. If you set CORS to `*` earlier, now lock it down: in Render → your service →
+   **Environment**, set `CORS_ALLOW_ORIGINS=https://<your-app>.vercel.app` and
+   save (Render redeploys automatically).
 
 Smoke test in the browser: **Setup → Load bundled sample slate → Run
 simulation** → **Results** shows metrics; **Export** builds a portfolio.
@@ -137,7 +151,7 @@ on-demand rebuild job for the same effect between scheduled runs.
 ```
  daily cron / Rebuild button ─▶ pipeline ─▶ R2 (artifacts + build stamp)
                                               │
- browser ─▶ Vercel (web/, /api proxy + key) ─▶ Fly worker ─▶ reads R2, runs sims
+ browser ─▶ Vercel (web/, /api proxy + key) ─▶ Render worker ─▶ reads R2, runs sims
 ```
 
 - The browser never sees the worker URL or key — the Vercel `/api` routes add
@@ -149,8 +163,8 @@ on-demand rebuild job for the same effect between scheduled runs.
 
 | Symptom | Fix |
 |---|---|
-| Header badge says "worker offline" | `curl <worker>/health`; check `WORKER_API_URL` in Vercel and that Fly app is running (`fly status`). |
-| Everything 401s | `WORKER_API_KEY` differs between Fly and Vercel — set them to the same value. |
+| Header badge says "worker offline" | `curl <worker>/health`; check `WORKER_API_URL` in Vercel and the Render service status (Render dashboard → your service → Events/Logs). On the free plan the first request after idle is a slow cold start — retry after ~30–60s. |
+| Everything 401s | `WORKER_API_KEY` differs between Render and Vercel — set them to the same value. |
 | `/status` → 503 "artifacts not found" | Step 2 didn't publish; re-run `scripts/push_artifacts.py` and check the bucket. |
 | CORS error in browser console | `CORS_ALLOW_ORIGINS` on the worker must include your exact Vercel origin (or `*`). |
 | Slate catalog / team-totals empty | Those hit live RotoWire/Vegas feeds; use the sample slate or an uploaded CSV if a feed is down. |
