@@ -147,7 +147,7 @@ today and skips Stage B, leaving only the fast Stage C re-sim when lineups move.
   reusing the committed BIP inputs), stamps the build with
   `scripts/stamp_build.py --projections`, and pushes to the object store. The
   **full** dispatch mode additionally runs the Statcast BIP scrape (Stage A);
-  run it occasionally to refresh the underlying data. See DEPLOYMENT.md, Step 5.
+  run it occasionally to refresh the underlying data. See DEPLOYMENT.md, Step 4.
 - **Single server (no object store):** schedule the same two commands with cron
   so they write to the app's `deliverables/`+`out/` directly:
 

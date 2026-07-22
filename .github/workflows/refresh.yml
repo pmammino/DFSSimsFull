@@ -1,9 +1,9 @@
 # Scheduled "morning refresh": rebuild the projections (Stage B — the SLOW step)
 # and the correlated sims (Stage C) every morning and publish the artifacts to
-# the object store (R2/S3). The Streamlit app / worker pull the new build on
-# their next request (gated on the build stamp), so an interactive Run finds
-# today's projections already built and NEVER has to run Stage B itself — the
-# only thing a Run may still do is a fast Stage C re-sim if lineups have moved.
+# the object store (R2/S3). The Streamlit app pulls the new build on load / next
+# Run (gated on the build stamp), so an interactive Run finds today's projections
+# already built and NEVER has to run Stage B itself — the only thing a Run may
+# still do is a fast Stage C re-sim if lineups have moved.
 #
 # Required repo secrets (Settings → Secrets and variables → Actions):
 #   SHARED_STORE_BUCKET, SHARED_STORE_ENDPOINT (for R2), SHARED_STORE_PREFIX (opt),

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """stamp_build.py — write out/.build_stamp.json after a CI / scheduled rebuild.
 
-The Streamlit app (and the worker) read this stamp to decide, on each Run,
-whether the heavy pipeline stages are already fresh for today and can be
-skipped. The freshness check keys on:
+The Streamlit app reads this stamp to decide, on each Run, whether the heavy
+pipeline stages are already fresh for today and can be skipped. The freshness
+check keys on:
 
-  * ``projections_date`` — when the per-PA projections (Stage B, the SLOW step)
-    were last built. If this is today, an interactive Run skips Stage B.
+  * ``projections_date`` / ``projections_ts`` — the date and time the per-PA
+    projections (Stage B, the SLOW step) were last built. If the date is today,
+    an interactive Run skips Stage B; the timestamp is shown in the app's build
+    banner ("baselines last built …").
   * ``slate_date`` / ``slate_sig`` — the slate the correlated sims (Stage C)
     were built from, so a Run only re-sims when the live lineups/matchups/totals
     actually moved.
@@ -89,9 +91,11 @@ def main():
 
     if args.projections:
         # both the "built" date and the once-a-day "attempt" guard, so the app
-        # neither rebuilds nor re-attempts projections again today
+        # neither rebuilds nor re-attempts projections again today; the ts is a
+        # precise "baselines last built" marker for the app's build banner
         data["projections_date"] = today
         data["proj_attempt_date"] = today
+        data["projections_ts"] = time.time()
 
     slate = _load_slate()
     if slate:
