@@ -1,0 +1,23 @@
+# Local dev: run the worker API against the artifacts already in the repo
+# (deliverables/ + out/ are bind-mounted, so no R2 needed to try the Players
+# tab). Set SHARED_STORE_* in a .env file to test the R2 path instead.
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: service/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+      # Uncomment / set in .env to enable the R2/S3 shared store:
+      - SHARED_STORE_BUCKET=${SHARED_STORE_BUCKET:-}
+      - SHARED_STORE_PREFIX=${SHARED_STORE_PREFIX:-}
+      - SHARED_STORE_ENDPOINT=${SHARED_STORE_ENDPOINT:-}
+      - AWS_REGION=${AWS_REGION:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+    volumes:
+      # Dev convenience: serve the local artifacts without pushing to R2 first.
+      - ./deliverables:/app/deliverables
+      - ./out:/app/out
