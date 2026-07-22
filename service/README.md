@@ -30,11 +30,16 @@ Open http://localhost:8000/docs for the interactive OpenAPI UI.
 | `GET /status` | ✅ | sim inventory + build stamp |
 | `GET /players?kind=&search=` | ✅ | `app.py:cached_player_table` |
 | `GET /players/{name}/distribution?nbins=` | ✅ | `app.py:player_score_chart` data |
-| `GET /roadmap` | ✅ | lists planned endpoints |
-| `POST /run` | ⏳ 501 | field build + `run_contest_dist` |
-| `GET /slate/catalog`, `/slate/team-totals` | ⏳ | `dk_slate_feed`, `slate_team_totals` |
+| `GET /params/defaults` | ✅ | RunParams defaults + size presets |
+| `POST /run` | ✅ | field build + `run_contest_dist` (→ run_id) |
+| `GET /run/{id}` | ✅ | re-fetch a run summary |
+| `GET /run/{id}/candidate/{c}/place-distribution` | ✅ | `place_distribution_chart` data |
+| `GET /slate/catalog` | ✅ | `dk_slate_feed.build_catalog` (live, cached) |
+| `POST /slate/upload` | ✅ | parse DK export / clean CSV |
+| `GET /slate/sample` | ✅ | bundled sample slate (offline dev) |
+| `GET /slate/team-totals` | ✅ | Vegas totals (live) |
+| `POST /refresh` (+ `/refresh/status/{id}`) | ✅ | Stage C (or full) as a background job |
 | `POST /export/dk-upload`, `/export/ev` | ⏳ | `build_dk_upload`, `build_dk_upload_ev` |
-| `POST /refresh` (+ `/refresh/status`) | ⏳ | Stage B/C as a job |
 
 ## Artifacts
 

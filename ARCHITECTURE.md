@@ -137,11 +137,24 @@ npm run dev                        # http://localhost:3000
 | Worker: `/status`, `/players`, `/players/{name}/distribution` | ✅ done |
 | Web: theme, 4-tab shell, **Players tab** end-to-end | ✅ done |
 | Object-store layer + `scripts/push_artifacts.py` | ✅ done |
-| Setup tab + `POST /run` / `POST /refresh` | ⏳ Phase 1 |
-| Results tab (filters, dist chart, marks) | ⏳ Phase 2 |
+| Worker: `POST /run`, `/run/{id}`, place-distribution, `/slate/*` | ✅ Phase 1 |
+| Worker: async `POST /refresh` + `/refresh/status/{id}` job | ✅ Phase 1 |
+| Web: **Setup tab** (slate/upload, params, Run) + **Results** render | ✅ Phase 1 |
+| Results tab: filters, marks, richer detail | ⏳ Phase 2 |
 | Export tab (DK upload, EV, exposure caps) | ⏳ Phase 3 |
 | Showdown branch | ⏳ Phase 4 |
 | Worker deploy hardening (Docker, cron, auth) | ⏳ Phase 5 |
+
+### Run path (Phase 1) at a glance
+
+`Setup` picks a slate (bundled sample / uploaded CSV / RotoWire catalog) →
+`POST /run` with the tuning params → the worker builds candidates + an
+ownership-weighted field, scores both against the correlated sims, runs the
+contest (`runner.run_slate`, a faithful port of app.py's classic Run handler),
+caches the full payload by `run_id` (`runstore`), and returns a JSON summary →
+`Results` renders metrics, the candidate table, and each lineup's
+finishing-place distribution (`GET /run/{id}/candidate/{c}/place-distribution`).
+Heavy rebuilds go through the async job (`jobs.start_refresh`).
 
 ## Backend improvements this unlocks
 

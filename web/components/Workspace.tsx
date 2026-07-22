@@ -3,7 +3,10 @@
 import { useState } from "react";
 import Header from "./Header";
 import PlayersTab from "./PlayersTab";
+import SetupTab from "./SetupTab";
+import ResultsTab from "./ResultsTab";
 import Placeholder from "./Placeholder";
+import type { RunSummary } from "@/lib/api";
 
 const TABS = [
   { key: "setup", label: "⚙ Setup" },
@@ -15,7 +18,13 @@ const TABS = [
 type TabKey = (typeof TABS)[number]["key"];
 
 export default function Workspace() {
-  const [active, setActive] = useState<TabKey>("players");
+  const [active, setActive] = useState<TabKey>("setup");
+  const [run, setRun] = useState<RunSummary | null>(null);
+
+  function handleRun(summary: RunSummary) {
+    setRun(summary);
+    setActive("results"); // jump to Results as the "done" signal (like the app)
+  }
 
   return (
     <>
@@ -34,6 +43,11 @@ export default function Workspace() {
               }
             >
               {t.label}
+              {t.key === "results" && run && (
+                <span className="ml-1 rounded-full bg-rw-red px-1.5 text-[10px] text-white">
+                  •
+                </span>
+              )}
               {on && (
                 <span className="absolute inset-x-0 -bottom-px h-[3px] bg-rw-red" />
               )}
@@ -42,32 +56,16 @@ export default function Workspace() {
         })}
       </nav>
 
-      {active === "players" && <PlayersTab />}
-      {active === "setup" && (
-        <Placeholder
-          title="Setup"
-          phase="Phase 1"
-          items={[
-            "Slate picker (RotoWire feed) + CSV upload",
-            "Ownership upload fallback",
-            "Team-totals (Vegas) editor",
-            "Field-model params form (contest size, sims, 11 tuning sliders)",
-            "Run → POST /run · Refresh → async POST /refresh with progress",
-          ]}
-        />
-      )}
-      {active === "results" && (
-        <Placeholder
-          title="Results"
-          phase="Phase 2"
-          items={[
-            "Win% / Top10% / Top100% metrics from the last run",
-            "Client-side filters (players, stack shape, team, ownership, salary)",
-            "Marked-lineup selection",
-            "Finishing-position distribution chart",
-          ]}
-        />
-      )}
+      {/* Keep tabs mounted so state (Setup form, last run) survives switching. */}
+      <div className={active === "setup" ? "" : "hidden"}>
+        <SetupTab onRun={handleRun} />
+      </div>
+      <div className={active === "players" ? "" : "hidden"}>
+        <PlayersTab />
+      </div>
+      <div className={active === "results" ? "" : "hidden"}>
+        <ResultsTab run={run} />
+      </div>
       {active === "export" && (
         <Placeholder
           title="Export"

@@ -1,40 +1,39 @@
 """main.py — the DFS worker FastAPI application.
 
-Scaffold scope (Phase 0): the read path is wired end-to-end —
-``GET /players`` and ``GET /players/{name}/distribution`` serve the warm sim
-artifacts. The heavy pipeline job endpoints (``POST /refresh`` …) and the
-remaining light endpoints (``/run``, ``/export/*``, showdown) are stubbed with
-501 responses and a documented contract, to be filled in during the phased
-port (see ARCHITECTURE.md).
+Read path (Phase 0): /status, /players, /players/{name}/distribution.
+Run path (Phase 1): /slate/catalog, /slate/upload, /slate/sample,
+/slate/team-totals, POST /run (+ /run/{id} and place-distribution), and the
+async refresh job (POST /refresh, GET /refresh/status/{id}).
 
-Run locally:
-    cd <repo root>
+Run locally (from repo root):
     pip install -r service/requirements.txt
     uvicorn service.main:app --reload --port 8000
 """
+import json
 import os
 import sys
+import time
 
-# Make the repo root importable so the service can reuse the existing numeric
+# Make the repo root importable so the service reuses the existing numeric
 # modules (stage_d, mlb_lineup_builder, portfolio, field_simulator, …).
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from fastapi import FastAPI, HTTPException, Query  # noqa: E402
+import pandas as pd  # noqa: E402
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from service import sims  # noqa: E402
+from service import sims, runstore, jobs  # noqa: E402
+from service.runner import RunParams, run_slate, RunError  # noqa: E402
 
 app = FastAPI(
     title="DFS Sims Worker",
-    version="0.1.0",
+    version="0.2.0",
     description="Warm numeric API + heavy-pipeline jobs for the DFS simulator.",
 )
 
-# CORS: the Next.js app calls this either directly (dev) or via its server-side
-# proxy (prod). Allowed origins are env-driven; default permissive for local dev.
 _origins = os.environ.get("CORS_ALLOW_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -43,78 +42,53 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_PARAMS_PATH = os.path.join(_REPO_ROOT, "field_params.json")
+_DATA_DIR = os.path.join(_REPO_ROOT, "data")
+SIZE_PRESETS = [150, 1000, 6000, 20000, 50000, 150000]
 
-# --------------------------------------------------------------------------- #
-# Response models (become the source of truth for generated TS types)
-# --------------------------------------------------------------------------- #
-class HealthOut(BaseModel):
-    status: str
-    remote_store: bool
-
-
-class StatusOut(BaseModel):
-    n_sim: int | None = None
-    hitters: int = 0
-    pitchers: int = 0
-    remote_store: bool = False
-    build_stamp: dict = {}
+# Small in-process caches (catalog is a live fetch; uploads keep id_map server-side).
+_catalog_cache = {"ts": 0.0, "data": None}
+_uploaded_slates: dict[str, dict] = {}
+_upload_seq = 0
 
 
-class PlayerRow(BaseModel):
-    Player: str
-    Type: str
-    Proj: float
-    # Threshold columns carry spaces/symbols; expose the raw dict downstream.
-
-    model_config = {"extra": "allow"}
-
-
-class DistBin(BaseModel):
-    x: float
-    count: int
-
-
-class PlayerDistOut(BaseModel):
-    player: str
-    n_sim: int
-    mean: float
-    p10: float
-    median: float
-    p90: float
-    bins: list[DistBin]
+def _stack_params():
+    with open(_PARAMS_PATH) as fh:
+        return json.load(fh)
 
 
 # --------------------------------------------------------------------------- #
 # Health / status
 # --------------------------------------------------------------------------- #
-@app.get("/health", response_model=HealthOut)
+@app.get("/health")
 def health():
-    """Liveness probe — does not touch the (possibly large) sim arrays."""
     from service import artifacts
     return {"status": "ok", "remote_store": artifacts.remote_enabled()}
 
 
-@app.get("/status", response_model=StatusOut)
+@app.get("/status")
 def status():
-    """Freshness + inventory of the currently loaded artifacts."""
     try:
         return sims.status()
     except FileNotFoundError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
 
+@app.get("/params/defaults")
+def params_defaults():
+    """The Setup-tab form defaults + presets, so the UI stays in sync with the
+    worker's RunParams (single source of truth)."""
+    from dataclasses import asdict
+    return {"defaults": asdict(RunParams()), "size_presets": SIZE_PRESETS,
+            "sim_runs_max": (sims.status() or {}).get("n_sim")}
+
+
 # --------------------------------------------------------------------------- #
-# Players (wired end-to-end)
+# Players (Phase 0)
 # --------------------------------------------------------------------------- #
 @app.get("/players")
-def players(
-    kind: str = Query("all", pattern="^(all|hitters|pitchers)$"),
-    search: str = Query("", description="case-insensitive substring filter"),
-):
-    """Per-player DK-point threshold table from the current sims.
-
-    Mirrors app.py:cached_player_table. ``kind`` and ``search`` apply the same
-    filters the Streamlit Players tab exposes (Show selector + search box)."""
+def players(kind: str = Query("all", pattern="^(all|hitters|pitchers)$"),
+            search: str = Query("")):
     try:
         rows = sims.player_table()
     except FileNotFoundError as e:
@@ -129,10 +103,8 @@ def players(
     return {"count": len(rows), "players": rows}
 
 
-@app.get("/players/{name}/distribution", response_model=PlayerDistOut)
+@app.get("/players/{name}/distribution")
 def player_distribution(name: str, nbins: int = Query(40, ge=5, le=200)):
-    """Histogram + summary of one player's simulated DK scores
-    (data behind app.py:player_score_chart)."""
     try:
         dist = sims.player_distribution(name, nbins=nbins)
     except FileNotFoundError as e:
@@ -143,34 +115,243 @@ def player_distribution(name: str, nbins: int = Query(40, ge=5, le=200)):
 
 
 # --------------------------------------------------------------------------- #
-# Stubs — contracts for the phased port (return 501 until implemented)
+# Slate sources
 # --------------------------------------------------------------------------- #
-_STUBS = {
-    "POST /run": "Field build + run_contest_dist -> run summary + run_id (Phase 1/2).",
-    "GET /slate/catalog": "dk_slate_feed.build_catalog (Phase 1).",
-    "GET /slate/team-totals": "slate_team_totals (Phase 1).",
-    "POST /results/filter": "Filtered candidate results by run_id (Phase 2).",
-    "POST /export/dk-upload": "build_dk_upload / rows_to_upload_csv (Phase 3).",
-    "POST /export/ev": "build_dk_upload_ev + portfolio EV (Phase 3).",
-    "POST /refresh": "Launch Stage B/C as a background job; poll /refresh/status (Phase 5).",
-}
+@app.get("/slate/catalog")
+def slate_catalog(refresh: bool = False):
+    """Today's pickable DraftKings slates from the RotoWire feeds (live, cached
+    10 min). Mirrors app.py:_load_slate_catalog."""
+    now = time.time()
+    if not refresh and _catalog_cache["data"] and now - _catalog_cache["ts"] < 600:
+        return _catalog_cache["data"]
+    try:
+        import dk_slate_feed
+        cat = dk_slate_feed.build_catalog()
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not fetch the live slate feed ({type(e).__name__}: {e}). "
+                   "Upload a slate CSV or use /slate/sample instead.")
+    # Trim player lists from the catalog listing (kept server-side for /run).
+    slates = [{k: v for k, v in s.items() if k != "players"} for s in cat["slates"]]
+    for s, full in zip(slates, cat["slates"]):
+        _uploaded_slates[f"cat:{full['slate_id']}"] = {
+            "kind": "catalog", "slate": full}
+    out = {"date": cat["date"], "slates": slates}
+    _catalog_cache.update(ts=now, data=out)
+    return out
 
 
-@app.get("/roadmap")
-def roadmap():
-    """The not-yet-implemented endpoints and what they will wrap."""
-    return {"implemented": ["/health", "/status", "/players",
-                            "/players/{name}/distribution"],
-            "planned": _STUBS}
+@app.post("/slate/upload")
+async def slate_upload(file: UploadFile = File(...)):
+    """Parse an uploaded slate CSV (raw DK export or clean CSV) and stash it
+    server-side (keeping the id_map for later export). Returns a slate_token to
+    pass to /run, plus a preview."""
+    global _upload_seq
+    raw = (await file.read()).decode("utf-8", "replace")
+    from service import slate_parse
+    try:
+        df, idmap = slate_parse.parse_slate_csv(raw)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    _upload_seq += 1
+    token = f"up_{_upload_seq:04d}"
+    _uploaded_slates[token] = {"kind": "upload", "df": df, "id_map": idmap}
+    return {"slate_token": token, "n_players": int(len(df)),
+            "teams": int(df["Team"].nunique()),
+            "has_ownership": bool(df["Ownership"].abs().sum() > 0),
+            "preview": df.head(10).to_dict("records")}
+
+
+@app.get("/slate/sample")
+def slate_sample():
+    """A bundled sample slate (sample_ownership.csv) so the UI is runnable
+    without the live feed — handy for dev/demo. Returns a slate_token."""
+    global _upload_seq
+    path = os.path.join(_REPO_ROOT, "sample_ownership.csv")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="sample_ownership.csv not found")
+    df = pd.read_csv(path)
+    _upload_seq += 1
+    token = f"sample_{_upload_seq:04d}"
+    _uploaded_slates[token] = {"kind": "sample", "df": df, "id_map": {}}
+    return {"slate_token": token, "n_players": int(len(df)),
+            "teams": int(df["Team"].nunique()), "has_ownership": True,
+            "preview": df.head(10).to_dict("records")}
+
+
+@app.get("/slate/team-totals")
+def slate_team_totals():
+    """Vegas-implied team totals for today's slate (live). Mirrors
+    app.py:slate_team_totals; used by the Setup team-totals editor."""
+    try:
+        import slate_ingest
+        slate = slate_ingest.build_slate(write=False)
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not fetch the live slate/Vegas feed ({type(e).__name__}).")
+    totals = {}
+    for g in slate.get("games", []):
+        for side in ("home", "away"):
+            t = g.get(side)
+            if t and t.get("team"):
+                totals[t["team"]] = t.get("team_total")
+    return {"date": slate.get("date"), "totals": totals}
+
+
+def _resolve_slate(body: "RunIn"):
+    """Turn a run request's slate reference into (dk_df, id_map)."""
+    if body.slate_token:
+        rec = _uploaded_slates.get(body.slate_token)
+        if not rec:
+            raise HTTPException(status_code=404,
+                                detail="Unknown slate_token (expired or wrong id).")
+        if rec["kind"] == "catalog":
+            import dk_slate_feed
+            return dk_slate_feed.to_dk_df(rec["slate"])
+        return rec["df"], rec.get("id_map", {})
+    if body.slate_id:
+        rec = _uploaded_slates.get(f"cat:{body.slate_id}")
+        if not rec:
+            raise HTTPException(
+                status_code=404,
+                detail="Unknown slate_id — call /slate/catalog first.")
+        import dk_slate_feed
+        return dk_slate_feed.to_dk_df(rec["slate"])
+    if body.players:
+        df = pd.DataFrame([p.model_dump() for p in body.players])
+        return df, {}
+    raise HTTPException(status_code=422,
+                        detail="Provide slate_token, slate_id, or players.")
+
+
+# --------------------------------------------------------------------------- #
+# Run
+# --------------------------------------------------------------------------- #
+class SlatePlayer(BaseModel):
+    FullName: str
+    Team: str
+    Position: str
+    Salary: int = 0
+    Ownership: float = 0.0
 
 
 class RunIn(BaseModel):
-    # Placeholder shape for the Setup-tab params form; fleshed out in Phase 1.
-    contest_size: int = 6000
-    n_sim: int = 10000
-    num_candidates: int = 10000
+    slate_token: str | None = None
+    slate_id: str | None = None
+    players: list[SlatePlayer] | None = None
+    params: dict = {}
 
 
 @app.post("/run")
-def run(_: RunIn):
-    raise HTTPException(status_code=501, detail=_STUBS["POST /run"])
+def run(body: RunIn):
+    """Build candidates + an ownership-weighted field and simulate the contest
+    over the correlated sims. Returns a run summary + run_id; the full payload
+    (arrays) is kept server-side for Results/Export. Port of the classic Run
+    handler in app.py."""
+    try:
+        bundle = sims._load()
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    dk_df, id_map = _resolve_slate(body)
+    if "Ownership" not in dk_df.columns:
+        dk_df["Ownership"] = 0.0
+
+    params = RunParams.from_dict(body.params)
+    log_lines: list[str] = []
+    t0 = time.time()
+    try:
+        summary, payload = run_slate(
+            dk_df,
+            {"H": bundle["H"], "P": bundle["P"],
+             "score": bundle["score"], "n_sim": bundle["n_sim"]},
+            params, _stack_params(), id_map=id_map,
+            log=log_lines.append)
+    except RunError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    run_id = runstore.put(payload)
+    summary["run_id"] = run_id
+    summary["elapsed_s"] = round(time.time() - t0, 2)
+    summary["log"] = log_lines
+    summary["params"] = {**RunParams.from_dict(body.params).__dict__}
+    return summary
+
+
+@app.get("/run/{run_id}")
+def get_run(run_id: str, limit: int = Query(500, ge=1, le=5000)):
+    """Re-fetch a stored run's summary + result rows (for the Results tab)."""
+    from service import runner
+    payload = runstore.get(run_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Run not found (expired).")
+    res = payload["res"]
+    return {
+        "run_id": run_id, "K": payload["K"], "contest_size": payload["contest_size"],
+        "field_n": payload["field_n"], "beta": round(float(payload["beta"]), 3),
+        "n_candidates": len(payload["cands"]),
+        "metrics": runner._headline_metrics(res, payload["K"]),
+        "results": runner._results_rows(res, limit=limit),
+        "columns": list(res.columns),
+    }
+
+
+@app.get("/run/{run_id}/candidate/{candidate}/place-distribution")
+def candidate_place_distribution(run_id: str, candidate: int):
+    """Finishing-place histogram for one candidate (data behind
+    app.py:place_distribution_chart). `candidate` is the 1-based Candidate id."""
+    payload = runstore.get(run_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Run not found (expired).")
+    dist = payload["dist"]
+    # dist arrays are in candidate BUILD order (candidate id 1..N -> index 0..N-1),
+    # not the sorted-results order — mirrors app.py `cand_idx = chosen_cand - 1`.
+    i = int(candidate) - 1
+    if i < 0 or i >= len(dist["mean"]):
+        raise HTTPException(status_code=404, detail="Candidate not in this run.")
+    edges = dist["edges"].astype(float)
+    counts = dist["counts"][i].astype(float)
+    n = int(payload["K"])
+    bins = [
+        {"lo": float(edges[j]), "hi": float(edges[j + 1]),
+         "pct": round(100 * counts[j] / max(1, n), 3), "sims": int(counts[j])}
+        for j in range(len(counts))
+    ]
+    return {
+        "run_id": run_id, "candidate": candidate, "field_n": payload["field_n"],
+        "n_sim": n,
+        "mean_place": float(dist["mean"][i]),
+        "best_place": int(dist["best"][i]), "worst_place": int(dist["worst"][i]),
+        "bins": bins,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Refresh (heavy pipeline as a background job)
+# --------------------------------------------------------------------------- #
+class RefreshIn(BaseModel):
+    team_totals: dict[str, float] | None = None   # TEAM -> implied total override
+    full: bool = False                            # True = Stage B+C (needs full deps)
+
+
+@app.post("/refresh")
+def refresh(body: RefreshIn):
+    """Kick a background rebuild of the correlated sims (Stage C), or the full
+    pipeline (Stage B+C) when `full`. Returns a job_id to poll. Team-total
+    overrides are written for the sim rebuild to consume."""
+    tt_path = None
+    if body.team_totals:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        tt_path = os.path.join(_DATA_DIR, "team_totals_override.json")
+        with open(tt_path, "w") as fh:
+            json.dump(body.team_totals, fh)
+    job_id = jobs.start_refresh(team_totals_path=tt_path, full=body.full)
+    return {"job_id": job_id, "state": "queued", "full": body.full}
+
+
+@app.get("/refresh/status/{job_id}")
+def refresh_status(job_id: str):
+    st = jobs.status(job_id)
+    if not st:
+        raise HTTPException(status_code=404, detail="Unknown job_id.")
+    return st

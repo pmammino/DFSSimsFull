@@ -21,12 +21,22 @@ export async function workerFetch(
   });
 }
 
-// Proxy a worker JSON response straight through, preserving status.
-export async function proxyJson(path: string): Promise<Response> {
+// Forward a request to the worker and return its response verbatim (status +
+// JSON body preserved). Optionally pass method/body/contentType for writes.
+export async function proxy(
+  path: string,
+  opts: { method?: string; body?: BodyInit; contentType?: string } = {},
+): Promise<Response> {
   try {
-    const upstream = await workerFetch(path);
-    const body = await upstream.text();
-    return new Response(body, {
+    const headers: Record<string, string> = {};
+    if (opts.contentType) headers["content-type"] = opts.contentType;
+    const upstream = await workerFetch(path, {
+      method: opts.method ?? "GET",
+      body: opts.body,
+      headers,
+    });
+    const text = await upstream.text();
+    return new Response(text, {
       status: upstream.status,
       headers: { "content-type": "application/json" },
     });
@@ -39,4 +49,9 @@ export async function proxyJson(path: string): Promise<Response> {
       { status: 502, headers: { "content-type": "application/json" } },
     );
   }
+}
+
+// Back-compat alias for GET proxies.
+export function proxyJson(path: string): Promise<Response> {
+  return proxy(path);
 }
