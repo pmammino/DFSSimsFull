@@ -144,7 +144,7 @@ npm run dev                        # http://localhost:3000
 | Web: **Results tab** filters, lineup marking, CSV downloads | ✅ Phase 2 |
 | Worker: `POST /run/{id}/export` (ranked + EV portfolio, caps, exposure) | ✅ Phase 3 |
 | Web: **Export tab** — DK upload, Portfolio EV, exposure/diversity caps | ✅ Phase 3 |
-| Showdown branch | ⏳ Phase 4 |
+| Showdown branch (worker runner + format-aware Results/Export UI) | ✅ Phase 4 |
 | Worker deploy hardening (Docker, cron, auth) | ⏳ Phase 5 |
 
 ### Run path (Phase 1) at a glance

@@ -116,6 +116,8 @@ export interface SlateSummary {
   n_players: number;
   teams: number;
   has_ownership: boolean;
+  format?: string;
+  matchup?: string;
   preview: Record<string, unknown>[];
 }
 
@@ -128,6 +130,8 @@ export interface RunMetrics {
 
 export interface RunSummary {
   run_id: string;
+  format?: string;
+  teams?: string[];
   K: number;
   contest_size: number;
   field_n: number;
@@ -135,13 +139,7 @@ export interface RunSummary {
   beta: number;
   n_candidates: number;
   elapsed_s?: number;
-  pool?: {
-    hitters: number;
-    starters: number;
-    teams: number;
-    matched: number;
-    slate_players: number;
-  };
+  pool?: Record<string, number>;
   metrics: RunMetrics;
   results: Record<string, number | string>[];
   columns: string[];
@@ -172,6 +170,10 @@ export function fetchParamsDefaults(): Promise<ParamsDefaults> {
 
 export function fetchSampleSlate(): Promise<SlateSummary> {
   return getJson<SlateSummary>("/api/slate/sample");
+}
+
+export function fetchShowdownSample(): Promise<SlateSummary> {
+  return getJson<SlateSummary>("/api/slate/sample-showdown");
 }
 
 export async function uploadSlate(file: File): Promise<SlateSummary> {
@@ -224,10 +226,13 @@ export function fetchPlaceDist(
 // ---- Results filtering (Phase 2) ----
 
 export interface RunFacets {
+  format: string;
   pool_players: string[];
-  stacks: string[];
-  teams: string[];
-  sizes: number[];
+  stacks?: string[];
+  teams?: string[];
+  sizes?: number[];
+  captains?: string[];
+  splits?: string[];
   own_sum: { min: number; max: number };
   salary: { min: number; max: number };
   n_candidates: number;
@@ -240,6 +245,8 @@ export interface ResultsFilter {
   stacks?: string[];
   teams?: string[];
   sizes?: number[];
+  captains?: string[];
+  splits?: string[];
   own_min?: number | null;
   own_max?: number | null;
   sal_min?: number | null;
@@ -327,6 +334,7 @@ export interface ExportLineup {
   stack: string;
   salary: number;
   team: string;
+  captain?: string;
   win_pct: number;
   top100_pct: number;
   players: { slot: string; player: string; team: string }[];

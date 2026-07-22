@@ -349,10 +349,19 @@ def _headline_metrics(res: pd.DataFrame, K: int) -> dict:
 _RESULT_COLS = ["Rank", "Candidate", "Stack", "Salary", "PrimaryTeam",
                 "PrimaryStack", "OwnSum", "Win%", "Top10%", "Top100%",
                 "AvgPlace", "BestPlace", "WorstPlace"]
+# Showdown result rows key on Captain / team Split instead of Stack columns.
+_RESULT_COLS_SHOWDOWN = ["Rank", "Candidate", "Captain", "CptTeam", "Split",
+                         "Salary", "OwnSum", "Win%", "Top10%", "Top100%",
+                         "AvgPlace", "BestPlace", "WorstPlace"]
+
+
+def _result_cols_for(res: pd.DataFrame) -> list[str]:
+    base = _RESULT_COLS_SHOWDOWN if "Captain" in res.columns else _RESULT_COLS
+    return [c for c in base if c in res.columns]
 
 
 def _results_rows(res: pd.DataFrame, limit: int = 500) -> list[dict]:
-    cols = [c for c in _RESULT_COLS if c in res.columns]
+    cols = _result_cols_for(res)
     out = res[cols].head(limit)
     return [
         {k: (v.item() if hasattr(v, "item") else v) for k, v in row.items()}
@@ -366,20 +375,27 @@ def _results_rows(res: pd.DataFrame, limit: int = 500) -> list[dict]:
 # Mirrors the mask logic in app.py's Results tab.
 # --------------------------------------------------------------------------- #
 def facets(payload: dict) -> dict:
-    """Filter-control options for a run: player pool, stack shapes, primary
-    teams/sizes, and the ownership/salary ranges."""
+    """Filter-control options for a run: player pool, ownership/salary ranges,
+    and the format-specific dimensions (classic: stack shape / primary team /
+    size; showdown: captain / team split)."""
     res = payload["res"]
-    return {
+    out = {
+        "format": payload.get("format", "classic"),
         "pool_players": payload["pool_players"],
-        "stacks": sorted(res["Stack"].unique().tolist()),
-        "teams": sorted(t for t in res["PrimaryTeam"].unique().tolist() if t),
-        "sizes": sorted(res["PrimaryStack"].unique().tolist(), reverse=True),
         "own_sum": {"min": float(res["OwnSum"].min()),
                     "max": float(res["OwnSum"].max())},
         "salary": {"min": int(res["Salary"].min()),
                    "max": int(res["Salary"].max())},
         "n_candidates": int(len(res)),
     }
+    if payload.get("format") == "showdown":
+        out["captains"] = payload.get("captains") or sorted(res["Captain"].unique().tolist())
+        out["splits"] = sorted(res["Split"].unique().tolist())
+    else:
+        out["stacks"] = sorted(res["Stack"].unique().tolist())
+        out["teams"] = sorted(t for t in res["PrimaryTeam"].unique().tolist() if t)
+        out["sizes"] = sorted(res["PrimaryStack"].unique().tolist(), reverse=True)
+    return out
 
 
 def filter_results(payload: dict, f: dict, limit: int = 1000) -> dict:
@@ -401,12 +417,17 @@ def filter_results(payload: dict, f: dict, limit: int = 1000) -> dict:
     exclude = set(f.get("exclude") or [])
     if exclude:
         mask &= cand.map(lambda c: not (exclude & c2p[int(c)])).to_numpy()
-    if f.get("stacks"):
+    if f.get("stacks") and "Stack" in res.columns:
         mask &= res["Stack"].isin(f["stacks"]).to_numpy()
-    if f.get("teams"):
+    if f.get("teams") and "PrimaryTeam" in res.columns:
         mask &= res["PrimaryTeam"].isin(f["teams"]).to_numpy()
-    if f.get("sizes"):
+    if f.get("sizes") and "PrimaryStack" in res.columns:
         mask &= res["PrimaryStack"].isin(f["sizes"]).to_numpy()
+    # showdown dimensions
+    if f.get("captains") and "Captain" in res.columns:
+        mask &= res["Captain"].isin(f["captains"]).to_numpy()
+    if f.get("splits") and "Split" in res.columns:
+        mask &= res["Split"].isin(f["splits"]).to_numpy()
     if f.get("own_min") is not None:
         mask &= (res["OwnSum"] >= float(f["own_min"])).to_numpy()
     if f.get("own_max") is not None:
@@ -426,4 +447,4 @@ def filter_results(payload: dict, f: dict, limit: int = 1000) -> dict:
     all_ids = [int(x) for x in fres["Candidate"].tolist()]
     return {"total": int(len(fres)), "count": min(len(fres), limit),
             "all_ids": all_ids, "results": _results_rows(fres, limit=limit),
-            "columns": [c for c in _RESULT_COLS if c in res.columns]}
+            "columns": _result_cols_for(res)}

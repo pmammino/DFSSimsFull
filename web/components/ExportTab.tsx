@@ -191,8 +191,16 @@ export default function ExportTab({
             Exposure &amp; diversity caps (100% = no cap)
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
-            <Pct label="Max hitter %" value={form.hitter_cap!} onChange={(v) => set("hitter_cap", v)} />
-            <Pct label="Max pitcher %" value={form.pitcher_cap!} onChange={(v) => set("pitcher_cap", v)} />
+            <Pct
+              label={run.format === "showdown" ? "Max player %" : "Max hitter %"}
+              value={form.hitter_cap!}
+              onChange={(v) => set("hitter_cap", v)}
+            />
+            <Pct
+              label={run.format === "showdown" ? "Max captain %" : "Max pitcher %"}
+              value={form.pitcher_cap!}
+              onChange={(v) => set("pitcher_cap", v)}
+            />
             <Pct label="Max stack-team %" value={form.team_cap!} onChange={(v) => set("team_cap", v)} />
             <Pct label="Max lineup overlap" value={form.max_overlap!} onChange={(v) => set("max_overlap", v)} />
           </div>

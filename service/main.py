@@ -137,7 +137,8 @@ def slate_catalog(refresh: bool = False):
     slates = [{k: v for k, v in s.items() if k != "players"} for s in cat["slates"]]
     for s, full in zip(slates, cat["slates"]):
         _uploaded_slates[f"cat:{full['slate_id']}"] = {
-            "kind": "catalog", "slate": full}
+            "kind": "catalog", "slate": full,
+            "format": full.get("format", "classic")}
     out = {"date": cat["date"], "slates": slates}
     _catalog_cache.update(ts=now, data=out)
     return out
@@ -157,7 +158,8 @@ async def slate_upload(file: UploadFile = File(...)):
         raise HTTPException(status_code=422, detail=str(e))
     _upload_seq += 1
     token = f"up_{_upload_seq:04d}"
-    _uploaded_slates[token] = {"kind": "upload", "df": df, "id_map": idmap}
+    _uploaded_slates[token] = {"kind": "upload", "df": df, "id_map": idmap,
+                               "format": "classic"}
     return {"slate_token": token, "n_players": int(len(df)),
             "teams": int(df["Team"].nunique()),
             "has_ownership": bool(df["Ownership"].abs().sum() > 0),
@@ -175,10 +177,37 @@ def slate_sample():
     df = pd.read_csv(path)
     _upload_seq += 1
     token = f"sample_{_upload_seq:04d}"
-    _uploaded_slates[token] = {"kind": "sample", "df": df, "id_map": {}}
+    _uploaded_slates[token] = {"kind": "sample", "df": df, "id_map": {},
+                               "format": "classic"}
     return {"slate_token": token, "n_players": int(len(df)),
             "teams": int(df["Team"].nunique()), "has_ownership": True,
             "preview": df.head(10).to_dict("records")}
+
+
+@app.get("/slate/sample-showdown")
+def slate_sample_showdown():
+    """A 2-team single-game slice of the sample slate, tagged showdown — so the
+    showdown path is runnable without a live single-game feed."""
+    global _upload_seq
+    path = os.path.join(_REPO_ROOT, "sample_ownership.csv")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="sample_ownership.csv not found")
+    df = pd.read_csv(path)
+    # Pick the two teams with the most simmed players so the pool is ample.
+    bundle = sims._load()
+    simset = set(bundle["score"])
+    from stage_d import norm as _norm
+    df = df[df["FullName"].map(lambda n: _norm(n) in simset)]
+    top2 = df["Team"].value_counts().head(2).index.tolist()
+    sd = df[df["Team"].isin(top2)].reset_index(drop=True)
+    _upload_seq += 1
+    token = f"sd_{_upload_seq:04d}"
+    _uploaded_slates[token] = {"kind": "sample", "df": sd, "id_map": {},
+                               "format": "showdown"}
+    return {"slate_token": token, "n_players": int(len(sd)),
+            "teams": int(sd["Team"].nunique()), "has_ownership": True,
+            "format": "showdown", "matchup": f"{top2[0]} vs {top2[1]}",
+            "preview": sd.head(10).to_dict("records")}
 
 
 @app.get("/slate/team-totals")
@@ -202,16 +231,18 @@ def slate_team_totals():
 
 
 def _resolve_slate(body: "RunIn"):
-    """Turn a run request's slate reference into (dk_df, id_map)."""
+    """Turn a run request's slate reference into (dk_df, id_map, format)."""
     if body.slate_token:
         rec = _uploaded_slates.get(body.slate_token)
         if not rec:
             raise HTTPException(status_code=404,
                                 detail="Unknown slate_token (expired or wrong id).")
+        fmt = rec.get("format", "classic")
         if rec["kind"] == "catalog":
             import dk_slate_feed
-            return dk_slate_feed.to_dk_df(rec["slate"])
-        return rec["df"], rec.get("id_map", {})
+            df, idm = dk_slate_feed.to_dk_df(rec["slate"])
+            return df, idm, fmt
+        return rec["df"], rec.get("id_map", {}), fmt
     if body.slate_id:
         rec = _uploaded_slates.get(f"cat:{body.slate_id}")
         if not rec:
@@ -219,10 +250,11 @@ def _resolve_slate(body: "RunIn"):
                 status_code=404,
                 detail="Unknown slate_id — call /slate/catalog first.")
         import dk_slate_feed
-        return dk_slate_feed.to_dk_df(rec["slate"])
+        df, idm = dk_slate_feed.to_dk_df(rec["slate"])
+        return df, idm, rec.get("format", "classic")
     if body.players:
         df = pd.DataFrame([p.model_dump() for p in body.players])
-        return df, {}
+        return df, {}, (body.format or "classic")
     raise HTTPException(status_code=422,
                         detail="Provide slate_token, slate_id, or players.")
 
@@ -242,6 +274,7 @@ class RunIn(BaseModel):
     slate_token: str | None = None
     slate_id: str | None = None
     players: list[SlatePlayer] | None = None
+    format: str | None = None       # override for inline players ("showdown")
     params: dict = {}
 
 
@@ -255,20 +288,24 @@ def run(body: RunIn):
         bundle = sims._load()
     except FileNotFoundError as e:
         raise HTTPException(status_code=503, detail=str(e))
-    dk_df, id_map = _resolve_slate(body)
+    dk_df, id_map, fmt = _resolve_slate(body)
     if "Ownership" not in dk_df.columns:
         dk_df["Ownership"] = 0.0
 
     params = RunParams.from_dict(body.params)
+    sim_bundle = {"H": bundle["H"], "P": bundle["P"],
+                  "score": bundle["score"], "n_sim": bundle["n_sim"]}
     log_lines: list[str] = []
     t0 = time.time()
     try:
-        summary, payload = run_slate(
-            dk_df,
-            {"H": bundle["H"], "P": bundle["P"],
-             "score": bundle["score"], "n_sim": bundle["n_sim"]},
-            params, _stack_params(), id_map=id_map,
-            log=log_lines.append)
+        if fmt == "showdown":
+            from service import showdown_runner
+            summary, payload = showdown_runner.run_showdown(
+                dk_df, sim_bundle, params, id_map=id_map, log=log_lines.append)
+        else:
+            summary, payload = run_slate(
+                dk_df, sim_bundle, params, _stack_params(), id_map=id_map,
+                log=log_lines.append)
     except RunError as e:
         raise HTTPException(status_code=422, detail=str(e))
     run_id = runstore.put(payload)
@@ -315,6 +352,8 @@ class ResultsFilter(BaseModel):
     stacks: list[str] = []
     teams: list[str] = []
     sizes: list[int] = []
+    captains: list[str] = []          # showdown
+    splits: list[str] = []            # showdown
     own_min: float | None = None
     own_max: float | None = None
     sal_min: float | None = None

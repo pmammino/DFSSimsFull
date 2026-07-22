@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   fetchParamsDefaults,
   fetchSampleSlate,
+  fetchShowdownSample,
   postRun,
   uploadSlate,
   type ParamsDefaults,
@@ -32,7 +33,7 @@ const SLIDERS: {
   { key: "ace_pitcher", label: "Ace-pitcher rate", min: 0, max: 1, step: 0.05 },
 ];
 
-type SlateSource = "sample" | "upload";
+type SlateSource = "sample" | "showdown" | "upload";
 
 export default function SetupTab({
   onRun,
@@ -66,11 +67,11 @@ export default function SetupTab({
     setParams((p) => (p ? { ...p, [k]: v } : p));
   }
 
-  async function loadSample() {
+  async function loadSample(showdown = false) {
     setSlateBusy(true);
     setSlateErr(null);
     try {
-      setSlate(await fetchSampleSlate());
+      setSlate(await (showdown ? fetchShowdownSample() : fetchSampleSlate()));
     } catch (e) {
       setSlateErr((e as Error).message);
     } finally {
@@ -115,29 +116,39 @@ export default function SetupTab({
       <section className="rounded-card border border-rw-line bg-rw-surface p-5">
         <h2 className="mb-3 text-lg">1 · Slate</h2>
         <div className="mb-4 flex gap-1">
-          {(["sample", "upload"] as SlateSource[]).map((s) => (
+          {(
+            [
+              ["sample", "Sample (classic)"],
+              ["showdown", "Sample (showdown)"],
+              ["upload", "Upload CSV"],
+            ] as [SlateSource, string][]
+          ).map(([s, label]) => (
             <button
               key={s}
               onClick={() => setSource(s)}
               className={
-                "rounded-lg border px-3 py-1.5 text-sm capitalize " +
+                "rounded-lg border px-3 py-1.5 text-sm " +
                 (s === source
                   ? "border-rw-red bg-rw-red text-white"
                   : "border-rw-line bg-rw-raised text-rw-mut hover:text-white")
               }
             >
-              {s === "sample" ? "Sample slate" : "Upload CSV"}
+              {label}
             </button>
           ))}
         </div>
 
-        {source === "sample" ? (
+        {source === "sample" || source === "showdown" ? (
           <button
-            onClick={loadSample}
+            onClick={() => loadSample(source === "showdown")}
             disabled={slateBusy}
             className="rounded-lg border border-rw-line bg-rw-raised px-4 py-2 text-sm text-white hover:border-rw-red disabled:opacity-50"
           >
-            {slateBusy ? "Loading…" : "Load bundled sample slate"}
+            {slateBusy
+              ? "Loading…"
+              : source === "showdown"
+                ? "Load bundled showdown slate"
+                : "Load bundled sample slate"}
           </button>
         ) : (
           <div>
@@ -174,6 +185,8 @@ export default function SetupTab({
           <div className="mt-3 font-mono text-[11px] uppercase tracking-wider text-rw-turf">
             ✓ {slate.n_players} players · {slate.teams} teams ·{" "}
             {slate.has_ownership ? "ownership present" : "no ownership (uniform field)"}
+            {slate.format === "showdown" &&
+              ` · showdown${slate.matchup ? ` (${slate.matchup})` : ""}`}
           </div>
         )}
       </section>

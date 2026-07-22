@@ -33,10 +33,22 @@ interface Col {
   num?: boolean;
   money?: boolean;
 }
-const COLS: Col[] = [
+const CLASSIC_COLS: Col[] = [
   { key: "Rank", label: "#" },
   { key: "Stack", label: "Stack" },
   { key: "PrimaryTeam", label: "Team" },
+  { key: "Salary", label: "Salary", money: true },
+  { key: "OwnSum", label: "Own∑", num: true },
+  { key: "Win%", label: "Win%", num: true },
+  { key: "Top10%", label: "Top10%", num: true },
+  { key: "Top100%", label: "Top100%", num: true },
+  { key: "AvgPlace", label: "Avg", num: true },
+];
+const SHOWDOWN_COLS: Col[] = [
+  { key: "Rank", label: "#" },
+  { key: "Captain", label: "Captain" },
+  { key: "CptTeam", label: "CPT tm" },
+  { key: "Split", label: "Split" },
   { key: "Salary", label: "Salary", money: true },
   { key: "OwnSum", label: "Own∑", num: true },
   { key: "Win%", label: "Win%", num: true },
@@ -136,6 +148,8 @@ export default function ResultsTab({
     if (filter.stacks?.length) n++;
     if (filter.teams?.length) n++;
     if (filter.sizes?.length) n++;
+    if (filter.captains?.length) n++;
+    if (filter.splits?.length) n++;
     if (filter.own_min != null || filter.own_max != null) n++;
     if (filter.sal_min != null || filter.sal_max != null) n++;
     if (filter.min_win || filter.min_top10 || filter.min_top100) n++;
@@ -153,6 +167,8 @@ export default function ResultsTab({
   }
 
   const m = run.metrics;
+  const showdown = run.format === "showdown";
+  const COLS = showdown ? SHOWDOWN_COLS : CLASSIC_COLS;
 
   return (
     <div className="space-y-5">
@@ -225,24 +241,43 @@ export default function ResultsTab({
               </div>
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <MultiSelect
-                label="Stack shape"
-                options={facets.stacks}
-                selected={filter.stacks ?? []}
-                onChange={(v) => set("stacks", v)}
-              />
-              <MultiSelect
-                label="Primary stack team"
-                options={facets.teams}
-                selected={filter.teams ?? []}
-                onChange={(v) => set("teams", v)}
-              />
-              <MultiSelect
-                label="Primary stack size"
-                options={facets.sizes.map(String)}
-                selected={(filter.sizes ?? []).map(String)}
-                onChange={(v) => set("sizes", v.map(Number))}
-              />
+              {showdown ? (
+                <>
+                  <MultiSelect
+                    label="Captain is"
+                    options={facets.captains ?? []}
+                    selected={filter.captains ?? []}
+                    onChange={(v) => set("captains", v)}
+                  />
+                  <MultiSelect
+                    label="Team split"
+                    options={facets.splits ?? []}
+                    selected={filter.splits ?? []}
+                    onChange={(v) => set("splits", v)}
+                  />
+                </>
+              ) : (
+                <>
+                  <MultiSelect
+                    label="Stack shape"
+                    options={facets.stacks ?? []}
+                    selected={filter.stacks ?? []}
+                    onChange={(v) => set("stacks", v)}
+                  />
+                  <MultiSelect
+                    label="Primary stack team"
+                    options={facets.teams ?? []}
+                    selected={filter.teams ?? []}
+                    onChange={(v) => set("teams", v)}
+                  />
+                  <MultiSelect
+                    label="Primary stack size"
+                    options={(facets.sizes ?? []).map(String)}
+                    selected={(filter.sizes ?? []).map(String)}
+                    onChange={(v) => set("sizes", v.map(Number))}
+                  />
+                </>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
               <Range

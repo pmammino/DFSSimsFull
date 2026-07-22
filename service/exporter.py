@@ -19,6 +19,9 @@ import dk_ids
 import portfolio_ev as pev
 from portfolio import select_portfolio, select_portfolio_ev, detect_value_groups
 from stage_d import COLS, HITC, SLOT, norm as normname
+import showdown_builder as sb
+from showdown_portfolio import (select_showdown_portfolio,
+                                select_showdown_portfolio_ev)
 
 
 # --------------------------------------------------------------------------- #
@@ -115,6 +118,8 @@ def _caps(o):
 
 def run_export(payload: dict, o: dict) -> dict:
     """Select and package the portfolio export. `o` is the request dict."""
+    if payload.get("format") == "showdown":
+        return _run_export_showdown(payload, o)
     res = payload["res"]
     cands = payload["cands"]
     dkid = payload.get("id_map") or {}
@@ -297,3 +302,123 @@ def _return_hist(W, W_naive, nbins=40):
         "bins": [{"x": round(float(x), 2), "ev": int(a), "ranked": int(b)}
                  for x, a, b in zip(centers, cw, cn)],
     }
+
+
+# --------------------------------------------------------------------------- #
+# Showdown export (1 CPT + 5 UTIL). Uses showdown_portfolio; the captain scores
+# 1.5x in the EV per-sim rebuild. The DK upload CSV needs a DKSalaries showdown
+# template (captain ids aren't in the slate feed), so it is deferred — the
+# portfolio + exposure are still selected and shown.
+# --------------------------------------------------------------------------- #
+def _sd_cand_scores(short, payload):
+    score_pool = payload["score_pool"]; cands = payload["cands"]
+    K = int(payload["K"]); M = len(short)
+    mat = np.zeros((K, M), np.float32)
+    for j, cid in enumerate(short["Candidate"].to_numpy()):
+        lu = cands[int(cid) - 1]
+        for i, pl in enumerate(lu["players"]):
+            arr = score_pool.get(normname(pl.Name))
+            if arr is not None:
+                mat[:, j] += (sb.CPT_MULT * arr) if i == 0 else arr
+    return mat
+
+
+def _sd_caps(o):
+    # UI reuses hitter_cap/pitcher_cap -> player_cap/captain_cap for showdown.
+    return dict(
+        player_cap=float(o.get("hitter_cap", 1.0)),
+        captain_cap=float(o.get("pitcher_cap", 1.0)),
+        team_cap=float(o.get("team_cap", 1.0)),
+        max_overlap=float(o.get("max_overlap", 1.0)),
+        group_cap=float(o.get("group_cap", 1.0)),
+    )
+
+
+def _run_export_showdown(payload: dict, o: dict) -> dict:
+    res = payload["res"]
+    cands = payload["cands"]
+    ids = o.get("candidate_ids")
+    src = res
+    if ids:
+        keep = set(int(x) for x in ids)
+        src = res[res["Candidate"].isin(keep)].reset_index(drop=True)
+    if len(src) == 0:
+        return {"error": "No candidates to export (empty selection)."}
+
+    n_select = int(o.get("n_select", 20))
+    caps = _sd_caps(o)
+    mode = o.get("mode", "ranked")
+    extra: dict = {}
+
+    if mode == "ev":
+        dist = payload.get("dist") or {}
+        if "field_cut_scores" not in dist or not payload.get("score_pool"):
+            return {"error": "This run predates the payout ladder; use ranked export."}
+        shortlist = int(o.get("shortlist", min(1000, len(src))))
+        short = src.head(shortlist).reset_index(drop=True)
+        cand_scores = _sd_cand_scores(short, payload)
+        prize = pev.make_payout_curve(
+            int(payload["field_n"]), float(o.get("entry_fee", 20.0)),
+            top_heaviness=float(o.get("top_heaviness", 0.9)),
+            pct_paid=float(o.get("pct_paid", 0.20)), rake=float(o.get("rake", 0.15)))
+        pay = pev.candidate_payout_matrix(
+            cand_scores, dist["field_cut_scores"], dist["cut_places"], prize)
+        chosen, info, W = select_showdown_portfolio_ev(
+            short, n_select, pay, pev.utility(o.get("risk", "Balanced")),
+            eval_sims=int(o.get("eval_sims", 4000)), **caps)
+        naive = W_naive_showdown(short, pay, info["chosen"])
+        extra = {"prize_summary": pev.payout_curve_summary(prize, float(o.get("entry_fee", 20.0))),
+                 "cost": info["chosen"] * float(o.get("entry_fee", 20.0)),
+                 "shortlist": len(short), "field_n": int(payload["field_n"]),
+                 "risk": o.get("risk", "Balanced")}
+        W_out = W; W_naive_out = naive
+    else:
+        sort_by = o.get("sort_by", "Top100 Rate")
+        keymap = _SORT_KEYMAP.get(sort_by, _SORT_KEYMAP["Top100 Rate"])
+        chosen, info = select_showdown_portfolio(src, n_select, keymap, **caps)
+        W_out = W_naive_out = None
+
+    lineups = [{
+        "rank": int(row["Rank"]) if "Rank" in row else None,
+        "candidate": int(row["Candidate"]),
+        "stack": row.get("Split", ""), "salary": int(row["Salary"]),
+        "team": row.get("CptTeam", ""), "captain": row.get("Captain", ""),
+        "win_pct": float(row["Win%"]), "top100_pct": float(row["Top100%"]),
+        "players": [{"slot": sb.SD_COLS[i], "player": _split_cell(row[c])[0],
+                     "team": _split_cell(row[c])[1]}
+                    for i, c in enumerate(sb.SD_COLS)],
+    } for row in chosen]
+
+    # exposure by player + by captain team
+    from collections import Counter as _C
+    pexpo, texpo = _C(), _C()
+    for row in chosen:
+        for c in sb.SD_COLS:
+            pexpo[_split_cell(row[c])[0]] += 1
+        if row.get("CptTeam"):
+            texpo[row["CptTeam"]] += 1
+    meta = payload["players_meta"]
+    n_lu = max(1, len(chosen))
+    player_expo = [{"player": nm, "pos": meta.get(nm, {}).get("pos", ""),
+                    "team": meta.get(nm, {}).get("team", ""), "lineups": int(ct),
+                    "exposure": round(ct / n_lu, 4)} for nm, ct in pexpo.most_common()]
+    team_expo = [{"team": t, "lineups": int(ct), "exposure": round(ct / n_lu, 4)}
+                 for t, ct in texpo.most_common()]
+
+    result = {
+        "mode": mode, "format": "showdown", "has_ids": False,
+        "n_chosen": len(chosen), "n_written": len(chosen), "csv": None,
+        "lineups": lineups, "player_exposure": player_expo, "team_exposure": team_expo,
+        "note": "Showdown upload CSV needs a DraftKings showdown DKSalaries "
+                "template (captain ids aren't in the slate feed) — the portfolio "
+                "and exposure are selected and shown here.",
+    }
+    if mode == "ev":
+        result["ev"] = {**extra, "returns": _return_hist(W_out, W_naive_out)}
+    return result
+
+
+def W_naive_showdown(short, pay, n):
+    """Rank-selected baseline returns of the same size (all eligible)."""
+    pos = list(range(min(int(n), pay.shape[1])))
+    return pay[:, pos].sum(axis=1) if pos else np.zeros(pay.shape[0], np.float64)
