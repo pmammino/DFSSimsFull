@@ -291,3 +291,103 @@ export function candidatesCsvUrl(runId: string): string {
 export function fieldCsvUrl(runId: string): string {
   return `/api/run/${encodeURIComponent(runId)}/field.csv`;
 }
+
+// ---- Export (Phase 3) ----
+
+export interface ExportOptions {
+  risk_postures: string[];
+  risk_help: Record<string, string>;
+  sort_by: string[];
+}
+
+export interface ExportRequest {
+  mode: "ranked" | "ev";
+  n_select: number;
+  candidate_ids?: number[] | null;
+  sort_by?: string;
+  hitter_cap?: number;
+  pitcher_cap?: number;
+  team_cap?: number;
+  pair_cap?: number;
+  core_cap?: number;
+  max_overlap?: number;
+  group_cap?: number;
+  use_value_groups?: boolean;
+  entry_fee?: number;
+  pct_paid?: number;
+  rake?: number;
+  top_heaviness?: number;
+  risk?: string;
+  shortlist?: number;
+}
+
+export interface ExportLineup {
+  rank: number | null;
+  candidate: number;
+  stack: string;
+  salary: number;
+  team: string;
+  win_pct: number;
+  top100_pct: number;
+  players: { slot: string; player: string; team: string }[];
+}
+
+export interface ExposureRow {
+  player?: string;
+  team: string;
+  pos?: string;
+  lineups: number;
+  exposure: number;
+}
+
+export interface ReturnHist {
+  mean_ev: number;
+  mean_ranked: number;
+  bins: { x: number; ev: number; ranked: number }[];
+}
+
+export interface ExportResult {
+  run_id: string;
+  mode: string;
+  has_ids: boolean;
+  n_chosen: number;
+  n_written: number;
+  csv: string | null;
+  lineups: ExportLineup[];
+  player_exposure: ExposureRow[];
+  team_exposure: ExposureRow[];
+  note: string | null;
+  ev?: {
+    cost: number;
+    shortlist: number;
+    field_n: number;
+    risk: string;
+    prize_summary: Record<string, number>;
+    returns: ReturnHist | null;
+  };
+}
+
+export function fetchExportOptions(): Promise<ExportOptions> {
+  return getJson<ExportOptions>("/api/export/options");
+}
+
+export async function postExport(
+  runId: string,
+  body: ExportRequest,
+): Promise<ExportResult> {
+  const res = await fetch(`/api/run/${encodeURIComponent(runId)}/export`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      detail = (await res.json()).detail ?? detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<ExportResult>;
+}

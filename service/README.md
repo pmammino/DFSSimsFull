@@ -41,8 +41,9 @@ Open http://localhost:8000/docs for the interactive OpenAPI UI.
 | `POST /slate/upload` | ✅ | parse DK export / clean CSV |
 | `GET /slate/sample` | ✅ | bundled sample slate (offline dev) |
 | `GET /slate/team-totals` | ✅ | Vegas totals (live) |
+| `GET /export/options` | ✅ | risk postures + ranked objectives |
+| `POST /run/{id}/export` | ✅ | `build_dk_upload` / `build_dk_upload_ev` + exposure |
 | `POST /refresh` (+ `/refresh/status/{id}`) | ✅ | Stage C (or full) as a background job |
-| `POST /export/dk-upload`, `/export/ev` | ⏳ | `build_dk_upload`, `build_dk_upload_ev` |
 
 ## Artifacts
 

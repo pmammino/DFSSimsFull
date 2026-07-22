@@ -25,6 +25,7 @@ from fastapi import FastAPI, HTTPException, Query, UploadFile, File  # noqa: E40
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
+import portfolio_ev as pev  # noqa: E402
 from service import sims, runstore, jobs  # noqa: E402
 from service.runner import RunParams, run_slate, RunError  # noqa: E402
 
@@ -391,6 +392,62 @@ def candidate_place_distribution(run_id: str, candidate: int):
         "best_place": int(dist["best"][i]), "worst_place": int(dist["worst"][i]),
         "bins": bins,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Export (Phase 3) — portfolio selection + DK upload + exposure
+# --------------------------------------------------------------------------- #
+class ExportIn(BaseModel):
+    mode: str = "ranked"                  # "ranked" | "ev"
+    n_select: int = 20
+    candidate_ids: list[int] | None = None  # restrict to marked lineups
+    sort_by: str = "Top100 Rate"          # ranked objective
+    # global exposure / diversity caps (1.0 = no cap)
+    hitter_cap: float = 1.0
+    pitcher_cap: float = 1.0
+    team_cap: float = 1.0
+    pair_cap: float = 1.0
+    core_cap: float = 1.0
+    max_overlap: float = 1.0
+    group_cap: float = 1.0
+    use_value_groups: bool = False
+    group_salary_tol: int = 300
+    group_proj_tol: float = 1.5
+    # per-entity caps/mins (name/team -> fraction)
+    player_caps: dict[str, float] | None = None
+    team_caps: dict[str, float] | None = None
+    player_mins: dict[str, float] | None = None
+    team_mins: dict[str, float] | None = None
+    # EV params
+    entry_fee: float = 20.0
+    pct_paid: float = 0.20
+    rake: float = 0.15
+    top_heaviness: float = 0.9
+    risk: str = "Balanced"
+    shortlist: int = 1000
+
+
+@app.get("/export/options")
+def export_options():
+    """Risk postures + ranked objectives for the Export UI."""
+    return {"risk_postures": list(pev.UTILITIES.keys()),
+            "risk_help": {k: v[1] for k, v in pev.UTILITIES.items()},
+            "sort_by": ["Win%", "Top10 Rate", "Top100 Rate"]}
+
+
+@app.post("/run/{run_id}/export")
+def run_export(run_id: str, body: ExportIn):
+    """Select a portfolio and package the DK upload + exposure (+ EV returns).
+    Port of app.py's build_dk_upload / build_dk_upload_ev + exposure breakdown."""
+    from service import exporter
+    payload = runstore.get(run_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Run not found (expired).")
+    out = exporter.run_export(payload, body.model_dump())
+    if "error" in out:
+        raise HTTPException(status_code=422, detail=out["error"])
+    out["run_id"] = run_id
+    return out
 
 
 # --------------------------------------------------------------------------- #

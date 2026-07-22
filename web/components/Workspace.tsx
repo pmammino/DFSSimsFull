@@ -5,7 +5,7 @@ import Header from "./Header";
 import PlayersTab from "./PlayersTab";
 import SetupTab from "./SetupTab";
 import ResultsTab from "./ResultsTab";
-import Placeholder from "./Placeholder";
+import ExportTab from "./ExportTab";
 import type { RunSummary } from "@/lib/api";
 
 const TABS = [
@@ -70,18 +70,9 @@ export default function Workspace() {
       <div className={active === "results" ? "" : "hidden"}>
         <ResultsTab run={run} marked={marked} onMarked={setMarked} />
       </div>
-      {active === "export" && (
-        <Placeholder
-          title="Export"
-          phase="Phase 3"
-          items={[
-            "DraftKings upload CSV (ranked + Portfolio EV)",
-            "Payout structure & risk posture",
-            "Exposure caps (global + per-player / per-team)",
-            "Portfolio diversity controls + exposure breakdown",
-          ]}
-        />
-      )}
+      <div className={active === "export" ? "" : "hidden"}>
+        <ExportTab run={run} marked={marked} />
+      </div>
     </>
   );
 }
