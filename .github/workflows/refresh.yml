@@ -88,4 +88,15 @@ jobs:
           fi
 
       - name: Publish artifacts to the object store
-        run: python scripts/push_artifacts.py
+        run: |
+          # Publishing is only possible when an object store is configured. If
+          # the SHARED_STORE_* secrets aren't set, don't fail the whole job —
+          # warn (visible on the run) and exit cleanly. Note: without a store the
+          # rebuilt artifacts stay on the ephemeral runner and can't reach the
+          # app, so set the secrets (see DEPLOYMENT.md, Step 2) to make the
+          # scheduled refresh actually feed the app.
+          if [ -z "$SHARED_STORE_BUCKET" ]; then
+            echo "::warning title=No object store configured::SHARED_STORE_BUCKET is not set — the rebuilt projections/sims were NOT published and won't reach the app. Add the SHARED_STORE_*/AWS_* repository secrets (Settings → Secrets and variables → Actions) to enable publishing."
+            exit 0
+          fi
+          python scripts/push_artifacts.py
