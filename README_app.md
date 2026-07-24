@@ -64,7 +64,11 @@ slate you pick from the RotoWire feed (each slate is tagged Classic or Showdown)
   it is a heuristic, not yet calibrated to real showdown standings. Results shows
   a **CPT/UTIL** table with captain and team-split filters; Export offers the
   same ranked / Portfolio-EV selection under **per-player / per-captain /
-  per-team** exposure caps.
+  per-team** exposure caps. Showdown shares the same de-biasing as the classic
+  path: near-twin projection shrink, near-twin exposure balancing, tie-banded
+  ranking, and a held-out sim split so the Portfolio-EV figures are out-of-sample
+  (the *Balance near-twin exposure* and *Break statistical ties randomly* toggles
+  live in the export **Exposure caps** panel).
 
   **Showdown upload:** the RotoWire feed carries only each player's flex ID, so
   the Export tab **requires you to upload a DraftKings `DKSalaries.csv`** for the

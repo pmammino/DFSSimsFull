@@ -28,7 +28,9 @@ from collections import Counter
 
 import numpy as np
 
-from portfolio import _split, _jaccard, _unmet_mins, detect_value_groups  # noqa: F401
+from portfolio import (_split, _jaccard, _unmet_mins, detect_value_groups,  # noqa: F401
+                       _tie_banded_sort, value_group_member_caps,
+                       shrink_value_group_means)
 
 SD_COLS = ['CPT', 'UTIL1', 'UTIL2', 'UTIL3', 'UTIL4', 'UTIL5']
 
@@ -110,12 +112,21 @@ def select_showdown_portfolio(res_df, n_select, sort_cols, *, cols=SD_COLS,
                               team_cap=1.0, max_overlap=1.0, group_of=None,
                               group_cap=1.0, player_caps=None, captain_caps=None,
                               team_caps=None, player_mins=None, captain_mins=None,
-                              team_mins=None):
+                              team_mins=None, tie_sims=None, tie_seed=None):
     """Rank `res_df` by `sort_cols` (descending) then greedily accept lineups that
     keep every exposure cap and the overlap ceiling satisfied. Returns
-    (chosen_rows, info)."""
+    (chosen_rows, info).
+
+    `tie_sims` / `tie_seed`, when both given, tie-band the ranking (see
+    ``portfolio._tie_banded_sort``): a difference in the primary sort column below
+    its Monte-Carlo standard error is treated as a tie and broken by a seeded
+    shuffle, so a sub-noise projection edge stops funnelling every near-clone onto
+    the same captain/player."""
     N = int(n_select)
-    rdf = res_df.sort_values(list(sort_cols), ascending=False).reset_index(drop=True)
+    if tie_sims and tie_seed is not None and len(res_df):
+        rdf = _tie_banded_sort(res_df, list(sort_cols), int(tie_sims), int(tie_seed))
+    else:
+        rdf = res_df.sort_values(list(sort_cols), ascending=False).reset_index(drop=True)
     (pcap, ccap, tcap, gcap, player_capn, captain_capn, team_capn,
      player_minn, captain_minn, team_minn) = _prep_caps(
         N, player_cap, captain_cap, team_cap, group_cap,
@@ -201,12 +212,19 @@ def select_showdown_portfolio_ev(res_df, n_select, pay, util, *, cols=SD_COLS,
                                  team_cap=1.0, max_overlap=1.0, group_of=None,
                                  group_cap=1.0, player_caps=None, captain_caps=None,
                                  team_caps=None, player_mins=None, captain_mins=None,
-                                 team_mins=None, eval_sims=None):
+                                 team_mins=None, eval_sims=None, tie_seed=None,
+                                 pay_report=None):
     """Greedily build the export set that maximizes the expected *utility* of the
     portfolio's per-simulation dollar return, subject to the showdown exposure /
     diversity caps. Mirrors ``portfolio.select_portfolio_ev``; row order of
     `res_df` MUST align with the columns of `pay` (row i <-> pay[:, i]).
-    Returns (chosen_rows, info, W)."""
+    Returns (chosen_rows, info, W).
+
+    `pay_report`, when given, is an independent (held-out) payout matrix used only
+    to compute the reported outcome stats and returned ``W`` — so the headline EV
+    is out-of-sample, not measured on the sims the set was optimized against.
+    `tie_seed`, when set, perturbs each step's marginal gains by their
+    Monte-Carlo SE so near-twin lineups with indistinguishable gains alternate."""
     N = int(n_select)
     rdf = res_df.reset_index(drop=True)
     n_row = len(rdf)
@@ -272,13 +290,18 @@ def select_showdown_portfolio_ev(res_df, n_select, pay, util, *, cols=SD_COLS,
 
     W_sel = np.zeros(len(sel_idx), dtype=np.float64)
     cur_u = float(np.mean(util(W_sel)))
-    for _ in range(N):
+    n_sel = len(sel_idx)
+    for step in range(N):
         avail = elig & ~taken
         if not avail.any():
             break
         avail_idx = np.where(avail)[0]
         u_new = util(W_sel[:, None] + pay_sel[:, avail_idx])
         gains = u_new.mean(axis=0) - cur_u
+        if tie_seed is not None and n_sel > 1:
+            se = u_new.std(axis=0) / np.sqrt(n_sel)
+            rng = np.random.default_rng(int(tie_seed) + step)
+            gains = gains + rng.normal(0.0, np.where(se < 1e-12, 1e-12, se))
         order = np.argsort(-gains)
         picked = -1
         if deficits():
@@ -307,8 +330,12 @@ def select_showdown_portfolio_ev(res_df, n_select, pay, util, *, cols=SD_COLS,
             groupc[g] += 1
 
     chosen = [rdf.iloc[i] for i in chosen_pos]
-    W = (pay[:, chosen_pos].sum(axis=1) if chosen_pos
-         else np.zeros(n_sim, dtype=np.float64))
+    # report on the held-out payouts when supplied (out-of-sample EV)
+    report = pay if pay_report is None else np.asarray(pay_report, dtype=np.float32)
+    if report.shape[1] != n_row:
+        raise ValueError(f"pay_report has {report.shape[1]} cols but res_df has {n_row}")
+    W = (report[:, chosen_pos].sum(axis=1) if chosen_pos
+         else np.zeros(report.shape[0], dtype=np.float64))
     info = _info(chosen, N, skipped, expo, capexpo, teamc, groupc,
                  player_minn, captain_minn, team_minn)
     info.update({
@@ -391,5 +418,23 @@ if __name__ == "__main__":
     chL, iL, WL = select_showdown_portfolio_ev(
         ev_df, 2, ev_pay, utility("Aggressive (max ceiling)"))
     assert iL["cash_rate"] == 0.5, iL
+
+    # ---- held-out EV reporting: report on a disjoint matrix, not `pay` ----
+    ev_report = np.zeros_like(ev_pay)
+    _, iR, WR = select_showdown_portfolio_ev(
+        ev_df, 2, ev_pay, utility("Aggressive (max ceiling)"), pay_report=ev_report)
+    assert iR["exp_return"] == 0.0 and float(np.sum(WR)) == 0.0, (iR, WR)
+
+    # ---- tie-banded ranking is reproducible ----
+    tie_rows = [mk('Stud', 'AAA',
+                   [('u1', 'AAA'), ('u2', 'AAA'), ('u3', 'BBB'),
+                    ('u4', 'BBB'), ('u5', 'BBB')], {'Wins': 100, 'Top10': 0})
+                for _ in range(6)]
+    tie_df = pd.DataFrame(tie_rows)
+    c1, _ = select_showdown_portfolio(tie_df, 3, ['Wins', 'Top10'],
+                                      tie_sims=1000, tie_seed=2)
+    c2, _ = select_showdown_portfolio(tie_df, 3, ['Wins', 'Top10'],
+                                      tie_sims=1000, tie_seed=2)
+    assert [r['CPT'] for r in c1] == [r['CPT'] for r in c2]
 
     print("showdown_portfolio.py self-test passed")
