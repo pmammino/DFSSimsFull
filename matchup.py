@@ -33,6 +33,73 @@ LG_PIT_VEC = dict(k_pct=0.215, bb_pct=0.082, hbp_per_bf=0.010,
                   h_per_bf=0.235, hr_per_bf=0.032, era=4.50, ra9=4.80,
                   tbf_per_ip=4.35, wp_per_pa=0.0, hand='R')
 
+# ── Opponent-quality matchup (log5 / odds-ratio) ────────────────────────────────
+# A pitcher's allowed rates depend on the QUALITY of the lineup he faces, not just
+# its handedness. `_pitcher_vector` only blended the pitcher's own vL/vR splits by
+# the lineup's L/R share, so an elite lineup and a replacement-level one with the
+# same handedness produced the same projection — a starter facing the best offense
+# on the slate was not docked for it. We now combine the pitcher's rate with each
+# opposing hitter's rate on the log-odds (odds-ratio) scale — the textbook log5
+# matchup — and average over the lineup.
+#
+# The batter-side elasticity was calibrated OUT-OF-SAMPLE on Statcast batted-ball
+# logs (bip_inputs/): estimate each batter's & pitcher's contact rate on 2024,
+# then fit how strongly the batter side moves the actual 2025 outcome. Findings:
+#   * HR:            elasticity ~1.0  (full log5; power is a persistent, real skill)
+#   * balls-in-play hits: ~0.7        (below full log5 — the DIPS signature, since
+#                                      pitchers have limited control over BABIP)
+# K and BB are not in balls-in-play logs, so they use full log5 (=1.0), the
+# standard theoretical value; K especially is strongly batter-driven, so a
+# low-strikeout contact lineup meaningfully suppresses a pitcher's Ks.
+OPP_MATCHUP_ELASTICITY = dict(k=1.0, bb=1.0, hr=1.0, bip_hit=0.70)
+
+
+def _logit(p):
+    p = min(max(float(p), 1e-6), 1.0 - 1e-6)
+    return np.log(p / (1.0 - p))
+
+
+def _sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-x))
+
+
+def _log5_rate(p_rate, batter_rates, league, gamma):
+    """Odds-ratio (log5) matchup rate for one event: take the pitcher's own rate
+    (his rate vs a league-average lineup) and shift it by each opposing batter's
+    log-odds deviation from the league average — scaled by the calibrated
+    elasticity `gamma` — then average over the lineup he faces. gamma=1 is textbook
+    log5; gamma<1 damps the batter influence (e.g. balls-in-play hits)."""
+    if not batter_rates:
+        return float(p_rate)
+    lp, lL = _logit(p_rate), _logit(league)
+    return float(np.mean([_sigmoid(lp + gamma * (_logit(b) - lL))
+                          for b in batter_rates]))
+
+
+def _opponent_adjust_pitcher(vec, opp_lineup):
+    """Fold the opposing lineup's hitting QUALITY into the pitcher's per-BF event
+    rates via the calibrated log5 matchup (see OPP_MATCHUP_ELASTICITY). HR and the
+    balls-in-play hit component (h_per_bf minus HR) carry the calibrated batter
+    elasticities; K and BB use full log5. ra9/era/tbf stay as neutral skill anchors
+    — the extra runs flow through the now-elevated hit/HR/BB traffic in the sim."""
+    bats = [p['vec'] for p in opp_lineup if p.get('vec')]
+    if not bats:
+        return vec
+    E = OPP_MATCHUP_ELASTICITY
+    out = dict(vec)
+    out['k_pct'] = _log5_rate(vec['k_pct'], [b['p_k'] for b in bats],
+                              LG_HIT_VEC['p_k'], E['k'])
+    out['bb_pct'] = _log5_rate(vec['bb_pct'], [b['p_bb'] for b in bats],
+                               LG_HIT_VEC['p_bb'], E['bb'])
+    out['hr_per_bf'] = _log5_rate(vec['hr_per_bf'], [b['p_hr'] for b in bats],
+                                  LG_HIT_VEC['p_hr'], E['hr'])
+    l_bip = LG_HIT_VEC['p_1b'] + LG_HIT_VEC['p_2b'] + LG_HIT_VEC['p_3b']
+    bip_p = max(vec['h_per_bf'] - vec['hr_per_bf'], 1e-6)
+    bip = _log5_rate(bip_p, [b['p_1b'] + b['p_2b'] + b['p_3b'] for b in bats],
+                     l_bip, E['bip_hit'])
+    out['h_per_bf'] = bip + out['hr_per_bf']
+    return out
+
 
 # Map each lowercase per-PA event to its Statcast park-factor column on the
 # projection rows (1.0 = league-neutral). P_HBP / P_SF have no published factor.
@@ -260,6 +327,9 @@ def build_matchup_inputs(slate, hproj, pproj):
                     vec = dict(LG_PIT_VEC); hand = 'R'
                 else:
                     vec = _pitcher_vector(r, share, venue_pf); hand = vec['hand']
+                # fold in the QUALITY of the lineup this arm faces (log5 matchup),
+                # so facing an elite offense docks him and a weak one lifts him
+                vec = _opponent_adjust_pitcher(vec, rec['lineups'][opp_side])
                 rec['pitchers'][side][role_key] = {'name': nm, 'hand': hand, 'vec': vec}
         out['games'][gid] = rec
 
