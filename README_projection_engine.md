@@ -210,6 +210,40 @@ neutral park**. Layered context columns add:
     on the same per-PA probabilities, giving an internally-consistent
     full pitcher stat line
 
+## Daily matchup: opponent-quality adjustment for pitchers (`matchup.py`)
+
+The per-PA projection above is "vs a league-average opponent." When a slate is
+built, `matchup.py` conditions each player on that day's actual opponent. Hitters
+were already conditioned on the opposing pitcher (their `vL/vR` split for his
+hand), but pitchers were only conditioned on the *handedness mix* of the lineup —
+**not its quality**. That meant an ace facing the best offense on the slate and
+the same ace facing a replacement-level lineup projected identically, so pitchers
+opposite elite lineups were systematically over-projected.
+
+`_opponent_adjust_pitcher` fixes this with the **log5 / odds-ratio matchup**: for
+each event it combines the pitcher's own rate with each opposing hitter's rate on
+the log-odds scale and averages over the lineup —
+
+```
+logit(rate_allowed) = logit(pitcher_rate) + γ · ( logit(batter_rate) − logit(league) )
+```
+
+The batter-side elasticity `γ` is **calibrated out-of-sample on Statcast
+batted-ball logs** (`bip_inputs/`): estimate each batter's and pitcher's contact
+rate on 2024, then fit how strongly the batter side moves the actual 2025
+outcome. Results:
+
+  - **HR:** γ ≈ 1.0 (full log5 — power is a persistent, real skill)
+  - **balls-in-play hits:** γ ≈ 0.7 (below full log5 — the DIPS signature, since
+    pitchers have limited control over BABIP; the batter drives contact)
+
+K and BB are not present in balls-in-play logs, so they use full log5 (γ = 1.0),
+the standard theoretical value (K is strongly batter-driven — a low-strikeout
+contact lineup meaningfully suppresses a pitcher's Ks). `RA9`/`ERA`/`TBF_per_IP`
+stay as neutral skill anchors; the extra runs against a tough lineup flow through
+the now-elevated hit/HR/BB traffic in the simulator. Elasticities live in
+`matchup.OPP_MATCHUP_ELASTICITY`.
+
 ## Validation summary (from walk-forward 2024→2025 tests)
 
   - **K% projection:** Bounded window=5 + k=100, Q5 K% bias -0.011
