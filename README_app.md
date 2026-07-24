@@ -267,6 +267,15 @@ behaviour is unchanged until you turn them on):
   price both get used, rotate a team's stack members, and pair a primary team
   with different secondaries. This diversifies the candidate **pool at the
   source**.
+- **Near-twin projection shrink** (Setup → *Advanced field model*) — two
+  same-position, similar-salary players within a small projection gap are
+  statistically tied, but the sim otherwise propagates each one's noisy point
+  projection as exact truth, so a hair-higher number wins *every* lineup and one
+  twin eats the other's exposure. This shrinks each near-twin's **scoring mean**
+  toward the pair average (0 = off / projections exact; 0.5 default; 1 = treat
+  tied players as equal). It shifts the mean only, so each player's game-to-game
+  shape and every teammate/opponent correlation are preserved, and the same
+  shrunk sims score both the field and your candidates.
 - **Portfolio diversity** (Export → *Top N by ranking*) — diversifies the
   **exported set** after ranking:
   - **Max stack-pairing exposure** — caps the share of lineups sharing the same
@@ -280,6 +289,16 @@ behaviour is unchanged until you turn them on):
     similar salary and projection) and a **Max value-group exposure** cap shares
     the load across them, so a hair-higher projection doesn't let one player eat
     the whole group's exposure.
+  - **Balance near-twin exposure** *(on by default)* — adds a **per-player** cap
+    to each member of a detected near-twin group so the two split the exported
+    set roughly evenly, instead of the group cap only throttling their *combined*
+    use. **Twin balance headroom** sets how even (0 = perfectly even; 0.25
+    default caps each of two twins near 62%, so ~60/40 at worst, not ~90/10).
+  - **Break statistical ties randomly** *(on by default)* — treats differences
+    in the ranking metric smaller than the simulation's own margin of error as
+    ties, broken by a **seeded** shuffle. A sub-noise projection edge then stops
+    imposing a strict order that funnels every near-clone lineup onto the same
+    player. Seeded, so a given sim + settings always exports the same set.
 
 > A lineup is exportable only if every one of its players has a DK ID. The app
 > reports how many candidate players had IDs, so if your ownership and your DK
@@ -327,6 +346,15 @@ least one exported lineup finishes in the money — the portfolio-level cash
 metric), floor/ceiling, and a return distribution — all compared against a
 top-N-by-rank set of the same size drawn from the same pool, so you can see the
 boom/bust being broken up.
+
+> **Out-of-sample by construction.** The sims are split into disjoint slices:
+> candidates are **ranked** on one slice, the set is **selected** on a second,
+> and every headline figure (expected return, ROI, cash rate, floor/ceiling) is
+> **scored on a third, held-out slice** that neither set was ranked or selected
+> on. Ranking, selecting, and reporting on one shared sim set inflates the
+> reported EV — you grade the set on the very sims it was optimized against (the
+> winner's curse). The held-out numbers are therefore lower than an in-sample
+> estimate, and that gap is exactly the selection bias being removed.
 
 > Requires a fresh simulation: the payout-aware path reuses the field placement
 > ladder and per-player sim arrays captured during the run. If you loaded an
