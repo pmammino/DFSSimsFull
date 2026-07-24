@@ -125,6 +125,56 @@ def utility(kind):
 
 
 # --------------------------------------------------------------------------- #
+# Held-out simulation split (de-biases selection / reported EV)
+# --------------------------------------------------------------------------- #
+def sim_split(n_sim, fractions=(0.4, 0.4, 0.2), seed=1234):
+    """Partition the simulation axis into disjoint index sets.
+
+    The draws are i.i.d. along the sim axis, so a plain index split is a valid
+    train/eval partition. Ranking, selecting, and REPORTING a portfolio on one
+    shared sim set inflates the reported EV (you grade the set on the same sims
+    you optimized against — the winner's curse). Splitting lets the caller rank
+    on one slice, select on a second, and report on a third, so the headline EV
+    is genuinely out-of-sample.
+
+    Returns a tuple of ``len(fractions)`` ascending int index arrays. If there
+    are too few sims to give every part at least one index, every part is the
+    full range (splitting would be worse than not splitting)."""
+    n_sim = int(n_sim)
+    if n_sim <= 0:
+        raise ValueError("n_sim must be positive")
+    fr = np.asarray(fractions, dtype=np.float64)
+    if len(fr) < 1 or (fr <= 0).any() or not np.isclose(fr.sum(), 1.0):
+        raise ValueError("fractions must be positive and sum to 1")
+    k = len(fr)
+    if n_sim < 2 * k:
+        full = np.arange(n_sim)
+        return tuple(full.copy() for _ in range(k))
+    rng = np.random.default_rng(int(seed))
+    perm = rng.permutation(n_sim)
+    cuts = np.floor(np.cumsum(fr)[:-1] * n_sim).astype(int)
+    parts = np.split(perm, cuts)
+    return tuple(np.sort(p) for p in parts)
+
+
+def field_cut_scores(field_mat, cut_places):
+    """The field score needed to reach each place in `cut_places`, per sim.
+
+    ``(n_sim, len(cut_places))`` where entry ``[s, i]`` is the ``cut_places[i]``-th
+    highest field total in sim ``s`` — the same placement ladder
+    ``run_contest_dist`` captures, but as a standalone pass so a payout matrix can
+    be built on any sim slice. `field_mat` is ``(n_sim, n_field)``."""
+    field_mat = np.asarray(field_mat, dtype=np.float32)
+    cut_places = np.asarray(cut_places, dtype=np.int64)
+    n_sim, n_field = field_mat.shape
+    take = n_field - cut_places          # index into each ascending-sorted row
+    out = np.empty((n_sim, len(cut_places)), dtype=np.float32)
+    for s in range(n_sim):
+        out[s] = np.sort(field_mat[s])[take]
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # Per-lineup x per-sim payouts
 # --------------------------------------------------------------------------- #
 def field_place_cutpoints(n_field, fine=300, coarse=60):
@@ -221,5 +271,25 @@ if __name__ == "__main__":
     cp = field_place_cutpoints(20000)
     assert cp[0] == 1 and cp[-1] == 20000 and np.all(np.diff(cp) > 0)
     assert cp[299] == 300, cp[295:305]
+
+    # ---- sim split: disjoint, exhaustive, reproducible ----
+    parts = sim_split(1000, fractions=(0.4, 0.4, 0.2), seed=7)
+    assert len(parts) == 3
+    allidx = np.concatenate(parts)
+    assert len(allidx) == 1000 and len(np.unique(allidx)) == 1000   # a partition
+    assert all(np.all(np.diff(p) > 0) for p in parts)               # each ascending
+    assert abs(len(parts[0]) - 400) <= 1 and abs(len(parts[2]) - 200) <= 1
+    parts2 = sim_split(1000, fractions=(0.4, 0.4, 0.2), seed=7)
+    assert all(np.array_equal(a, b) for a, b in zip(parts, parts2))  # seed-stable
+    # too few sims -> everyone shares the full set instead of starving a part
+    tiny = sim_split(4, fractions=(0.4, 0.4, 0.2), seed=7)
+    assert all(np.array_equal(t, np.arange(4)) for t in tiny), tiny
+
+    # ---- field_cut_scores matches run_contest_dist's ladder definition ----
+    fmat = np.array([[10., 20., 30., 40.], [1., 2., 3., 4.]], dtype=np.float32)
+    cplaces = np.array([1, 2, 4])   # 1st, 2nd, 4th highest
+    fcs = field_cut_scores(fmat, cplaces)
+    assert fcs[0].tolist() == [40., 30., 10.], fcs
+    assert fcs[1].tolist() == [4., 3., 1.], fcs
 
     print("portfolio_ev.py self-test passed:", s)

@@ -33,7 +33,8 @@ import streamlit as st
 from stage_d import (load_sims, build_pool, lineups_to_df, score_matrix,
                      norm as normname, COLS, HITC, SLOT)
 from mlb_lineup_builder import Pool, Builder, candidate_stack_structures
-from portfolio import select_portfolio, select_portfolio_ev, detect_value_groups
+from portfolio import (select_portfolio, select_portfolio_ev, detect_value_groups,
+                       value_group_member_caps, shrink_value_group_means)
 import portfolio_ev as pev
 import dk_ids
 from field_simulator import (normalize_to_slots, adjust_ownership,
@@ -356,12 +357,16 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
                     pitcher_cap=1.0, team_cap=1.0, pair_cap=1.0,
                     core_cap=1.0, max_overlap=1.0, group_of=None,
                     group_cap=1.0, player_caps=None, team_caps=None,
-                    player_mins=None, team_mins=None, cands=None):
+                    player_mins=None, team_mins=None, cands=None,
+                    tie_sims=None, tie_seed=None):
     """Pick n_select lineups from the ranked candidate results with the
     diversity-aware portfolio selector (per-player / stack-team / pairing /
     stack-core / value-group exposure caps + an overlap ceiling), map players to
     DK IDs, and emit a ready-to-upload CSV (P,P,C,1B,2B,3B,SS,OF,OF,OF + one ID
-    row each). COLS[0:2] are the two pitcher slots; COLS[2:] are the 8 hitters."""
+    row each). COLS[0:2] are the two pitcher slots; COLS[2:] are the 8 hitters.
+
+    `tie_sims` / `tie_seed` enable tie-banded ranking (see `select_portfolio`) so
+    a sub-noise projection edge stops funnelling every near-clone onto one player."""
     keymap = {"Win%": ["Wins", "Top10", "Top100"],
               "Top10 Rate": ["Top10", "Top100", "Wins"],
               "Top100 Rate": ["Top100", "Top10", "Wins"]}[sort_by]
@@ -375,7 +380,8 @@ def build_dk_upload(res_df, dkid, n_select, sort_by, hitter_cap=1.0,
         pair_cap=pair_cap, core_cap=core_cap, max_overlap=max_overlap,
         group_of=group_of, group_cap=group_cap,
         player_caps=player_caps, team_caps=team_caps,
-        player_mins=player_mins, team_mins=team_mins)
+        player_mins=player_mins, team_mins=team_mins,
+        tie_sims=tie_sims, tie_seed=tie_seed)
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -397,7 +403,8 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
                        pitcher_cap=1.0, team_cap=1.0, pair_cap=1.0, core_cap=1.0,
                        max_overlap=1.0, group_of=None, group_cap=1.0,
                        player_caps=None, team_caps=None,
-                       player_mins=None, team_mins=None, eval_sims=4000):
+                       player_mins=None, team_mins=None, eval_sims=4000,
+                       tie_seed=None):
     """Payout-aware portfolio export. Instead of ranking each lineup by its
     standalone finish rate, this rebuilds the candidates' correlated per-sim
     scores, turns them into DOLLAR payouts against a parametric top-heavy curve,
@@ -405,10 +412,14 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
     portfolio's per-slate return (the `risk` posture picks the utility). All the
     same exposure / diversity caps still apply as hard constraints.
 
+    Selection and reporting use disjoint held-out sim slices (SELECT builds the
+    payout matrix the greedy optimizes; REPORT scores the chosen set), so the
+    returned EV is out-of-sample rather than the optimistic in-sample number.
+
     Returns ``(csv_text, info, W, W_naive, extra)`` where `W` / `W_naive` are the
-    per-sim portfolio returns for the EV set and a rank-selected set of the same
-    size (for the coverage visualization), or ``None`` if the sim predates the
-    stored placement ladder (caller falls back to ranked export)."""
+    per-sim (report-slice) portfolio returns for the EV set and a rank-selected
+    set of the same size (for the coverage visualization), or ``None`` if the sim
+    predates the stored placement ladder (caller falls back to ranked export)."""
     dist = sim.get("dist") or {}
     score_pool = sim.get("score_pool")
     if "field_cut_scores" not in dist or not score_pool:
@@ -417,8 +428,14 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
     K = int(sim["K"])
     field_n = int(sim["field_n"])
     cands = sim["cands"]
-    cut_scores = dist["field_cut_scores"]        # (K, n_cut)
     cut_places = dist["cut_places"]
+    # report ladder is the canonical key; select ladder + slices fall back to the
+    # full set for sims built before the held-out split existed.
+    fcs_report = dist["field_cut_scores"]
+    fcs_select = dist.get("field_cut_scores_select", fcs_report)
+    splits = sim.get("splits") or {}
+    sel_idx = splits.get("select")
+    rep_idx = splits.get("report")
 
     # shortlist: strongest candidates by the existing ranking (src is already
     # sorted) so the pay matrix stays small; the optimizer picks a decorrelated
@@ -438,11 +455,21 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
             if arr is not None:
                 cand_scores[:, j] += arr
 
+    # slice candidate scores to the held-out select / report sims (aligned to the
+    # ladders above). Old sims without a split -> use the full set for both.
+    if (sel_idx is not None and rep_idx is not None
+            and len(sel_idx) == fcs_select.shape[0]
+            and len(rep_idx) == fcs_report.shape[0]):
+        cs_sel, cs_rep = cand_scores[sel_idx], cand_scores[rep_idx]
+    else:
+        cs_sel = cs_rep = cand_scores
+
     # payout curve uses the SIMULATED contest size, so a finishing place (relative
     # to that field) maps coherently onto the prize table.
     prize = pev.make_payout_curve(field_n, entry_fee, top_heaviness=top_heaviness,
                                   pct_paid=pct_paid, rake=rake)
-    pay = pev.candidate_payout_matrix(cand_scores, cut_scores, cut_places, prize)
+    pay = pev.candidate_payout_matrix(cs_sel, fcs_select, cut_places, prize)
+    pay_report = pev.candidate_payout_matrix(cs_rep, fcs_report, cut_places, prize)
 
     def eligible(nms):
         return all(dk_ids.has_name(dkid, n) for n in nms)
@@ -453,9 +480,11 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
         team_cap=team_cap, pair_cap=pair_cap, core_cap=core_cap,
         max_overlap=max_overlap, group_of=group_of, group_cap=group_cap,
         player_caps=player_caps, team_caps=team_caps,
-        player_mins=player_mins, team_mins=team_mins, eval_sims=eval_sims)
+        player_mins=player_mins, team_mins=team_mins, eval_sims=eval_sims,
+        tie_seed=tie_seed, pay_report=pay_report)
 
-    # rank-selected baseline of the SAME size (eligible only) for the comparison
+    # rank-selected baseline of the SAME size (eligible only) for the comparison,
+    # scored on the same held-out report slice as the EV set.
     naive_pos = []
     for i in range(M):
         nms = [str(short.iloc[i][c]).rsplit(" (", 1)[0] for c in COLS]
@@ -463,8 +492,8 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
             naive_pos.append(i)
         if len(naive_pos) >= info["chosen"]:
             break
-    W_naive = (pay[:, naive_pos].sum(axis=1) if naive_pos
-               else np.zeros(K, np.float64))
+    W_naive = (pay_report[:, naive_pos].sum(axis=1) if naive_pos
+               else np.zeros(pay_report.shape[0], np.float64))
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -542,7 +571,8 @@ def rows_to_upload_csv(rows_df, dkid, cands=None):
 # showdown_portfolio / showdown_upload.
 # --------------------------------------------------------------------------- #
 def run_showdown_sim(dk_df, score_k, K, contest_size, id_map, num_candidates,
-                     seed_cand, seed_field, medium, chalk, cand_jitter, status):
+                     seed_cand, seed_field, medium, chalk, cand_jitter, status,
+                     proj_shrink=0.0):
     """Build a showdown contest (1 CPT + 5 UTIL) from the slate + sims and return
     the session-state dict the Results/Export tabs render from. Reuses the
     format-agnostic run_contest_dist (placement ladder + finishing distribution)
@@ -574,23 +604,52 @@ def run_showdown_sim(dk_df, score_k, K, contest_size, id_map, num_candidates,
         st.warning(f"Built {len(field):,} of {int(contest_size):,} field lineups "
                    "(pool constrained); simulating against what could be built.")
 
+    # near-twin projection shrink: pull statistically-tied players' scoring means
+    # together so sim noise doesn't over-separate them (same shrunk sims score the
+    # field, the candidates, and the payout-aware export).
+    if float(proj_shrink) > 0:
+        _sd_tal, _sd_meta = {}, {}
+        for nm in pool["Name"]:
+            a = score_k.get(normname(nm))
+            if a is not None and len(a):
+                _sd_tal[nm] = 0.5 * float(np.mean(a)) + 0.5 * float(np.percentile(a, 90))
+        for r in pool.itertuples():
+            _sd_meta.setdefault(r.Name, {"pos": r.Pos, "salary": int(r.Salary),
+                                         "team": r.Team, "proj": _sd_tal.get(r.Name)})
+        _sd_groups, _ = detect_value_groups(_sd_meta)
+        if _sd_groups:
+            score_k = shrink_value_group_means(
+                score_k, _sd_groups, strength=float(proj_shrink), name_key=normname)
+            st.caption(f"Near-twin projection shrink = {float(proj_shrink):g}: "
+                       f"scoring means pulled together within {len(_sd_groups)} "
+                       "tied group(s).")
+
     cand_mat = sb.score_matrix(cands, score_k, K, norm=normname)
     field_mat = sb.score_matrix(field, score_k, K, norm=normname)
 
+    # Held-out split: rank on the RANK slice; keep placement ladders for the
+    # SELECT and REPORT slices so the payout-aware export selects and reports
+    # out-of-sample instead of grading itself on the sims it optimized against.
     st.write(f"Simulating the contest over {K:,} runs…")
     cut_places = pev.field_place_cutpoints(len(field))
+    rank_idx, sel_idx, rep_idx = pev.sim_split(K, seed=int(seed_field))
+    Krank = len(rank_idx)
     wins, t10, t100, avg, dist = run_contest_dist(
-        field_mat, cand_mat, K, len(field), cut_places=cut_places)
+        field_mat[rank_idx], cand_mat[rank_idx], Krank, len(field))
+    dist["cut_places"] = cut_places
+    dist["field_cut_scores_select"] = pev.field_cut_scores(
+        field_mat[sel_idx], cut_places)
+    dist["field_cut_scores"] = pev.field_cut_scores(field_mat[rep_idx], cut_places)
 
     own_map = {normname(r.FullName): float(r.Ownership) for r in dk_df.itertuples()}
     res = sb.lineups_to_df(cands)
     res.insert(0, "Candidate", np.arange(1, len(cands) + 1))
     res["Wins"] = wins
-    res["Win%"] = np.round(100 * wins / K, 3)
+    res["Win%"] = np.round(100 * wins / Krank, 3)
     res["Top10"] = t10
-    res["Top10%"] = np.round(100 * t10 / K, 2)
+    res["Top10%"] = np.round(100 * t10 / Krank, 2)
     res["Top100"] = t100
-    res["Top100%"] = np.round(100 * t100 / K, 2)
+    res["Top100%"] = np.round(100 * t100 / Krank, 2)
     res["AvgPlace"] = np.round(avg, 1)
     res["BestPlace"] = dist["best"]
     res["WorstPlace"] = dist["worst"]
@@ -629,6 +688,9 @@ def run_showdown_sim(dk_df, score_k, K, contest_size, id_map, num_candidates,
         "players_meta": players_meta,
         "captains": sorted({lu["captain"].Name for lu in cands}),
         "teams": teams,
+        # held-out sim slices (rank / select / report) for de-biased export
+        "splits": {"rank": rank_idx, "select": sel_idx, "report": rep_idx},
+        "rank_nsim": int(Krank),
     }
 
 
@@ -796,7 +858,9 @@ def render_showdown_results(sim):
         with cc1:
             st.altair_chart(
                 place_distribution_chart(sim["dist"], chosen_cand - 1,
-                                         sim["field_n"], K), width="stretch")
+                                         sim["field_n"],
+                                         int(sim.get("rank_nsim") or sim["K"])),
+                width="stretch")
         with cc2:
             st.caption(f"Rank #{int(r['Rank'])} · captain {r['Captain']} · "
                        f"{r['Split']} · ${int(r['Salary']):,}")
@@ -905,6 +969,9 @@ def render_showdown_export(sim):
     if sel_method.startswith("Portfolio EV") and not _ev_ready:
         st.info("Re-run the sim to enable payout-aware export. Using ranked for now.")
 
+    player_caps: dict[str, float] = {}
+    group_of, groups, group_cap = {}, [], 1.0
+    tie_break = True
     with st.expander("Exposure caps (optional)", expanded=False):
         cc1, cc2, cc3 = st.columns(3)
         player_cap = cc1.slider("Max per player", 0.0, 1.0, 1.0, 0.05)
@@ -913,6 +980,32 @@ def render_showdown_export(sim):
         max_overlap = st.slider("Max lineup overlap", 0.5, 1.0, 1.0, 0.05,
                                 help="Cap the share of players any two exported "
                                      "lineups may share (1.0 = no limit).")
+        tie_break = st.checkbox(
+            "Break statistical ties randomly", value=True,
+            help="Treat ranking-metric differences smaller than the sim's margin "
+                 "of error as ties, broken by a seeded shuffle, so a sub-noise "
+                 "projection edge stops funnelling every near-clone onto the same "
+                 "captain/player. Seeded — same sim + settings gives the same set.")
+        _sd_meta = sim.get("players_meta") or {}
+        if _sd_meta:
+            group_of, groups = detect_value_groups(_sd_meta)
+            if groups:
+                balance_twins = st.checkbox(
+                    "Balance near-twin exposure", value=True,
+                    help="Give each member of a detected near-twin group a roughly "
+                         "equal share of the exported set instead of letting a "
+                         "hair-higher projection take it all.")
+                if balance_twins:
+                    twin_slack = st.slider(
+                        "Twin balance headroom", 0.0, 1.0, 0.25, 0.05,
+                        help="0 = split a group's members evenly; higher lets the "
+                             "better-projected twin take somewhat more.")
+                    for _nm, _fr in value_group_member_caps(
+                            groups, slack=float(twin_slack)).items():
+                        player_caps[_nm] = min(player_caps.get(_nm, 1.0), _fr)
+                st.caption(f"{len(groups)} near-twin value group(s) detected: "
+                           + "; ".join(", ".join(g["players"]) for g in groups[:4])
+                           + ("…" if len(groups) > 4 else ""))
 
     ev_entry_fee, ev_pct_paid, ev_rake = 20.0, 0.20, 0.15
     ev_top_heavy, ev_risk = 0.9, "Balanced"
@@ -933,28 +1026,47 @@ def render_showdown_export(sim):
                 "Candidate pool size", int(min(50, len(src))),
                 int(min(4000, len(src))), int(min(1000, len(src))), 100))
 
+    # tie-band settings (seeded; off when the box is unticked)
+    _tie_seed = 0 if tie_break else None
+    _tie_sims = int(sim.get("rank_nsim") or sim.get("K") or 0) if tie_break else None
+
     if ev_mode:
         short = (src.sort_values(keymap, ascending=False)
                  .head(int(ev_shortlist)).reset_index(drop=True))
         cand_scores = _sd_cand_scores(short, sim)
+        _dist = sim["dist"]
+        _fcs_rep = _dist["field_cut_scores"]
+        _fcs_sel = _dist.get("field_cut_scores_select", _fcs_rep)
+        _sp = sim.get("splits") or {}
+        _si, _ri = _sp.get("select"), _sp.get("report")
+        if (_si is not None and _ri is not None
+                and len(_si) == _fcs_sel.shape[0] and len(_ri) == _fcs_rep.shape[0]):
+            _cs_sel, _cs_rep = cand_scores[_si], cand_scores[_ri]
+        else:                                   # sims predating the split
+            _cs_sel = _cs_rep = cand_scores
         prize = pev.make_payout_curve(int(sim["field_n"]), ev_entry_fee,
                                       top_heaviness=ev_top_heavy,
                                       pct_paid=ev_pct_paid, rake=ev_rake)
-        pay = pev.candidate_payout_matrix(
-            cand_scores, sim["dist"]["field_cut_scores"],
-            sim["dist"]["cut_places"], prize)
+        pay = pev.candidate_payout_matrix(_cs_sel, _fcs_sel,
+                                          _dist["cut_places"], prize)
+        pay_report = pev.candidate_payout_matrix(_cs_rep, _fcs_rep,
+                                                 _dist["cut_places"], prize)
         chosen, info, W = sp.select_showdown_portfolio_ev(
             short, int(n_up), pay, pev.utility(ev_risk), eligible=eligible,
             player_cap=player_cap, captain_cap=captain_cap, team_cap=team_cap,
-            max_overlap=max_overlap, eval_sims=4000)
+            max_overlap=max_overlap, group_of=group_of, group_cap=group_cap,
+            player_caps=player_caps, eval_sims=4000,
+            tie_seed=_tie_seed, pay_report=pay_report)
         csv_text, uinfo = su.upload_csv(chosen, tmap, cands)
-        st.caption(f"Portfolio EV — exp return ${info['exp_return']:.0f}/slate · "
-                   f"cash rate {100*info['cash_rate']:.0f}% · "
+        st.caption(f"Portfolio EV (held-out) — exp return ${info['exp_return']:.0f}"
+                   f"/slate · cash rate {100*info['cash_rate']:.0f}% · "
                    f"{info['distinct_captains']} distinct captains.")
     else:
         chosen, info = sp.select_showdown_portfolio(
             src, int(n_up), keymap, eligible=eligible, player_cap=player_cap,
-            captain_cap=captain_cap, team_cap=team_cap, max_overlap=max_overlap)
+            captain_cap=captain_cap, team_cap=team_cap, max_overlap=max_overlap,
+            group_of=group_of, group_cap=group_cap, player_caps=player_caps,
+            tie_sims=_tie_sims, tie_seed=_tie_seed)
         csv_text, uinfo = su.upload_csv(chosen, tmap, cands)
 
     if uinfo["chosen"] == 0:
@@ -2016,6 +2128,19 @@ with tabs[0]:
                      "primary team pairs with different secondaries. Diversifies "
                      "the candidate POOL at the source (complements the export-time "
                      "exposure caps).")
+            proj_shrink = st.slider(
+                "Near-twin projection shrink", min_value=0.0, max_value=1.0,
+                value=0.5, step=0.1,
+                help="Two same-position players within a small salary/projection "
+                     "gap are statistically tied, but the sim propagates each "
+                     "one's noisy point projection as exact truth — so a "
+                     "hair-higher number wins EVERY lineup and one twin eats the "
+                     "other's exposure. This shrinks each near-twin's scoring mean "
+                     "toward the pair's average by this fraction (0 = off / treat "
+                     "projections as exact; 0.5 default; 1 = treat tied players as "
+                     "equal). It shifts the MEAN only, so each player's game-to-game "
+                     "shape and every teammate/opponent correlation are preserved. "
+                     "The same shrunk sims score both the field and your candidates.")
             stack_boost = st.slider(
                 "Stack-ownership ceiling boost", min_value=0.0, max_value=0.25,
                 value=0.05, step=0.01,
@@ -2165,7 +2290,8 @@ with tabs[0]:
                     sim_state = run_showdown_sim(
                         dk_df, score_k, K, int(contest_size), id_map,
                         int(num_candidates), int(seed_cand), int(seed_field),
-                        int(medium), float(chalk), float(cand_jitter), status)
+                        int(medium), float(chalk), float(cand_jitter), status,
+                        proj_shrink=float(proj_shrink))
                 except Exception as e:
                     status.update(label="Showdown build failed", state="error")
                     st.error(f"Could not build the showdown contest: {e}")
@@ -2287,6 +2413,31 @@ with tabs[0]:
                 if a is not None and len(a):
                     cel[nm] = float(np.percentile(a, 90))
 
+            # ---- near-twin projection shrink (uncertainty-aware scoring) ----
+            # Players who are statistically tied on projection shouldn't be split
+            # by sim noise into "one always wins". Shrink each near-twin's SCORING
+            # mean toward the pair average so the ranking stops treating a
+            # sub-noise projection edge as real. Construction still uses raw talent
+            # (the jittered pool keeps both twins); only the scoring sims shift.
+            if float(proj_shrink) > 0:
+                _shrink_meta = {}
+                for r in pool.itertuples():
+                    if r.Name in _shrink_meta:
+                        continue
+                    _shrink_meta[r.Name] = {
+                        "pos": r.Pos, "salary": int(r.Salary), "team": r.Team,
+                        "proj": float(tal[r.Name]) if r.Name in tal else None}
+                _shrink_groups, _ = detect_value_groups(_shrink_meta)
+                if _shrink_groups:
+                    score_b = shrink_value_group_means(
+                        score_b, _shrink_groups, strength=float(proj_shrink),
+                        name_key=normname)
+                    st.caption(
+                        f"Near-twin projection shrink = {float(proj_shrink):g}: "
+                        f"pulled scoring means together within "
+                        f"{len(_shrink_groups)} tied group(s) so noise doesn't "
+                        "over-separate similar players.")
+
             def zmap(names, vmap=None):
                 """z-score of a value map within a player group (hitters/pitchers);
                 defaults to the mean/ceiling talent blend `tal`."""
@@ -2386,10 +2537,24 @@ with tabs[0]:
             # ---- the contest (captures each candidate's finishing-place distro,
             #      plus the field's per-sim placement ladder for payout-aware
             #      portfolio export) ----
+            # Held-out split: rank candidates on the RANK slice, build the payout
+            # matrix for selection on the SELECT slice, and report EV on the
+            # REPORT slice. Ranking + selecting + reporting on one shared sim set
+            # inflates the reported EV (the winner's curse); disjoint slices make
+            # the exported set's headline numbers genuinely out-of-sample.
             st.write(f"Simulating the contest over {K:,} runs…")
             cut_places = pev.field_place_cutpoints(len(field))
+            rank_idx, sel_idx, rep_idx = pev.sim_split(K, seed=int(seed_field))
             wins, t10, t100, avg, dist = run_contest_dist(
-                field_mat, cand_mat, K, len(field), cut_places=cut_places)
+                field_mat[rank_idx], cand_mat[rank_idx], len(rank_idx), len(field))
+            Krank = len(rank_idx)
+            # placement ladders for the two held-out slices (payout-aware export)
+            dist["cut_places"] = cut_places
+            dist["field_cut_scores_select"] = pev.field_cut_scores(
+                field_mat[sel_idx], cut_places)
+            # keep the canonical key = the REPORT ladder (also gates EV readiness)
+            dist["field_cut_scores"] = pev.field_cut_scores(
+                field_mat[rep_idx], cut_places)
             status.update(label=f"Done in {time.time()-t0:.1f}s", state="complete")
 
         # ---- per-lineup attributes for filtering/search ----
@@ -2409,11 +2574,11 @@ with tabs[0]:
         res = lineups_to_df(cands)
         res.insert(0, "Candidate", np.arange(1, len(cands) + 1))
         res["Wins"] = wins
-        res["Win%"] = np.round(100 * wins / K, 3)
+        res["Win%"] = np.round(100 * wins / Krank, 3)
         res["Top10"] = t10
-        res["Top10%"] = np.round(100 * t10 / K, 2)
+        res["Top10%"] = np.round(100 * t10 / Krank, 2)
         res["Top100"] = t100
-        res["Top100%"] = np.round(100 * t100 / K, 2)
+        res["Top100%"] = np.round(100 * t100 / Krank, 2)
         res["AvgPlace"] = np.round(avg, 1)
         res["BestPlace"] = dist["best"]
         res["WorstPlace"] = dist["worst"]
@@ -2451,6 +2616,9 @@ with tabs[0]:
             "cand_to_players": {i + 1: cand_players[i] for i in range(len(cands))},
             "pool_players": sorted({pl.Name for lu in cands for pl in lu["players"]}),
             "players_meta": players_meta,
+            # held-out sim slices (rank / select / report) for de-biased export
+            "splits": {"rank": rank_idx, "select": sel_idx, "report": rep_idx},
+            "rank_nsim": int(Krank),
         }
         # fresh run -> clear prior marks / inspection state
         st.session_state["picked"] = set()
@@ -2692,8 +2860,9 @@ with tabs[2]:
                 cc1, cc2 = st.columns([3, 4])
                 with cc1:
                     st.altair_chart(
-                        place_distribution_chart(sim["dist"], cand_idx,
-                                                 sim["field_n"], K),
+                        place_distribution_chart(
+                            sim["dist"], cand_idx, sim["field_n"],
+                            int(sim.get("rank_nsim") or K)),
                         width="stretch")
                     st.caption("Dashed lines mark 1st, Top-10, Top-100, and the "
                                "lineup's mean place. The x-axis covers valid "
@@ -3021,6 +3190,15 @@ with tabs[3]:
                              "overlap). 1.0 = allow near-duplicates; ~0.8 keeps "
                              "every exported lineup meaningfully distinct.")
 
+                    tie_break = st.checkbox(
+                        "Break statistical ties randomly", value=True,
+                        help="Treat differences in the ranking metric smaller than "
+                             "the simulation's own margin of error as ties, broken "
+                             "by a seeded shuffle. Stops a sub-noise projection edge "
+                             "from imposing a strict order that funnels every "
+                             "near-clone lineup onto the same player. Seeded, so a "
+                             "given sim + settings always exports the same set.")
+
                     meta = sim.get("players_meta") or {}
                     group_of, groups = ({}, [])
                     group_cap = 1.0
@@ -3058,9 +3236,36 @@ with tabs[3]:
                             } for g in groups])
                             st.dataframe(gdf, width="stretch",
                                          hide_index=True)
+                            balance_twins = st.checkbox(
+                                "Balance near-twin exposure", value=True,
+                                help="Give each member of a near-twin group a roughly "
+                                     "equal share of the exported set, instead of "
+                                     "letting a hair-higher projection take it all. "
+                                     "This adds a per-PLAYER cap (the group cap above "
+                                     "only limits the group's combined use); the two "
+                                     "controls compose.")
+                            if balance_twins:
+                                twin_slack = st.slider(
+                                    "Twin balance headroom", 0.0, 1.0, 0.25, 0.05,
+                                    help="0 = split a group's members perfectly "
+                                         "evenly; higher lets the better-projected "
+                                         "twin take somewhat more. 0.25 (default) "
+                                         "caps each of two twins near 62% so the "
+                                         "split lands ~60/40 at worst, not ~90/10.")
+                                _mcaps = value_group_member_caps(
+                                    groups, slack=float(twin_slack))
+                                for _nm, _fr in _mcaps.items():
+                                    player_caps[_nm] = min(
+                                        player_caps.get(_nm, 1.0), _fr)
                         else:
                             st.caption("No near-twin value groups at these "
                                        "tolerances.")
+
+                # tie-band ranking settings (seeded, so a given sim + settings is
+                # reproducible); off when the user unticks the box.
+                _tie_seed = 0 if tie_break else None
+                _tie_sims = (int(sim.get("rank_nsim") or sim.get("K") or 0)
+                             if tie_break else None)
 
                 W = W_naive = ev_extra = None
                 if ev_mode:
@@ -3073,7 +3278,8 @@ with tabs[3]:
                         pair_cap=pair_cap, core_cap=core_cap, max_overlap=max_overlap,
                         group_of=group_of, group_cap=group_cap,
                         player_caps=player_caps, team_caps=team_caps,
-                        player_mins=player_mins, team_mins=team_mins)
+                        player_mins=player_mins, team_mins=team_mins,
+                        tie_seed=_tie_seed)
                     if _ev is None:
                         ev_mode = False
                     else:
@@ -3085,7 +3291,8 @@ with tabs[3]:
                         group_of=group_of, group_cap=group_cap,
                         player_caps=player_caps, team_caps=team_caps,
                         player_mins=player_mins, team_mins=team_mins,
-                        cands=sim.get("cands"))
+                        cands=sim.get("cands"),
+                        tie_sims=_tie_sims, tie_seed=_tie_seed)
 
                 if info["chosen"] == 0:
                     st.error("No exportable lineups — players had no DK ID, or the caps "
@@ -3231,7 +3438,11 @@ with tabs[3]:
                             "least one exported lineup finishes in the money — the "
                             "portfolio-level win/cash metric. Compared against a "
                             "top-N-by-rank set of the same size, drawn from the same "
-                            "candidate pool.")
+                            "candidate pool. All figures are scored on a **held-out "
+                            "slice of sims** that neither set was ranked or selected "
+                            "on, so they're out-of-sample (and typically lower than "
+                            "an in-sample estimate — that gap is the optimizer's "
+                            "selection bias, now removed).")
 
 
 # --------------------------------------------------------------------------- #

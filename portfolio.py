@@ -78,6 +78,91 @@ def _jaccard(a, b):
     return len(a & b) / u if u else 0.0
 
 
+def _tie_banded_sort(res_df, sort_cols, n_sim, seed):
+    """Rank by `sort_cols` descending, but treat a difference in the PRIMARY
+    column smaller than its Monte-Carlo standard error as a tie broken by a
+    seeded shuffle.
+
+    The primary sort column is a success COUNT out of `n_sim` sims (e.g. Wins), so
+    its sampling SE in count units is ``sqrt(p*(1-p)*n_sim)``. Adding zero-mean
+    Gaussian noise at that scale and re-sorting makes lineups within ~1 SE of each
+    other swap order at random while genuinely-separated lineups keep their order
+    — so a projection edge that lives inside sim noise stops imposing a strict
+    ranking (which is what funnels every near-clone onto the same player). Seeded
+    for reproducibility; the remaining `sort_cols` are the deterministic
+    tiebreak."""
+    rng = np.random.default_rng(int(seed))
+    df = res_df.reset_index(drop=True)
+    primary = sort_cols[0]
+    v = df[primary].to_numpy(dtype=float)
+    denom = max(1, int(n_sim))
+    p = np.clip(v / denom, 0.0, 1.0)
+    se = np.sqrt(p * (1.0 - p) * denom)
+    se = np.where(se < 1e-9, 1e-9, se)
+    df = df.assign(_tie=v + rng.normal(0.0, se))
+    df = df.sort_values(["_tie"] + list(sort_cols), ascending=False)
+    return df.drop(columns="_tie").reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------- #
+# Near-twin balancing (per-member caps) and projection-uncertainty shrinkage
+# --------------------------------------------------------------------------- #
+def value_group_member_caps(groups, *, slack=0.25, cap=1.0):
+    """Per-MEMBER exposure caps that keep near-twin players balanced.
+
+    A value group's *aggregate* cap (``group_cap``) throttles how many lineups
+    touch the group at all; it does NOT stop one twin from taking that whole
+    share. This returns a ``{player: fraction}`` map giving each member of a
+    size-``g`` group at most ``(1 + slack) / g`` of the exported set, so two
+    statistically-tied players split ~50/50 (with `slack` headroom) instead of
+    ~90/10. `cap` is an upper clamp (the global default). Feed the result into
+    :func:`select_portfolio` / :func:`select_portfolio_ev` as ``player_caps``
+    (merge by min with any user override)."""
+    out = {}
+    for g in groups:
+        members = g.get("players", [])
+        size = len(members)
+        if size < 2:
+            continue
+        frac = min(float(cap), (1.0 + float(slack)) / size)
+        for nm in members:
+            out[nm] = frac
+    return out
+
+
+def shrink_value_group_means(score, groups, *, strength=0.5, name_key=None):
+    """Shrink each near-twin's per-sim score toward its GROUP's grand mean.
+
+    Two players within the value-group tolerances are statistically tied, but the
+    simulator propagates each one's noisy point mean as exact truth, so a
+    hair-higher projection wins every lineup and eats the exposure. This applies a
+    James-Stein-style shrink to the MEAN only — a constant per-player shift moving
+    each member's mean a `strength` fraction of the way to the group grand mean —
+    while preserving that player's sim-to-sim shape and every teammate/opponent
+    correlation (a constant shift changes no covariance). `strength` in [0, 1]:
+    0 is a no-op, 1 collapses the group's means to equal.
+
+    `score` maps a player key -> per-sim array; `name_key` maps a group player's
+    display name to that key (defaults to identity). Returns a NEW dict; inputs
+    are untouched and ungrouped players are passed through unchanged."""
+    key = name_key or (lambda x: x)
+    s = float(strength)
+    out = dict(score)
+    if s <= 0:
+        return out
+    for g in groups:
+        members = [m for m in g.get("players", []) if key(m) in out]
+        if len(members) < 2:
+            continue
+        arrs = [np.asarray(out[key(m)], dtype=np.float32) for m in members]
+        means = np.array([float(a.mean()) for a in arrs], dtype=np.float64)
+        grand = float(means.mean())
+        for m, a, mu in zip(members, arrs, means):
+            shift = np.float32(s * (grand - mu))     # move mean toward grand
+            out[key(m)] = a + shift
+    return out
+
+
 def _unmet_mins(player_minn, team_minn, expo, teamc):
     """List the minimum-exposure targets the finished portfolio fell short of,
     as [{kind, name, have, need}] — empty when every floor was met."""
@@ -101,9 +186,16 @@ def select_portfolio(res_df, n_select, sort_cols, *, cols, hitc,
                      team_cap=1.0, pair_cap=1.0, core_cap=1.0,
                      max_overlap=1.0, group_of=None, group_cap=1.0,
                      player_caps=None, team_caps=None,
-                     player_mins=None, team_mins=None):
+                     player_mins=None, team_mins=None,
+                     tie_sims=None, tie_seed=None):
     """Rank `res_df` by `sort_cols` (descending) then greedily accept lineups
     that keep every exposure cap and the pairwise-overlap ceiling satisfied.
+
+    When `tie_sims` (the number of sims the ranking counts were measured over)
+    and `tie_seed` are both given, the ranking is *tie-banded*: differences in
+    the primary sort column smaller than its Monte-Carlo standard error are
+    treated as ties and broken by a seeded shuffle, so a projection edge inside
+    sim noise stops funnelling every near-clone lineup onto the same player.
 
     Caps are fractions of `n_select` (0-1); 1.0 means "no cap". `eligible(names)`
     is an optional predicate (e.g. "every player maps to a DK ID"); rows that
@@ -130,7 +222,10 @@ def select_portfolio(res_df, n_select, sort_cols, *, cols, hitc,
     Returns (chosen_rows, info).
     """
     N = int(n_select)
-    rdf = res_df.sort_values(list(sort_cols), ascending=False).reset_index(drop=True)
+    if tie_sims and tie_seed is not None and len(res_df):
+        rdf = _tie_banded_sort(res_df, list(sort_cols), int(tie_sims), int(tie_seed))
+    else:
+        rdf = res_df.sort_values(list(sort_cols), ascending=False).reset_index(drop=True)
 
     def cap_n(frac):
         # frac<=0 means "exclude" (0 lineups); otherwise at least 1 so a tiny
@@ -283,10 +378,21 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
                         team_cap=1.0, pair_cap=1.0, core_cap=1.0,
                         max_overlap=1.0, group_of=None, group_cap=1.0,
                         player_caps=None, team_caps=None,
-                        player_mins=None, team_mins=None, eval_sims=None):
+                        player_mins=None, team_mins=None, eval_sims=None,
+                        tie_seed=None, pay_report=None):
     """Greedily build the export set that maximizes the expected *utility* of the
     portfolio's per-simulation dollar return, subject to the same exposure /
     diversity caps as :func:`select_portfolio`.
+
+    `pay_report`, when given, is an independent (held-out) ``(n_sim2, n_row)``
+    payout matrix used ONLY to compute the reported outcome stats (``exp_return``,
+    ``cash_rate`` …) and the returned ``W``. Selecting on `pay` and reporting on a
+    disjoint `pay_report` makes the headline EV genuinely out-of-sample instead of
+    the optimistic in-sample number you get from grading the set on the very sims
+    it was optimized against. `tie_seed`, when set, perturbs each step's marginal
+    gains by their Monte-Carlo standard error before the greedy picks, so two
+    near-twin lineups with statistically-indistinguishable gains alternate instead
+    of one always winning.
 
     This is the portfolio-level objective: instead of ranking each lineup by its
     standalone finish rate, we track the running portfolio winnings across every
@@ -403,7 +509,8 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
 
     W_sel = np.zeros(len(sel_idx), dtype=np.float64)
     cur_u = float(np.mean(util(W_sel)))
-    for _ in range(N):
+    n_sel = len(sel_idx)
+    for step in range(N):
         avail = elig & ~taken
         if not avail.any():
             break
@@ -411,6 +518,12 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
         # marginal gain of each available candidate: mean(util(W + pay)) - cur_u
         u_new = util(W_sel[:, None] + pay_sel[:, avail_idx])
         gains = u_new.mean(axis=0) - cur_u
+        if tie_seed is not None and n_sel > 1:
+            # treat gain differences below their Monte-Carlo SE as ties: perturb by
+            # the per-candidate SE so near-equal (e.g. near-twin) lineups alternate.
+            se = u_new.std(axis=0) / np.sqrt(n_sel)
+            rng = np.random.default_rng(int(tie_seed) + step)
+            gains = gains + rng.normal(0.0, np.where(se < 1e-12, 1e-12, se))
         order = np.argsort(-gains)
         picked = -1
         # while any minimum floor is unmet, prefer the best-gain lineup that both
@@ -445,8 +558,14 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
             groupc[g] += 1
 
     chosen = [rdf.iloc[i] for i in chosen_pos]
-    W = (pay[:, chosen_pos].sum(axis=1) if chosen_pos
-         else np.zeros(n_sim, dtype=np.float64))
+    # report on the held-out payouts when supplied, so the headline EV / cash rate
+    # are out-of-sample rather than measured on the sims we optimized against.
+    report = pay if pay_report is None else np.asarray(pay_report, dtype=np.float32)
+    if report.shape[1] != n_row:
+        raise ValueError(f"pay_report has {report.shape[1]} cols but res_df has {n_row}")
+    n_report = report.shape[0]
+    W = (report[:, chosen_pos].sum(axis=1) if chosen_pos
+         else np.zeros(n_report, dtype=np.float64))
     info = {
         "chosen": len(chosen), "requested": N, "skipped_unmapped": skipped,
         "max_pitcher": max((expo[n] for n in pitchers), default=0),
@@ -678,5 +797,46 @@ if __name__ == "__main__":
         cols=COLS, hitc=HITC, player_mins={'d1': 0.5})
     assert iM["player_expo"].get('d1', 0) >= 1, iM
     assert not iM["unmet_mins"], iM
+
+    # ---- held-out EV reporting: exp_return uses pay_report, not pay ----
+    # select on ev_pay (sim0 pays A&B), report on a disjoint matrix where A&B pay 0
+    # -> the selected set's reported return must reflect the report matrix.
+    ev_pay_report = np.array([[0., 0., 0., 0.],
+                              [0., 0., 0., 0.]])
+    chR, iR, WR = select_portfolio_ev(
+        ev_df, 2, ev_pay, utility("Aggressive (max ceiling)"),
+        cols=COLS, hitc=HITC, pay_report=ev_pay_report)
+    assert iR["exp_return"] == 0.0 and list(WR) == [0.0, 0.0], (iR, WR)
+    # same selection, in-sample report is optimistic (non-zero) -> the split matters
+    _, iIS, _ = select_portfolio_ev(
+        ev_df, 2, ev_pay, utility("Aggressive (max ceiling)"), cols=COLS, hitc=HITC)
+    assert iIS["exp_return"] > iR["exp_return"], (iIS, iR)
+
+    # ---- near-twin member caps: two twins split instead of one eating it all ----
+    twin_groups = [{"players": ["s1", "s2"], "pos": "SS"}]
+    mcaps = value_group_member_caps(twin_groups, slack=0.25)
+    assert abs(mcaps["s1"] - 0.625) < 1e-9 and mcaps["s2"] == mcaps["s1"], mcaps
+
+    # ---- tie-banded ranking is reproducible and reshuffles within-noise ties ----
+    tie_rows = [mk('pa', 'pb', base_h, {'Wins': 100, 'Top10': 0, 'Top100': 0})
+                for _ in range(8)]
+    tie_df = pd.DataFrame(tie_rows)
+    o1, _ = select_portfolio(tie_df, 3, ['Wins', 'Top10', 'Top100'],
+                             cols=COLS, hitc=HITC, tie_sims=1000, tie_seed=1)
+    o1b, _ = select_portfolio(tie_df, 3, ['Wins', 'Top10', 'Top100'],
+                              cols=COLS, hitc=HITC, tie_sims=1000, tie_seed=1)
+    assert [r['1B'] for r in o1] == [r['1B'] for r in o1b]   # seed-stable
+
+    # ---- mean-shrink pulls twin sim means together but preserves correlation ----
+    rng_ = np.random.default_rng(0)
+    shock = rng_.standard_normal(500)
+    sc_in = {"s1": 10.0 + shock + rng_.standard_normal(500) * 0.1,
+             "s2": 6.0 + shock + rng_.standard_normal(500) * 0.1}
+    corr_before = np.corrcoef(sc_in["s1"], sc_in["s2"])[0, 1]
+    sc_out = shrink_value_group_means(sc_in, twin_groups, strength=1.0)
+    assert abs(sc_out["s1"].mean() - sc_out["s2"].mean()) < 1e-3   # means collapsed
+    corr_after = np.corrcoef(sc_out["s1"], sc_out["s2"])[0, 1]
+    assert abs(corr_before - corr_after) < 1e-6                    # correlation kept
+    assert shrink_value_group_means(sc_in, twin_groups, strength=0.0) is not sc_in
 
     print("portfolio.py self-test passed:", info)
