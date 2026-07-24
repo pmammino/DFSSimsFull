@@ -118,6 +118,9 @@ def value_group_member_caps(groups, *, slack=0.25, cap=1.0):
     ~90/10. `cap` is an upper clamp (the global default). Feed the result into
     :func:`select_portfolio` / :func:`select_portfolio_ev` as ``player_caps``
     (merge by min with any user override)."""
+    if isinstance(groups, dict):
+        raise TypeError("value_group_member_caps expects the `groups` LIST from "
+                        "detect_value_groups (its 2nd return), not the group_of map")
     out = {}
     for g in groups:
         members = g.get("players", [])
@@ -145,6 +148,9 @@ def shrink_value_group_means(score, groups, *, strength=0.5, name_key=None):
     `score` maps a player key -> per-sim array; `name_key` maps a group player's
     display name to that key (defaults to identity). Returns a NEW dict; inputs
     are untouched and ungrouped players are passed through unchanged."""
+    if isinstance(groups, dict):
+        raise TypeError("shrink_value_group_means expects the `groups` LIST from "
+                        "detect_value_groups (its 2nd return), not the group_of map")
     key = name_key or (lambda x: x)
     s = float(strength)
     out = dict(score)

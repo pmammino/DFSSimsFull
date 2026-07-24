@@ -13,7 +13,8 @@ import pytest
 
 import portfolio_ev as pev
 from portfolio import (select_portfolio, select_portfolio_ev,
-                       value_group_member_caps, shrink_value_group_means)
+                       value_group_member_caps, shrink_value_group_means,
+                       detect_value_groups)
 
 COLS = ['P1', 'P2', 'C', '1B', '2B', '3B', 'SS', 'OF1', 'OF2', 'OF3']
 HITC = COLS[2:]
@@ -130,6 +131,27 @@ def test_tie_band_preserves_order_for_well_separated_lineups():
 # --------------------------------------------------------------------------- #
 # Projection-uncertainty mean shrinkage
 # --------------------------------------------------------------------------- #
+def test_detect_then_shrink_and_caps_use_the_groups_list():
+    # detect_value_groups returns (group_of, groups); the group-consuming helpers
+    # take the SECOND element (the list of group dicts). This guards the wiring
+    # that previously passed the group_of dict by mistake.
+    meta = {"sA": {"pos": "2B", "salary": 4500, "proj": 8.10, "team": "ATL"},
+            "sB": {"pos": "2B", "salary": 4500, "proj": 8.05, "team": "ATL"},
+            "solo": {"pos": "1B", "salary": 3000, "proj": 6.0, "team": "ATL"}}
+    group_of, groups = detect_value_groups(meta)
+    assert isinstance(groups, list) and groups and "players" in groups[0]
+    caps = value_group_member_caps(groups, slack=0.25)
+    assert set(caps) == {"sA", "sB"}
+    score = {"sA": np.full(50, 10.0, np.float32), "sB": np.full(50, 6.0, np.float32)}
+    out = shrink_value_group_means(score, groups, strength=1.0)
+    assert abs(out["sA"].mean() - out["sB"].mean()) < 1e-3
+    # passing the group_of dict by mistake fails loudly with a clear message
+    with pytest.raises(TypeError):
+        shrink_value_group_means(score, group_of, strength=1.0)
+    with pytest.raises(TypeError):
+        value_group_member_caps(group_of, slack=0.25)
+
+
 def test_shrink_collapses_means_but_keeps_correlation():
     rng = np.random.default_rng(0)
     shared = rng.standard_normal(400)
