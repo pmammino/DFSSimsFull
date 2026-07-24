@@ -616,7 +616,7 @@ def run_showdown_sim(dk_df, score_k, K, contest_size, id_map, num_candidates,
         for r in pool.itertuples():
             _sd_meta.setdefault(r.Name, {"pos": r.Pos, "salary": int(r.Salary),
                                          "team": r.Team, "proj": _sd_tal.get(r.Name)})
-        _sd_groups, _ = detect_value_groups(_sd_meta)
+        _, _sd_groups = detect_value_groups(_sd_meta)
         if _sd_groups:
             score_k = shrink_value_group_means(
                 score_k, _sd_groups, strength=float(proj_shrink), name_key=normname)
@@ -2427,7 +2427,7 @@ with tabs[0]:
                     _shrink_meta[r.Name] = {
                         "pos": r.Pos, "salary": int(r.Salary), "team": r.Team,
                         "proj": float(tal[r.Name]) if r.Name in tal else None}
-                _shrink_groups, _ = detect_value_groups(_shrink_meta)
+                _, _shrink_groups = detect_value_groups(_shrink_meta)
                 if _shrink_groups:
                     score_b = shrink_value_group_means(
                         score_b, _shrink_groups, strength=float(proj_shrink),
