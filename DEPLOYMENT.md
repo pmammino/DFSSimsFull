@@ -83,6 +83,50 @@ python scripts/push_artifacts.py     # add --check first to preview
 You should see the shared artifact set upload (two `.npy` sims, two projection
 CSVs, the build stamp, the slate JSON).
 
+Each publish also **archives a dated snapshot** of that day's prediction set under
+`history/<slate-date>/` in the same bucket, and prunes to a rolling window (see
+below) — so the latest keys always hold today's build and the history folder
+holds the last few days for accuracy review.
+
+---
+
+## Retention — reviewing past slates for sim accuracy
+
+Every publish (the scheduled refresh, `scripts/push_artifacts.py`, or an
+in-app rebuild) snapshots the build's **slate-specific prediction set** — the two
+DK sim arrays, the slate, the build stamp, and the projection summaries + manifest
+— into `history/<slate-date>/`. Retention is enforced automatically:
+
+- **Keeps the last 4 days** by default. A day of sims is ~25 MB, so 4 days
+  (~100 MB) sits far inside the R2/B2 ~10 GB **free tier**.
+- A **storage-budget guard** (default 2 GB) is applied on top: if a window ever
+  wouldn't fit the budget, only the most-recent days that fit are kept (the build
+  just published is always kept). So it can only ever *shrink* below 4 days, never
+  blow the free tier.
+- Snapshots are **deduped by build timestamp**, so re-publishing the same build
+  uploads nothing extra; a genuinely newer build for the same date (e.g. a forced
+  rebuild once final lineups post) overwrites that date's snapshot with the better
+  one.
+
+Tune the window with repo secrets / env vars (both optional):
+
+```
+SHARED_STORE_HISTORY_DAYS=4        # rolling window length
+SHARED_STORE_HISTORY_MAX_MB=2048   # hard storage cap for the window
+```
+
+Review the retained snapshots:
+
+```bash
+python scripts/push_artifacts.py --list-history            # dates + sizes retained
+python scripts/push_artifacts.py --pull-history 2026-07-24 # download that day into review/
+```
+
+`--pull-history` writes `hitter_dk_sims.npy`, `pitcher_dk_sims.npy`,
+`hitter_projections.csv`, `pitcher_projections.csv`, `sim_manifest.json`, and
+`slate.json` for the date, so you can score that slate's sims against the real box
+scores and feed what you learn back into the projection/sim logic.
+
 ---
 
 ## Step 4 — Schedule the morning refresh (so Stage B never blocks a Run)

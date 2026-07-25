@@ -38,7 +38,38 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check", action="store_true",
                     help="report artifact presence/sizes without uploading")
+    ap.add_argument("--no-history", action="store_true",
+                    help="skip archiving this build into the dated history/ window")
+    ap.add_argument("--list-history", action="store_true",
+                    help="list the retained dated snapshots and exit")
+    ap.add_argument("--pull-history", metavar="DATE",
+                    help="download a retained snapshot (YYYY-MM-DD) for review")
+    ap.add_argument("--pull-dir", default="review",
+                    help="destination dir for --pull-history (default: review/)")
     args = ap.parse_args()
+
+    if args.list_history:
+        rows = shared_store.list_history()
+        if not rows:
+            print("No dated snapshots (store unconfigured or nothing archived yet).")
+            return 0
+        print("Retained sim snapshots (newest first):")
+        for r in rows:
+            print(f"  {r['date']}  {r['size_mb']:7.2f} MB  ({r['files']} files)")
+        print(f"  total: {sum(r['size_mb'] for r in rows):.2f} MB")
+        return 0
+
+    if args.pull_history:
+        got = shared_store.pull_history(args.pull_history, args.pull_dir)
+        if not got:
+            print(f"Nothing pulled for {args.pull_history} "
+                  "(store unconfigured or date not retained).", file=sys.stderr)
+            return 1
+        print(f"Downloaded {len(got)} file(s) for {args.pull_history} into "
+              f"{args.pull_dir}/:")
+        for p in got:
+            print(f"  {os.path.relpath(p, HERE)}")
+        return 0
 
     print("Shared artifact set:")
     total = 0
@@ -69,12 +100,25 @@ def main():
 
     print("\nUploading to object store …")
     ok = shared_store.push()
-    if ok:
-        print("Done. The build stamp was written last, so the app will "
-              "pull the new build atomically on its next sync.")
-        return 0
-    print("Upload reported errors — check credentials/endpoint.", file=sys.stderr)
-    return 1
+    if not ok:
+        print("Upload reported errors — check credentials/endpoint.", file=sys.stderr)
+        return 1
+    print("Done. The build stamp was written last, so the app will "
+          "pull the new build atomically on its next sync.")
+
+    # Archive this build into the rolling dated history so past slates stay
+    # available for accuracy review, then report the retained window.
+    if not args.no_history:
+        date = shared_store.snapshot_history()
+        if date:
+            rows = shared_store.list_history()
+            keep_days, max_mb = shared_store._history_cfg()
+            print(f"Archived snapshot for {date}. Retained "
+                  f"{len(rows)} day(s) (window {keep_days}, cap {max_mb:.0f} MB): "
+                  + ", ".join(r["date"] for r in rows))
+        else:
+            print("Skipped history archive (could not determine the slate date).")
+    return 0
 
 
 if __name__ == "__main__":

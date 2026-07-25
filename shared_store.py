@@ -20,6 +20,7 @@ The shared state is the minimal set the app needs to be current and scorable:
 the two DK-point sim arrays, the per-PA projections, the build stamp (freshness
 source of truth), and the slate the sims were built from.
 """
+import glob
 import json
 import os
 import socket
@@ -39,6 +40,56 @@ ARTIFACTS = [
 ]
 STAMP = "out/.build_stamp.json"
 LOCK_KEY = "_refresh.lock"
+
+# --------------------------------------------------------------------------- #
+# Dated history retention — keep the last N days of each build's slate-specific
+# prediction set so simulation accuracy can be reviewed after the fact (compare
+# the archived sims/projections against the day's real box scores). Snapshots
+# live under history/<slate_date>/ in the same bucket. The canonical latest
+# artifacts (above) are untouched — this is purely additive archival.
+# --------------------------------------------------------------------------- #
+HISTORY_PREFIX = "history"
+# Defaults; overridable via secrets/env (see _history_cfg). A day of sims is
+# ~25 MB, so 4 days (~100 MB) sits far inside the R2/B2 ~10 GB free tier; the MB
+# budget is a hard guard so retention can never blow the free tier even if the
+# artifact set grows — if 4 days won't fit, we keep as many recent days as do.
+HISTORY_KEEP_DAYS = 4
+HISTORY_MAX_MB = 2048
+
+# The per-date review set: the DK sim arrays (the predicted distributions), the
+# slate they were built from, the build stamp, and the human-readable projection
+# summaries + manifest. Each entry is (local_source, history_basename); dated
+# deliverable names are resolved from the slate date at snapshot time so every
+# date's folder is self-contained with stable names.
+def _history_specs(date):
+    pairs = [
+        ("deliverables/hitter_dk_sims.npy", "hitter_dk_sims.npy"),
+        ("deliverables/pitcher_dk_sims.npy", "pitcher_dk_sims.npy"),
+        ("data/slate.json", "slate.json"),
+        (STAMP, "build_stamp.json"),
+        (f"deliverables/hitter_projections_{date}.csv", "hitter_projections.csv"),
+        (f"deliverables/pitcher_projections_{date}.csv", "pitcher_projections.csv"),
+        (f"deliverables/sim_manifest_{date}.json", "sim_manifest.json"),
+    ]
+    return [(src, f"{HISTORY_PREFIX}/{date}/{base}") for src, base in pairs]
+
+
+def _history_cfg():
+    """(keep_days, max_mb) for retention, overridable via secrets/env so the
+    window can be tuned without a code change."""
+    keep, mb = HISTORY_KEEP_DAYS, HISTORY_MAX_MB
+    cfg = _cfg() or {}
+    try:
+        keep = int(cfg.get("history_days") or os.environ.get(
+            "SHARED_STORE_HISTORY_DAYS") or keep)
+    except (TypeError, ValueError):
+        pass
+    try:
+        mb = float(cfg.get("history_max_mb") or os.environ.get(
+            "SHARED_STORE_HISTORY_MAX_MB") or mb)
+    except (TypeError, ValueError):
+        pass
+    return max(1, keep), max(1.0, mb)
 
 _local_lock = threading.Lock()   # per-process mutual exclusion (one instance)
 
@@ -167,6 +218,185 @@ def push():
         except Exception:
             ok = False
     return ok
+
+
+# --------------------------------------------------------------------------- #
+# Dated history: snapshot + retention
+# --------------------------------------------------------------------------- #
+def _slate_date():
+    """The slate date the current local build is for — the retention key.
+    Prefer the build stamp's ``slate_date``; fall back to ``data/slate.json``;
+    finally the newest ``deliverables/sim_manifest_<date>.json`` (always written
+    by run_slate). Returns 'YYYY-MM-DD' or None."""
+    for rel, field in ((STAMP, "slate_date"), ("data/slate.json", "date")):
+        p = os.path.join(HERE, rel)
+        if os.path.exists(p):
+            try:
+                v = json.load(open(p)).get(field)
+                if v:
+                    return str(v)
+            except Exception:
+                pass
+    manifests = glob.glob(os.path.join(HERE, "deliverables", "sim_manifest_*.json"))
+    if manifests:
+        try:
+            newest = max(manifests, key=os.path.getmtime)
+            v = json.load(open(newest)).get("date")
+            if v:
+                return str(v)
+        except Exception:
+            pass
+    return None
+
+
+def _select_history_to_keep(sizes_by_date, keep_days, max_mb):
+    """Pick which snapshot dates to KEEP: the most-recent `keep_days`, but never
+    exceeding `max_mb` total — if the budget can't hold that many days, keep as
+    many of the newest as fit. The single newest date is always kept (so the
+    build we just archived survives even if it alone is over budget). Pure /
+    S3-free so it is unit-testable. Returns (keep, drop) lists of dates."""
+    budget = float(max_mb) * 1e6
+    dates = sorted(sizes_by_date, reverse=True)     # newest first
+    keep, running = [], 0.0
+    for i, d in enumerate(dates):
+        sz = float(sizes_by_date[d])
+        if i == 0 or (len(keep) < keep_days and running + sz <= budget):
+            keep.append(d)
+            running += sz
+        else:
+            break                                    # dates are sorted; stop
+    drop = [d for d in dates if d not in set(keep)]
+    return keep, drop
+
+
+def _history_index(s3, cfg):
+    """Map snapshot date -> (total_bytes, [object_keys]) under history/."""
+    prefix = _key(cfg, HISTORY_PREFIX).rstrip("/") + "/"
+    out, token = {}, None
+    while True:
+        kw = {"Bucket": cfg["bucket"], "Prefix": prefix}
+        if token:
+            kw["ContinuationToken"] = token
+        try:
+            resp = s3.list_objects_v2(**kw)
+        except Exception:
+            break
+        for o in resp.get("Contents", []):
+            rest = o["Key"][len(prefix):]
+            date = rest.split("/", 1)[0]
+            if not date:
+                continue
+            sz, keys = out.get(date, (0, []))
+            out[date] = (sz + int(o.get("Size", 0)), keys + [o["Key"]])
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+    return out
+
+
+def prune_history(s3=None, cfg=None):
+    """Enforce the retention window/budget, deleting whole outdated snapshots.
+    Returns {'kept': [...], 'dropped': [...]} (dates)."""
+    if s3 is None:
+        s3, cfg = _client_and_cfg()
+    if not s3:
+        return {"kept": [], "dropped": []}
+    keep_days, max_mb = _history_cfg()
+    idx = _history_index(s3, cfg)
+    sizes = {d: idx[d][0] for d in idx}
+    keep, drop = _select_history_to_keep(sizes, keep_days, max_mb)
+    for d in drop:
+        for k in idx[d][1]:
+            try:
+                s3.delete_object(Bucket=cfg["bucket"], Key=k)
+            except Exception:
+                pass
+    return {"kept": keep, "dropped": drop}
+
+
+def _history_stamp_ts(s3, cfg, date):
+    """Build ts already archived for `date` (0 if none), so a re-publish of the
+    same slate only re-uploads when it's actually a newer build."""
+    try:
+        obj = s3.get_object(Bucket=cfg["bucket"],
+                            Key=_key(cfg, f"{HISTORY_PREFIX}/{date}/build_stamp.json"))
+        return float(json.loads(obj["Body"].read()).get("ts", 0) or 0)
+    except Exception:
+        return None
+
+
+def snapshot_history(date=None, force=False):
+    """Archive the current build's review set under history/<slate_date>/, then
+    prune to the retention window. Idempotent per build: skips the (large) upload
+    when this slate date is already archived at an equal-or-newer build ts, unless
+    `force`. Retention is enforced either way. No-op when the store is
+    unconfigured or the date can't be determined. Returns the date or None."""
+    s3, cfg = _client_and_cfg()
+    if not s3:
+        return None
+    date = date or _slate_date()
+    if not date:
+        return None
+    if not force:
+        archived = _history_stamp_ts(s3, cfg, date)
+        if archived is not None and archived >= _local_stamp_ts():
+            prune_history(s3, cfg)          # still keep the window tidy
+            return date
+    for src, rel in _history_specs(date):
+        p = os.path.join(HERE, src)
+        if not os.path.exists(p):
+            continue
+        try:
+            s3.upload_file(p, cfg["bucket"], _key(cfg, rel))
+        except Exception:
+            pass
+    prune_history(s3, cfg)
+    return date
+
+
+def list_history():
+    """Available snapshot dates (newest first) with size + file count, for
+    reviewing which days are retained."""
+    s3, cfg = _client_and_cfg()
+    if not s3:
+        return []
+    idx = _history_index(s3, cfg)
+    return [{"date": d, "size_mb": round(idx[d][0] / 1e6, 2), "files": len(idx[d][1])}
+            for d in sorted(idx, reverse=True)]
+
+
+def pull_history(date, dst_dir):
+    """Download a date's archived snapshot into `dst_dir` for offline accuracy
+    review. Returns the list of local paths written."""
+    s3, cfg = _client_and_cfg()
+    if not s3:
+        return []
+    prefix = _key(cfg, f"{HISTORY_PREFIX}/{date}").rstrip("/") + "/"
+    written, token = [], None
+    os.makedirs(dst_dir, exist_ok=True)
+    while True:
+        kw = {"Bucket": cfg["bucket"], "Prefix": prefix}
+        if token:
+            kw["ContinuationToken"] = token
+        try:
+            resp = s3.list_objects_v2(**kw)
+        except Exception:
+            break
+        for o in resp.get("Contents", []):
+            base = o["Key"][len(prefix):]
+            if not base:
+                continue
+            dst = os.path.join(dst_dir, base)
+            try:
+                os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+                s3.download_file(cfg["bucket"], o["Key"], dst)
+                written.append(dst)
+            except Exception:
+                pass
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+    return written
 
 
 # --------------------------------------------------------------------------- #

@@ -1606,6 +1606,10 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
             try:
                 with st.spinner("Publishing the refreshed build to the shared store…"):
                     shared_store.push()
+                    # archive this build into the rolling dated history so past
+                    # slates stay available for accuracy review (deduped by build
+                    # timestamp, so a same-build re-publish uploads nothing extra)
+                    shared_store.snapshot_history()
                 notes.append("Published the refreshed build to the shared store.")
             except Exception as e:
                 notes.append(f"⚠️ Could not publish to the shared store "
