@@ -25,6 +25,7 @@ import xml.etree.ElementTree as ET
 import urllib.request
 
 import slate_config as C
+import game_status
 
 
 def _norm_name(n):
@@ -339,8 +340,52 @@ def filter_slate_by_window(games, slate_window):
     return keep
 
 
+def filter_slate_postponed(games, date, schedule_json=None):
+    """Drop games MLB has postponed / cancelled / suspended for `date`.
+
+    The RotoWire feeds keep a game's players on the slate after it's been
+    postponed, so without this the pipeline builds lineups (and sims) around a
+    game that isn't happening. The authoritative source is the MLB StatsAPI
+    schedule endpoint (see game_status); a game is dropped when its matchup —
+    keyed order-independently by canonical team code, matching how Vegas totals
+    reconcile — is listed as not-being-played.
+
+    Best-effort: if StatsAPI is unreachable or lists no postponements, the games
+    are returned unchanged (game_status swallows failures), so a StatsAPI outage
+    can never empty the slate. `schedule_json` (a pre-fetched schedule dict)
+    bypasses the network fetch, mirroring the vegas_json / *_xml injection the
+    other builders use for tests.
+
+    Returns (kept_games, dropped) where `dropped` is a list of
+    {gid, away, home, status, reason, category} describing each removed game
+    (empty when nothing was postponed) so the caller can surface *why* those
+    players disappeared.
+    """
+    if not games:
+        return games, []
+    postponed = game_status.postponed_matchups(date, schedule_json=schedule_json)
+    if not postponed:
+        return games, []
+    keep, dropped = {}, []
+    for gid, rec in games.items():
+        info = postponed.get(_canon_matchup(rec))
+        if info:
+            dropped.append({'gid': gid, 'away': rec.get('away'),
+                            'home': rec.get('home'), 'status': info['status'],
+                            'reason': info['reason'], 'category': info['category']})
+        else:
+            keep[gid] = rec
+    if dropped:
+        for d in dropped:
+            reason = f" ({d['reason']})" if d['reason'] else ""
+            print(f"  [slate] {d['away']}@{d['home']} {d['status']}{reason} "
+                  f"— dropped from slate (not being played)", file=sys.stderr)
+    return keep, dropped
+
+
 def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=True,
-                date=None, slate_players=None, slate_window=None):
+                date=None, slate_players=None, slate_window=None,
+                drop_postponed=True, schedule_json=None):
     """Merge everything into one normalized slate.
 
     `date` (YYYY-MM-DD, optional): rebuild a *historical* slate. When given and
@@ -360,6 +405,12 @@ def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=Tr
     filter_slate_doubleheaders(). Falls back for slates with no window and is
     ignored when the day has no double-header.
 
+    `drop_postponed` (default True): drop games MLB has postponed / cancelled /
+    suspended (per the StatsAPI schedule) so their players aren't rostered or
+    simmed — see filter_slate_postponed(). The removed games are recorded under
+    the returned slate's 'postponed' key. `schedule_json` (optional) injects a
+    pre-fetched schedule dict to bypass the network fetch (used in tests).
+
     Returns slate = {
         'date': 'YYYY-MM-DD',
         'games': { gid: {
@@ -368,7 +419,8 @@ def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=Tr
             'lineups':  {'away':[...], 'home':[...]},
             'lineup_source': {'away':'confirmed|expected|none', 'home':...},
             'implied': {'away':float,'home':float,'total':float},
-        }}
+        }},
+        'postponed': [ {gid, away, home, status, reason, category}, … ],
     }
     """
     confirmed_xml = confirmed_xml or _http_get(_with_date(C.FEED_CONFIRMED, date))
@@ -433,8 +485,12 @@ def build_slate(confirmed_xml=None, expected_xml=None, vegas_json=None, write=Tr
 
     games = filter_slate_by_window(games, slate_window)
     games = filter_slate_doubleheaders(games, slate_players)
+    postponed = []
+    if drop_postponed:
+        games, postponed = filter_slate_postponed(games, date,
+                                                  schedule_json=schedule_json)
 
-    slate = {'date': date, 'games': games}
+    slate = {'date': date, 'games': games, 'postponed': postponed}
     if write:
         with open(os.path.join(C.DATA_DIR, 'slate.json'), 'w') as f:
             json.dump(slate, f, indent=2)
