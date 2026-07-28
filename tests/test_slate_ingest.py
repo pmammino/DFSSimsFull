@@ -63,7 +63,7 @@ def _names(g, side):
 def test_doubleheader_uses_on_slate_games_own_expected_lineup():
     """The night game (on-slate) must use ITS expected lineup, never the
     afternoon game's — even though both games share the same two teams."""
-    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", write=False,
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", schedule_json="{}", write=False,
                            slate_players=["Eduardo Rivera", "Mason Englert"])
     # off-slate afternoon game dropped, night game kept
     assert set(slate['games']) == {"76269", "76267"}
@@ -76,7 +76,7 @@ def test_doubleheader_uses_on_slate_games_own_expected_lineup():
 
 def test_single_game_expected_fallback_unaffected():
     """Ordinary (non-double-header) games still fall back to expected."""
-    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", write=False,
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", schedule_json="{}", write=False,
                            slate_players=["Eduardo Rivera", "Mason Englert"])
     g = slate['games']["76267"]
     assert _names(g, 'away') == ["Shohei Ohtani"]
@@ -95,7 +95,7 @@ def test_confirmed_lineup_takes_priority_over_expected():
         '<Player Id="99"><FirstName>Roman</FirstName><LastName>Anthony</LastName>'
         '<Position>LF</Position><BattingSpot>1</BattingSpot></Player>'
         '</Players></Team>')
-    slate = SI.build_slate(confirmed, _EXPECTED, vegas_json="{}", write=False,
+    slate = SI.build_slate(confirmed, _EXPECTED, vegas_json="{}", schedule_json="{}", write=False,
                            slate_players=["Eduardo Rivera", "Mason Englert"])
     g = slate['games']["76269"]
     assert _names(g, 'home') == ["Roman Anthony"]
@@ -109,7 +109,7 @@ def test_team_code_fallback_when_gids_do_not_match():
     expected_other_gids = _EXPECTED.replace('Id="76267"', 'Id="99999"')
     # Drop the double-header from confirmed so only the single game remains and
     # every team appears once in expected -> team-code fallback is unambiguous.
-    slate = SI.build_slate(_CONFIRMED, expected_other_gids, vegas_json="{}",
+    slate = SI.build_slate(_CONFIRMED, expected_other_gids, vegas_json="{}", schedule_json="{}",
                            write=False,
                            slate_players=["Gerrit Cole", "Roki Sasaki"])
     g = slate['games']["76267"]
@@ -123,7 +123,7 @@ def test_doubleheader_hitters_disambiguate_when_pitchers_tbd():
     slate lists only the night game's HITTERS. The on-slate game must still be
     identified from the batting orders — NOT fall back to keeping the earliest
     (afternoon) game, which would surface the off-slate game's pitchers."""
-    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", write=False,
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", schedule_json="{}", write=False,
                            slate_players=["Ryan Vilade", "Willson Contreras"])
     assert "76269" in slate['games']          # night game kept
     assert "77699" not in slate['games']      # afternoon game dropped
@@ -147,7 +147,7 @@ def test_window_drops_off_window_doubleheader_game():
     slate time window can tell them apart. The 13:35 game must be dropped and its
     pitchers (Jax/Bennett) must not survive — even when they're in slate_players."""
     window = {"start": "2026-07-17T19:05:00-07:00", "end": "2026-07-17T22:10:00-07:00"}
-    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", write=False,
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", schedule_json="{}", write=False,
                            slate_players=["Griffin Jax", "Jake Bennett",
                                           "Mason Englert", "Eduardo Rivera"],
                            slate_window=window)
@@ -161,7 +161,7 @@ def test_window_drops_off_window_doubleheader_game():
 
 def test_window_none_is_a_noop():
     """No window (e.g. CSV upload) leaves the games untouched by the window filter."""
-    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", write=False,
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", schedule_json="{}", write=False,
                            slate_window=None)
     assert {"76269", "77699", "76267"} <= set(slate['games'])
 
@@ -170,9 +170,84 @@ def test_window_never_empties_the_slate():
     """A window that matches nothing (bad/again-shaped feed) must not wipe the
     slate — all games are kept as a safety fallback."""
     bad = {"start": "2020-01-01T00:00:00-04:00", "end": "2020-01-01T01:00:00-04:00"}
-    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", write=False,
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}", schedule_json="{}", write=False,
                            slate_window=bad)
     assert len(slate['games']) == 3           # nothing dropped
+
+
+# --- postponement / cancellation detection (filter_slate_postponed) ----------
+#
+# The StatsAPI schedule feed keys games by full team name; canonical_team folds
+# those onto the slate's codes (LA->LAD, NY-A->NYY). A schedule that marks the
+# single LAD@NYY game Postponed must drop game 76267 and record why.
+
+def _schedule(*games):
+    """Build a minimal StatsAPI-schedule dict. Each game is
+    (away_name, home_name, detailedState, coded, reason)."""
+    return {"dates": [{"games": [
+        {"gamePk": i, "status": {"detailedState": ds, "codedGameState": cd,
+                                 "reason": rsn},
+         "teams": {"away": {"team": {"name": a}},
+                   "home": {"team": {"name": h}}}}
+        for i, (a, h, ds, cd, rsn) in enumerate(games)]}]}
+
+
+def test_postponed_game_is_dropped_and_recorded():
+    sched = _schedule(("Los Angeles Dodgers", "New York Yankees",
+                       "Postponed", "D", "Rain"))
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}",
+                           schedule_json=sched, write=False,
+                           slate_players=["Eduardo Rivera", "Mason Englert"])
+    assert "76267" not in slate['games']          # LAD@NYY dropped
+    assert "76269" in slate['games']              # BOS/TB night game unaffected
+    pp = slate['postponed']
+    assert len(pp) == 1
+    assert {pp[0]['away'], pp[0]['home']} == {"LA", "NY-A"}
+    assert pp[0]['category'] == "postponed"
+    assert pp[0]['reason'] == "Rain"
+
+
+def test_cancelled_and_suspended_are_dropped():
+    for state, coded, cat in [("Cancelled", "C", "cancelled"),
+                              ("Suspended", "U", "suspended")]:
+        sched = _schedule(("Los Angeles Dodgers", "New York Yankees",
+                           state, coded, ""))
+        slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}",
+                               schedule_json=sched, write=False,
+                               slate_players=["Eduardo Rivera", "Mason Englert"])
+        assert "76267" not in slate['games'], state
+        assert slate['postponed'][0]['category'] == cat
+
+
+def test_scheduled_game_is_kept():
+    """A normal 'Scheduled'/'In Progress' status drops nothing."""
+    sched = _schedule(("Los Angeles Dodgers", "New York Yankees",
+                       "Scheduled", "S", ""))
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}",
+                           schedule_json=sched, write=False,
+                           slate_players=["Eduardo Rivera", "Mason Englert"])
+    assert "76267" in slate['games']
+    assert slate['postponed'] == []
+
+
+def test_empty_schedule_never_drops_games():
+    """A StatsAPI outage (empty/best-effort {}) must keep every game."""
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}",
+                           schedule_json="{}", write=False,
+                           slate_players=["Eduardo Rivera", "Mason Englert"])
+    assert "76267" in slate['games']
+    assert slate['postponed'] == []
+
+
+def test_drop_postponed_flag_disables_the_filter():
+    """drop_postponed=False leaves even a postponed game in place."""
+    sched = _schedule(("Los Angeles Dodgers", "New York Yankees",
+                       "Postponed", "D", "Rain"))
+    slate = SI.build_slate(_CONFIRMED, _EXPECTED, vegas_json="{}",
+                           schedule_json=sched, drop_postponed=False, write=False,
+                           slate_players=["Eduardo Rivera", "Mason Englert"])
+    assert "76267" in slate['games']
+    assert slate['postponed'] == []
 
 
 if __name__ == '__main__':

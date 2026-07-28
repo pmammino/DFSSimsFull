@@ -135,6 +135,15 @@ the last build. The projection rebuild and the sim rebuild are **decoupled**:
    This is what pulls the new lineups/matchups/totals into the sims.
 3. **Nothing changed** → no rebuild; it uses the sims already on disk.
 
+**Postponed / cancelled games are dropped automatically.** The RotoWire slate
+feeds keep a game's players on the slate even after MLB postpones or cancels it,
+so the slate ingest cross-checks each game against the authoritative **MLB
+StatsAPI schedule** (`game_status.py`) and removes any game marked Postponed /
+Cancelled / Suspended — so its players are never simmed or rostered. The Setup
+tab shows a warning listing the affected games and player count. This is
+best-effort: if the schedule can't be reached, every game is kept (a StatsAPI
+outage never empties the slate).
+
 A **Force full refresh** checkbox (in step 2) rebuilds both projections and
 sims regardless of staleness and bypasses the once-a-day projection-retry guard
 — use it right after fixing a data/connection issue.

@@ -226,6 +226,16 @@ def _load_slate_catalog():
     return dk_slate_feed.build_catalog()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_postponements(date=None):
+    """Games MLB has postponed / cancelled / suspended today (per the StatsAPI
+    schedule), cached for 5 min. Returns game_status.postponed_list() — a list
+    of {away, home, status, reason, category} keyed by canonical team code.
+    Best-effort: [] when the schedule can't be reached."""
+    import game_status
+    return game_status.postponed_list(date)
+
+
 @st.cache_data(show_spinner=False)
 def cached_params(path, mtime):
     if os.path.exists(path):
@@ -1916,6 +1926,42 @@ with tabs[0]:
             f"{games_lbl}, {slate['n_players']} players, "
             f"{slate['n_owned']} with feed ownership"
             + (f" ({unowned} defaulted to 0%)." if unowned else "."))
+
+        # ---- postponed / cancelled game guard --------------------------------
+        # The RotoWire salaries + ownership feed keeps a game's players on the
+        # slate even after MLB postpones it, so we'd otherwise build lineups
+        # around a game that isn't happening. Warn when a game on THIS slate
+        # isn't being played (authoritative: the MLB StatsAPI schedule). The
+        # sim/pool build drops those players automatically — the live slate read
+        # feeds live_playable, and slate_ingest.filter_slate_postponed removes
+        # the game from the sims themselves.
+        try:
+            postponed = _load_postponements()
+        except Exception:
+            postponed = []
+        if postponed:
+            from slate_config import canonical_team
+            slate_teams = {canonical_team(p.get("team")) for p in slate["players"]}
+            hit = [pp for pp in postponed
+                   if canonical_team(pp["away"]) in slate_teams
+                   or canonical_team(pp["home"]) in slate_teams]
+            if hit:
+                aff_codes = set()
+                for pp in hit:
+                    aff_codes.update({canonical_team(pp["away"]),
+                                      canonical_team(pp["home"])})
+                n_aff = sum(1 for p in slate["players"]
+                            if canonical_team(p.get("team")) in aff_codes)
+                lines = "\n".join(
+                    f"- **{pp['away']} @ {pp['home']}** — {pp['status']}"
+                    + (f" ({pp['reason']})" if pp.get("reason") else "")
+                    for pp in hit)
+                st.warning(
+                    f"⛔ **{len(hit)} game(s) on this slate are not being "
+                    f"played** (per the MLB schedule):\n{lines}\n\nTheir "
+                    f"**{n_aff} player(s)** are automatically excluded from the "
+                    "sims and generated lineups — build around the live games "
+                    "only. If a game was just reinstated, hit **↻ Refresh**.")
     elif catalog is not None:
         st.warning("No slates are available from the feed right now — "
                    "try refreshing in a moment.")
