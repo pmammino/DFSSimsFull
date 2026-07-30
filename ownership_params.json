@@ -1,0 +1,19 @@
+{
+  "hit": {
+    "proj": 0.533,
+    "ceil_shape": 0.0,
+    "value": 0.55,
+    "team_total": 0.35
+  },
+  "pit": {
+    "proj": 0.873,
+    "ceil_shape": 0.0,
+    "value": 0.6,
+    "team_total": 0.0
+  },
+  "tau": 1.0,
+  "chalk_k": 0.347,
+  "n_medium": 3000,
+  "ceil_pct": 90.0,
+  "min_own": 0.05
+}

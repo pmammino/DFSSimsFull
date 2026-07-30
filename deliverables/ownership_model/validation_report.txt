@@ -1,0 +1,22 @@
+matched 942 player-rows across 6 contests / 4 slates
+
+===== in-sample fit (all 4 slates) =====
+  HIT: n= 856  Spearman=0.605  MAE=3.18%  top10%-hit=0.41  betas={'proj': np.float64(0.53), 'ceil_shape': np.float64(0.0)}
+  PIT: n=  86  Spearman=0.733  MAE=5.06%  top10%-hit=0.75  betas={'proj': np.float64(0.87), 'ceil_shape': np.float64(0.0)}
+
+===== leave-one-slate-out validation =====
+  HIT holdout 2026-07-26: n= 177  Spearman=0.564  MAE=2.92%  top10%-hit=0.29
+  HIT holdout 2026-07-27: n= 213  Spearman=0.672  MAE=3.77%  top10%-hit=0.43
+  HIT holdout 2026-07-28: n= 168  Spearman=0.627  MAE=2.71%  top10%-hit=0.38
+  HIT holdout 2026-07-29: n= 298  Spearman=0.563  MAE=3.22%  top10%-hit=0.48
+  HIT OOS mean: Spearman=0.603  MAE=3.19%  top10%-hit=0.41
+  PIT holdout 2026-07-26: n=  21  Spearman=0.590  MAE=3.95%  top10%-hit=1.00
+  PIT holdout 2026-07-27: n=  14  Spearman=0.829  MAE=6.19%  top10%-hit=1.00
+  PIT holdout 2026-07-28: n=  19  Spearman=0.784  MAE=6.07%  top10%-hit=0.00
+  PIT holdout 2026-07-29: n=  32  Spearman=0.673  MAE=4.68%  top10%-hit=0.67
+  PIT OOS mean: Spearman=0.703  MAE=5.06%  top10%-hit=0.66
+
+===== contest-size chalk (k) =====
+  chalk pair 2026-07-27: 411->2972 entries  own_l~own_s^0.23  k~0.89  (matched 13)
+  chalk pair 2026-07-29: 588->9803 entries  own_l~own_s^0.63  k~0.30  (matched 165)
+  estimated chalk_k = 0.347
