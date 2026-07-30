@@ -219,3 +219,43 @@ rate, monotonic-in-quality downside, output coherence, opener behavior). Reprodu
 
 **Not yet done (still recommended):** P2 (couple each HR to its own R/RBI to lift the hitter
 ceiling) and P3–P5 remain open.
+
+---
+
+## P2 Implemented — couple each HR to its own R/RBI
+
+**What changed (`sim_proj.simulate`, hitter run-conservation step).** The team run total is now
+clamped up to the HR count (`team_runs_int = max(round(team_raw·c_scale), team_hr)` — a team can't
+score fewer runs than it hit homers), and each HR is credited to **its own hitter** as +1 R and
++1 RBI; only the *residual* team runs (`team_runs_int − team_hr`) are split by the projection-weight
+multinomial. Both R and RBI still draw from the one `team_runs_int`, so
+`Σ R == Σ RBI == team runs` conservation is preserved exactly.
+
+**Why:** the review found hitter P(DK≥30) light (4.1% in-sim vs 5.7% observed) and the two biggest
+booms poking through p99. Root cause: the old allocation was decoupled from *who homered*, so a
+batter's HR often didn't book the run he scored or the RBI he drove in — a solo HR should always be
+worth +2 R and +2 RBI on top of the +10.
+
+**Validation (`validate_hitter_hr_rbi.py`, synthetic 9-man lineup, OLD vs NEW):**
+
+| | OLD | **NEW** |
+|---|---|---|
+| team mean DK (mean preserved) | 68.37 | **68.37** |
+| pooled per-hitter mean / std | 7.60 / 7.77 | **7.60 / 8.39** |
+| P(DK ≥ 20) | 8.11% | **9.30%** |
+| P(DK ≥ 30) | 2.04% | **2.72%** (+33%) |
+| P(DK ≥ 40) | 0.50% | **0.75%** (+50%) |
+| pooled max | 81 | **93** |
+| Σ R == team / Σ RBI == team | 100% / 100% | **100% / 100%** |
+| HR games missing own R/RBI | **66%** (31,105 / 47,183) | **0%** |
+
+**Read:** the mean is unchanged and team conservation still holds exactly, while the boom tail lifts
+by the expected magnitude — the old model failed to credit the batter his own run/RBI in ~two-thirds
+of HR games; that is now guaranteed, so a solo HR always books its full 14 DK and multi-HR games
+collect their runs. The +33% lift in P(≥30) closes most of the empirical shortfall found in the
+review. (An exact re-grade against the 4 days isn't possible for hitters — team-context inputs aren't
+in the history zip — so this is validated at the mechanism/population level, consistent with the
+pitcher caveat above.)
+
+Guarded by `tests/test_sim_hitter_hr_rbi.py` (HR self-run/RBI guarantee on the real `simulate()`,
+team conservation, solo-HR ≥ 14 DK).
