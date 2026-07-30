@@ -1,0 +1,124 @@
+"""
+Regression guards for the coherent per-batter pitcher model in sim_proj.
+
+Context: a walk-forward grade of the sim against real DK results (Jul 2026,
+83 starts) found the OLD pitcher model's downside tail was far too thin —
+P(DK<0) was ~4% in-sim vs ~11% observed and per-player std ~7.7 vs ~10.4 —
+because outs/K/H/BB were independent binomials off one batters-faced count and
+ER was a nearly deterministic RA9*IP/9. The new `_sim_pitcher` plays the outing
+out batter-by-batter with an inning that clears every three outs and an
+endogenous hook that pulls a struggling starter, which fattens the negative
+tail WITHOUT shifting the mean. These tests pin both properties.
+"""
+import numpy as np
+import sim_proj
+
+
+def _vec(q):
+    """A quality-parameterised starter vec (higher q = better pitcher)."""
+    return dict(
+        tbf_per_ip=4.30 - 0.06 * q,
+        k_pct=float(np.clip(0.215 + 0.045 * q, 0.10, 0.38)),
+        h_per_bf=float(np.clip(0.230 - 0.020 * q, 0.14, 0.32)),
+        hr_per_bf=float(np.clip(0.032 - 0.006 * q, 0.010, 0.060)),
+        bb_pct=float(np.clip(0.082 - 0.008 * q, 0.03, 0.14)),
+        hbp_per_bf=0.010,
+        era=4.20 - 0.55 * q,
+        ra9=4.55 - 0.60 * q,
+    )
+
+
+def _workload(vec, rng, n):
+    Lg = rng.standard_normal(n); Lt = rng.standard_normal(n)
+    sho = 0.20 * Lg + 0.50 * Lt
+    m_opp = np.exp(sho - 0.5 * (0.20 ** 2 + 0.50 ** 2))
+    z = (sho - sho.mean()) / (sho.std() + 1e-9)
+    bf = np.clip(rng.normal(vec['tbf_per_ip'] * 5.6, 3.0, n) - z * 3.0
+                 - (vec['era'] - 4.20) * 0.8, 8, 34)
+    wb = max(0.20, min(0.75, 0.500 + (4.20 - vec['era']) * 0.03))
+    return bf, m_opp, z, wb
+
+
+def _old_mean(vec, bf, m_opp, z, wb, rng, n):
+    """Mean DK under the PRE-CHANGE pitcher model (for mean-preservation check)."""
+    bf = np.clip(bf, 0, 40).astype(int)
+    opb = max(0.55, min(0.80, 3.0 / max(vec['tbf_per_ip'], 3.2)))
+    outs = np.clip(np.round(bf * opb).astype(int), 0, 27); ip = outs / 3.0
+    k = rng.binomial(bf, min(0.6, vec['k_pct']))
+    h = rng.binomial(bf, np.clip(vec['h_per_bf'] * m_opp, 0.05, 0.60))
+    hr = rng.binomial(bf, np.clip(vec['hr_per_bf'] * m_opp, 0.003, 0.12))
+    bb = rng.binomial(bf, np.clip(vec['bb_pct'] * np.sqrt(m_opp), 0.02, 0.25))
+    hbp = rng.binomial(bf, min(0.05, vec['hbp_per_bf']))
+    er = np.round(np.clip(vec['ra9'] * ip / 9.0 + (h * 0.10 + hr * 0.55 + bb * 0.07 - 0.9)
+                          + z * 0.5 + rng.normal(0, 0.6, n), 0, 15)).astype(int)
+    win = ((ip >= 5.0) & (rng.uniform(0, 1, n) < np.clip(wb - er * 0.04 - z * 0.03, 0.02, 0.85))).astype(int)
+    cg = (ip >= 9.0).astype(int); cgs = (cg & (er == 0)).astype(int); nh = (cgs & (h == 0)).astype(int)
+    return sim_proj.dk_pitcher(outs, k, win, er, h, bb, hbp, cg, cgs, nh).mean()
+
+
+def test_mean_preserved_vs_old_model():
+    """New per-batter model must reproduce the old model's mean across the
+    quality spectrum (the projection level is well-calibrated; only the tail
+    was wrong). Allow a small tolerance for the model change."""
+    n = 40000
+    for q in (-1.5, -0.5, 0.5, 1.5, 2.5):
+        vec = _vec(q)
+        rng = np.random.default_rng(100 + int(q * 10))
+        bf, m_opp, z, wb = _workload(vec, rng, n)
+        old_mu = _old_mean(vec, bf, m_opp, z, wb, np.random.default_rng(7), n)
+        new_mu = sim_proj._sim_pitcher(vec, bf, m_opp, z, True, wb, 27,
+                                       np.random.default_rng(7), n)['dk'].mean()
+        assert abs(new_mu - old_mu) < 1.2, (q, old_mu, new_mu)
+
+
+def test_downside_tail_is_realistic():
+    """A league-average starter must blow up into negative DK at a realistic
+    rate (the whole point of the fix) and carry realistic dispersion — the old
+    model gave P(DK<0) ~ 0.01-0.04 and std ~ 6-7, which was too thin."""
+    n = 40000
+    vec = _vec(0.0)
+    rng = np.random.default_rng(2026)
+    bf, m_opp, z, wb = _workload(vec, rng, n)
+    out = sim_proj._sim_pitcher(vec, bf, m_opp, z, True, wb, 27, rng, n)
+    dk = out['dk']
+    assert 0.07 < (dk < 0).mean() < 0.22, (dk < 0).mean()   # realistic blow-up rate
+    assert dk.std() > 8.5, dk.std()                         # realistic dispersion
+    assert 10.0 < dk.mean() < 16.0, dk.mean()               # sane projection level
+
+
+def test_worse_pitchers_blow_up_more():
+    """P(DK<0) must increase monotonically as pitcher quality falls."""
+    n = 40000
+    p = []
+    for q in (2.0, 0.5, -1.0):
+        vec = _vec(q); rng = np.random.default_rng(55)
+        bf, m_opp, z, wb = _workload(vec, rng, n)
+        dk = sim_proj._sim_pitcher(vec, bf, m_opp, z, True, wb, 27, rng, n)['dk']
+        p.append((dk < 0).mean())
+    assert p[0] < p[1] < p[2], p
+
+
+def test_output_coherence():
+    """Returned line must be internally coherent and finite."""
+    n = 20000
+    vec = _vec(0.3); rng = np.random.default_rng(9)
+    bf, m_opp, z, wb = _workload(vec, rng, n)
+    o = sim_proj._sim_pitcher(vec, bf, m_opp, z, True, wb, 27, rng, n)
+    for kk in ('dk', 'ip', 'k', 'bb', 'h', 'hr', 'er', 'win', 'bf'):
+        assert kk in o and np.isfinite(np.asarray(o[kk], float)).all()
+    assert (o['ip'] <= 9.0 + 1e-9).all()          # outs_cap respected
+    assert (o['k'] <= o['bf']).all()              # can't strike out more than faced
+    assert (o['h'] >= o['hr']).all()              # HR are a subset of hits
+    assert set(np.unique(o['win'])).issubset({0, 1})
+
+
+def test_opener_is_short_and_cannot_win():
+    """The opener path (can_win=False, small outs_cap) yields short outings and
+    never records a win."""
+    n = 20000
+    vec = _vec(0.5); rng = np.random.default_rng(11)
+    bf = np.clip(rng.normal(4.6, 1.3, n), 2, 9)
+    m_opp = np.ones(n); z = rng.standard_normal(n)
+    o = sim_proj._sim_pitcher(vec, bf, m_opp, z, False, 0.0, 9, rng, n)
+    assert o['win'].sum() == 0
+    assert o['ip'].mean() < 3.0

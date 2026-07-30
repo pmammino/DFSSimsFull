@@ -54,6 +54,25 @@ OPENER_BF_MEAN, OPENER_BF_SD = 4.6, 1.3
 # so scale == 1.0 (no override) reproduces the validated baseline exactly.
 TOTAL_CEIL_GAIN = 0.75
 
+# ── pitcher per-batter model (coherent outing + endogenous hook) ───────────────
+# The old pitcher sim drew outs, K, H, HR, BB independently off one batters-faced
+# count and anchored ER to a near-deterministic RA9·IP/9, so innings were
+# DECOUPLED from how the outing actually went — a shelling never shortened the
+# start and ER carried almost no dispersion. A walk-forward grade against real DK
+# results (Jul 2026, 83 starts) showed the downside tail was far too thin:
+# P(DK<0) was 4% in-sim vs ~11% observed and per-player std ~7.7 vs ~10.4. This
+# model instead plays the outing out batter-by-batter (mirroring the hitter
+# per-PA loop): each PA is one coherent outcome, runners advance with an inning
+# that clears every three outs, and the manager PULLS the starter once earned
+# runs cross a per-sim hook tolerance. Bad outings now self-truncate to few outs
+# AND many ER, which is exactly how a real negative DK line is produced. The run
+# rate and hook are tuned so the MEAN is preserved across the quality spectrum
+# (bias ~0 vs the old model) while std widens to ~10 and P(DK<0) rises into the
+# observed band — the middle of the distribution (cruising starts) is unchanged.
+HIT_RUN_ADV   = 0.34   # P(a given runner scores) on a non-HR hit (mean-preserving)
+HOOK_ER_MEAN  = 7.0    # earned runs a manager tolerates before pulling a starter
+HOOK_ER_SD    = 1.8
+
 
 def _pa_per_game(slot):
     return 4.2 - (slot - 1) * 0.055
@@ -61,23 +80,58 @@ def _pa_per_game(slot):
 
 def _sim_pitcher(vec, bf_sim, m_opp, z, can_win, win_base, outs_cap, rng, n):
     bf_sim = np.clip(bf_sim, 0, 40).astype(int)
-    # outs/BF implied by TBF_per_IP (batters per inning -> outs per batter)
+    # Planned workload as a LEASH in outs (what he throws if cruising). Same
+    # TBF_per_IP -> outs/BF anchor as before, so the innings ceiling is unchanged.
     outs_per_bf = max(0.55, min(0.80, 3.0 / max(vec['tbf_per_ip'], 3.2)))
-    outs = np.clip(np.round(bf_sim * outs_per_bf).astype(int), 0, outs_cap)
-    ip = outs / 3.0
-    k  = rng.binomial(bf_sim, min(0.6, vec['k_pct']))
-    h_r  = np.clip(vec['h_per_bf']  * m_opp, 0.05, 0.60)
+    planned_outs = np.clip(np.round(bf_sim * outs_per_bf).astype(int), 0, outs_cap)
+
+    # Per-batter outcome probabilities (same matchup adjustment + clips as before).
+    h_r  = np.clip(vec['h_per_bf']  * m_opp, 0.05, 0.60)   # all hits incl HR
     hr_r = np.clip(vec['hr_per_bf'] * m_opp, 0.003, 0.12)
     bb_r = np.clip(vec['bb_pct']    * np.sqrt(m_opp), 0.02, 0.25)
-    h  = rng.binomial(bf_sim, h_r)
-    hr = rng.binomial(bf_sim, hr_r)
-    bb = rng.binomial(bf_sim, bb_r)
-    hbp = rng.binomial(bf_sim, min(0.05, vec['hbp_per_bf']))
-    # earned runs anchored to projected RA9 (per-IP), correlated to traffic + shock
-    ra9 = vec.get('ra9', 4.6)
-    er_mean = ra9 * ip / 9.0
-    er = np.round(np.clip(er_mean + (h*0.10 + hr*0.55 + bb*0.07 - 0.9)
-                          + z * 0.5 + rng.normal(0, 0.6, n), 0, 15)).astype(int)
+    hbp_r = np.full(n, min(0.05, vec['hbp_per_bf']))
+    k_r   = np.full(n, min(0.60, vec['k_pct']))
+    hit_nh = np.clip(h_r - hr_r, 0.0, None)               # non-HR hits
+    # Keep the six named outcomes + a BIP-out remainder a valid partition.
+    tot = hr_r + hit_nh + bb_r + hbp_r + k_r
+    scl = np.where(tot > 0.97, 0.97 / tot, 1.0)
+    hr_r = hr_r*scl; hit_nh = hit_nh*scl; bb_r = bb_r*scl; hbp_r = hbp_r*scl; k_r = k_r*scl
+    c1 = hr_r; c2 = c1+hit_nh; c3 = c2+bb_r; c4 = c3+hbp_r; c5 = c4+k_r  # u>=c5 -> BIP out
+
+    # Per-sim hook tolerance. A shock term (z) tightens the leash in a big game.
+    hook = np.round(rng.normal(HOOK_ER_MEAN, HOOK_ER_SD, n) - np.clip(z, 0, None)*0.6).clip(3, 14)
+    if not can_win:                       # opener / bulk-reliever: much shorter leash
+        hook = np.minimum(hook, rng.integers(3, 6, n))
+
+    outs = np.zeros(n, int); k = np.zeros(n, int); h = np.zeros(n, int); hr = np.zeros(n, int)
+    bb = np.zeros(n, int); hbp = np.zeros(n, int); er = np.zeros(n, int); bf = np.zeros(n, int)
+    runners = np.zeros(n, int); inn_outs = np.zeros(n, int)
+    safety = planned_outs + 22            # absolute batter backstop
+    for _ in range(int(planned_outs.max()) + 24):
+        active = (outs < planned_outs) & (er < hook) & (bf < safety)
+        if not active.any():
+            break
+        idx = np.where(active)[0]
+        u = rng.uniform(0, 1, idx.size)
+        c1a, c2a, c3a, c4a, c5a = c1[idx], c2[idx], c3[idx], c4[idx], c5[idx]
+        is_hr = u < c1a; is_h = (u >= c1a) & (u < c2a); is_bb = (u >= c2a) & (u < c3a)
+        is_hbp = (u >= c3a) & (u < c4a); is_k = (u >= c4a) & (u < c5a); is_out = u >= c5a
+        run = runners[idx]; bf[idx] += 1
+        # HR clears the bases and plates the batter
+        i = idx[is_hr]; er[i] += run[is_hr] + 1; runners[i] = 0; hr[i] += 1; h[i] += 1
+        # non-HR hit: existing runners score ~Binom(runners, ADV); batter to first
+        i = idx[is_h]; rr = run[is_h]; sc = rng.binomial(rr, HIT_RUN_ADV)
+        er[i] += sc; h[i] += 1; runners[i] = np.minimum(3, (rr - sc) + 1)
+        # walk / HBP force a run only with the bases loaded
+        i = idx[is_bb]; rr = runners[i]; er[i] += (rr >= 3).astype(int); runners[i] = np.minimum(3, rr+1); bb[i] += 1
+        i = idx[is_hbp]; rr = runners[i]; er[i] += (rr >= 3).astype(int); runners[i] = np.minimum(3, rr+1); hbp[i] += 1
+        # K and ball-in-play out each record one out
+        i = idx[is_k]; k[i] += 1; outs[i] += 1; inn_outs[i] += 1
+        i = idx[is_out]; outs[i] += 1; inn_outs[i] += 1
+        # end of half-inning: three outs strand and clear the bases
+        i = idx[inn_outs[idx] >= 3]; runners[i] = 0; inn_outs[i] = 0
+
+    outs = np.minimum(outs, outs_cap); ip = outs / 3.0; er = np.clip(er, 0, 20)
     if can_win:
         wp = np.clip(win_base - er * 0.04 - z * 0.03, 0.02, 0.85)
         win = ((ip >= 5.0) & (rng.uniform(0, 1, n) < wp)).astype(int)
@@ -85,7 +139,7 @@ def _sim_pitcher(vec, bf_sim, m_opp, z, can_win, win_base, outs_cap, rng, n):
         win = np.zeros(n, int)
     cg = (ip >= 9.0).astype(int); cgs = (cg & (er == 0)).astype(int); nh = (cgs & (h == 0)).astype(int)
     dk = dk_pitcher(outs, k, win, er, h, bb, hbp, cg, cgs, nh)
-    return dict(dk=dk, ip=ip, k=k, bb=bb, h=h, hr=hr, er=er, win=win, bf=bf_sim)
+    return dict(dk=dk, ip=ip, k=k, bb=bb, h=h, hr=hr, er=er, win=win, bf=bf)
 
 
 def simulate(matchup, n_sims=10000, seed=20260610):

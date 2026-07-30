@@ -1,0 +1,27 @@
+{"pitchers":[
+{"name":"Chris Sale","IP":6.0,"H":2,"ER":0,"BB":0,"HBP":0,"SO":9,"decision":"W","did_not_pitch":false},
+{"name":"Cam Schlittler","IP":6.1,"H":2,"ER":1,"BB":1,"HBP":0,"SO":8,"decision":"ND","did_not_pitch":false},
+{"name":"Joe Ryan","IP":6.0,"H":8,"ER":4,"BB":0,"HBP":0,"SO":4,"decision":"L","did_not_pitch":false},
+{"name":"Joey Cantillo","IP":4.0,"H":4,"ER":0,"BB":1,"HBP":0,"SO":8,"decision":"ND","did_not_pitch":false},
+{"name":"Hayden Wesneski","IP":5.2,"H":7,"ER":3,"BB":2,"HBP":0,"SO":4,"decision":"W","did_not_pitch":false},
+{"name":"Christian Scott","IP":6.0,"H":5,"ER":1,"BB":1,"HBP":0,"SO":7,"decision":"L","did_not_pitch":false},
+{"name":"Grayson Rodriguez","IP":5.0,"H":5,"ER":2,"BB":2,"HBP":0,"SO":6,"decision":"ND","did_not_pitch":false},
+{"name":"Eric Lauer","IP":6.0,"H":1,"ER":0,"BB":1,"HBP":0,"SO":4,"decision":"W","did_not_pitch":false},
+{"name":"Davis Martin","IP":6.0,"H":5,"ER":4,"BB":2,"HBP":0,"SO":6,"decision":"ND","did_not_pitch":false},
+{"name":"Matthew Boyd","IP":7.0,"H":4,"ER":0,"BB":2,"HBP":0,"SO":5,"decision":"ND","did_not_pitch":false},
+{"name":"Patrick Sandoval","IP":5.0,"H":5,"ER":2,"BB":2,"HBP":0,"SO":7,"decision":"ND","did_not_pitch":false},
+{"name":"Brady Singer","IP":4.1,"H":6,"ER":0,"BB":4,"HBP":0,"SO":3,"decision":"L","did_not_pitch":false},
+{"name":"Dustin May","IP":5.0,"H":1,"ER":0,"BB":2,"HBP":0,"SO":3,"decision":"ND","did_not_pitch":false},
+{"name":"Emerson Hancock","IP":5.0,"H":8,"ER":3,"BB":1,"HBP":0,"SO":5,"decision":"L","did_not_pitch":false},
+{"name":"Randy Dobnak","IP":7.0,"H":4,"ER":0,"BB":1,"HBP":0,"SO":4,"decision":"W","did_not_pitch":false},
+{"name":"Jacob Lopez","IP":5.1,"H":7,"ER":1,"BB":2,"HBP":0,"SO":8,"decision":"ND","did_not_pitch":false}
+],
+"hitters":[
+{"name":"Shohei Ohtani","H":2,"2B":1,"3B":0,"HR":0,"R":1,"RBI":1,"BB":0,"HBP":0,"SB":0,"did_not_play":false},
+{"name":"Jahmai Jones","H":1,"2B":0,"3B":0,"HR":1,"R":1,"RBI":1,"BB":0,"HBP":0,"SB":0,"did_not_play":false},
+{"name":"Jose Ramirez","H":2,"2B":0,"3B":0,"HR":0,"R":1,"RBI":0,"BB":0,"HBP":0,"SB":0,"did_not_play":false},
+{"name":"Freddie Freeman","H":1,"2B":0,"3B":0,"HR":0,"R":0,"RBI":1,"BB":0,"HBP":0,"SB":0,"did_not_play":false},
+{"name":"Caleb Durbin","H":3,"2B":0,"3B":0,"HR":0,"R":1,"RBI":0,"BB":0,"HBP":0,"SB":0,"did_not_play":false},
+{"name":"Andruw Monasterio","H":3,"2B":0,"3B":0,"HR":1,"R":1,"RBI":2,"BB":0,"HBP":0,"SB":0,"did_not_play":false},
+{"name":"Andy Pages","H":3,"2B":0,"3B":0,"HR":1,"R":1,"RBI":2,"BB":0,"HBP":0,"SB":0,"did_not_play":false}
+]}
