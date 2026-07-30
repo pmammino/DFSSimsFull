@@ -33,9 +33,38 @@ numbers in `validation_report.txt`:
 |---|---|
 | `../../ownership_model.py` | production scorer — `project_ownership(pool, sims, ...)` |
 | `../../fit_ownership.py` | calibration + leave-one-slate-out validation |
+| `../../ownership_history.py` | accumulate a compact per-slate training log |
 | `../../ownership_params.json` | fitted coefficients (loaded at runtime) |
 | `../../tests/test_ownership_model.py` | structural guarantees (invariant, cap, monotonicity, size chalk) |
+| `../../tests/test_ownership_history.py` | log guarantees (dedup, label/slot attach, size) |
 | `validation_report.txt` | saved output of the run above |
+
+## Accumulating more slates (grow the training set cheaply)
+
+Raw 10k-sim `.npy` files are heavy and prune to a 4-day window. Ownership
+training instead wants *many* slates × a few summary numbers, so
+`ownership_history.py` keeps a separate **append-only log** —
+`ownership_history/features.csv`, ~a few dozen KB per slate (a season < ~10 MB)
+— synced via `shared_store` independently of the sim pruning. Each build
+auto-appends the slate's projection + Vegas context (hook in `app.ensure_fresh`);
+salary and the actual-ownership label are added from the files you download:
+
+```
+# one command per slate — sims + DFF cheatsheet(s) + the settled contest:
+python3 ownership_history.py ingest --date 2026-07-29 \
+    --sims-dir History \
+    --dff DFF/DFF_MLB_cheatsheet_20260729.csv \
+    --dff DFF/DFF_MLB_cheatsheet_20260729_1.csv \
+    --contest Contests/contest-standings-192897436.csv
+
+python3 ownership_history.py show          # summarise the accumulated log
+```
+
+Then retrain from the accumulated log (no sims needed, scales to many slates):
+
+```
+python3 fit_ownership.py --history-csv ownership_history/features.csv --write
+```
 
 ## Calibration data provenance
 

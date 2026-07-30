@@ -311,14 +311,40 @@ def estimate_chalk_k(data: pd.DataFrame, n_medium: int) -> float:
 
 
 # ---------------------------------------------------------------------------
+def build_dataset_from_log(path: str) -> pd.DataFrame:
+    """Prepare the fit frame from an accumulated ownership_history log CSV.
+
+    Uses each slate/day as a softmax group ("contest") so the same fit/validate
+    code applies. Chalk-k is not estimated here (the log carries no field size);
+    it keeps its prior/params value.
+    """
+    from ownership_history import load_log
+    df = load_log(path, labeled_only=True).copy()
+    if df.empty:
+        sys.exit(f"no labeled rows in history log {path}")
+    df["contest"] = df["date"]
+    df["is_pitcher"] = df["pos"] == "P"
+    df["ceil_shape"] = (df["ceiling"] / df["proj"]).clip(1.0, 6.0)
+    df["n_entries"] = 3000
+    print(f"history log: {len(df)} labeled rows across {df['date'].nunique()} slates"
+          f"  ({df['salary'].notna().sum()} with salary)")
+    return df
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true",
                     help="save fitted params to ownership_params.json")
     ap.add_argument("--n-medium", type=int, default=3000)
+    ap.add_argument("--history-csv", default="",
+                    help="train from an accumulated ownership_history log CSV "
+                         "instead of raw sims+contests (scales to many slates)")
     args = ap.parse_args()
 
-    data = build_dataset()
+    if args.history_csv:
+        data = build_dataset_from_log(args.history_csv)
+    else:
+        data = build_dataset()
     have_cost = data["salary"].notna().any()
 
     sim_feats = {"HIT": SIM_FEATURES, "PIT": SIM_FEATURES}
@@ -340,9 +366,20 @@ def main():
         cross_validate(cov, sim_feats, "sim-only (cost-covered rows)")
         cross_validate(cov, full_feats, "full (+value +team_total)")
 
-    print("\n===== contest-size chalk (k) =====")
-    k = estimate_chalk_k(data, args.n_medium)
-    print(f"  estimated chalk_k = {k:.3f}")
+    if args.history_csv:
+        # the log has no field-size pairs; keep whatever chalk_k is on disk
+        k = OwnershipParams().chalk_k
+        from ownership_model import load_params
+        try:
+            k = load_params().chalk_k
+        except Exception:
+            pass
+        print(f"\n===== contest-size chalk (k) =====\n  kept existing chalk_k = {k:.3f} "
+              "(history log carries no field size to re-estimate from)")
+    else:
+        print("\n===== contest-size chalk (k) =====")
+        k = estimate_chalk_k(data, args.n_medium)
+        print(f"  estimated chalk_k = {k:.3f}")
 
     if args.write:
         P = OwnershipParams()
