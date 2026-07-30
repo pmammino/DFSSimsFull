@@ -1969,10 +1969,20 @@ with tabs[0]:
     if dk_df is not None:
         simset = set(score)
         covered = int(dk_df["FullName"].map(lambda n: normname(n) in simset).sum())
-        csv_ok = covered > 0
+        # A valid slate is runnable regardless of how many of its players are in
+        # the sims *currently on disk*: the sims are built per-slate (filtered by
+        # the slate's time window), so picking a different slate than the one last
+        # built — e.g. the early slate when the main slate's sims are on disk —
+        # legitimately overlaps zero players. Running rebuilds the sims for the
+        # chosen slate (ensure_fresh → Stage C with --slate-window), and the
+        # post-rebuild guard below catches a genuine name mismatch. Gating on the
+        # stale universe here would wrongly block every non-current slate.
+        csv_ok = len(dk_df) > 0
         if covered == 0:
-            st.error("None of the players in this slate matched the sim "
-                     "universe — check names/teams. Nothing to simulate.")
+            st.info("None of this slate's players are in the sims currently on "
+                    "disk — those were built for a different slate. **Running "
+                    "will rebuild the sims for this slate** from today's live "
+                    "lineups, matchups and Vegas totals before scoring.")
         elif id_map:
             st.caption("✓ Player IDs from the RotoWire feed "
                        "(DraftKingsDraftableID) — the DK upload export "
@@ -2271,7 +2281,7 @@ with tabs[0]:
         # ---- hard-gate on every decision ----
         errs = []
         if not csv_ok:
-            errs.append("Pick a slate that matches the sim universe (step 1).")
+            errs.append("Pick a slate with players to simulate (step 1).")
         if contest_size is None:
             errs.append("Choose a contest size.")
         if sim_runs is None:
