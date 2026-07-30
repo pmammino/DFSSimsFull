@@ -12,24 +12,30 @@ Data (see deliverables/ownership_model/README.md)
 -------------------------------------------------
   HIST_DIR     dir of  history_<date>_{hitter,pitcher}_dk_sims.npy   (the sims)
   CONTEST_DIR  dir of  contest-standings-*.csv                        (targets)
+  DFF_DIR      (optional) dir of DailyFantasyFuel cheatsheets
+               `*DFF_MLB_cheatsheet_YYYYMMDD.csv` supplying per-player DK
+               `salary` + Vegas `implied_team_score` for the slate. When
+               present, the `value` (proj/salary) and `team_total` features are
+               fitted too; without it only the sim-derived features are fitted.
 
 Each contest CSV's right-hand block (Player, Roster Position, %Drafted, FPTS)
 is the realised field ownership. We map each contest to its slate date by
-player-name overlap with that day's sims, build the sim features, and fit.
+player-name overlap with that day's sims, build the features, and fit.
 
-What is and isn't fitted here
------------------------------
-The calibration set (Jul 26–29 2026) has sims + ownership + position, but NOT
-salary or Vegas totals for those days. So this harness fits the two purely
-sim-derived coefficients — ``proj`` and ``ceil_shape`` — for hitters and
-pitchers, and estimates ``chalk_k`` from the two same-slate size pairs. The
-``value`` and ``team_total`` betas keep their domain-prior defaults; rerun this
-with salary/Vegas columns joined in (``--with-cost``) to fit them too.
+The fit
+-------
+Ownership within a roster slot is a softmax over player attractiveness
+`u = Σ β·z(feature)` (features standardised within slate/slot). β is fit by
+minimising cross-entropy between predicted and actual per-slot shares, pooled
+across all slate/slot groups, separately for hitters and pitchers, with
+non-negative coefficients. When DFF salary/Vegas are supplied the harness fits
+BOTH a sim-only model and the full model on the salary-covered rows and reports
+both, so the lift from cost/context is explicit.
 
 Usage
 -----
-    HIST_DIR=... CONTEST_DIR=... python3 fit_ownership.py            # fit+report
-    HIST_DIR=... CONTEST_DIR=... python3 fit_ownership.py --write    # + save json
+    HIST_DIR=... CONTEST_DIR=... [DFF_DIR=...] python3 fit_ownership.py
+    HIST_DIR=... CONTEST_DIR=... [DFF_DIR=...] python3 fit_ownership.py --write
 """
 
 from __future__ import annotations
@@ -47,12 +53,17 @@ from scipy.optimize import minimize
 
 from ownership_model import (
     OwnershipParams, SLOT_COUNT, norm, sim_features, size_beta, _z,
-    project_ownership,
 )
 
 HIST_DIR = os.environ.get("HIST_DIR", "./History")
 CONTEST_DIR = os.environ.get("CONTEST_DIR", "./Contests")
-FIT_FEATURES = ["proj", "ceil_shape"]          # fittable from sims alone
+DFF_DIR = os.environ.get("DFF_DIR", "")
+
+# feature sets per player kind. proj/ceil_shape are always available (sims);
+# value/team_total require DFF salary + Vegas. Pitchers get no team_total.
+SIM_FEATURES = ["proj", "ceil_shape"]
+FULL_HIT = ["proj", "ceil_shape", "value", "team_total"]
+FULL_PIT = ["proj", "ceil_shape", "value"]
 
 
 # ---------------------------------------------------------------------------
@@ -77,10 +88,35 @@ def available_dates() -> list[str]:
     return sorted(ds)
 
 
+def load_dff() -> dict:
+    """{date -> {norm(name): (salary, implied_team_score)}} from DFF sheets.
+
+    A day can have several classic slates (e.g. a main and an early sheet,
+    ``..._YYYYMMDD.csv`` and ``..._YYYYMMDD_1.csv``) over disjoint games. They
+    are merged into one per-day salary map (first sheet wins on the rare
+    duplicate name), so all of the day's players carry a salary.
+    """
+    out = {}
+    if not DFF_DIR:
+        return out
+    for f in sorted(glob.glob(os.path.join(DFF_DIR, "*DFF_MLB_cheatsheet_*.csv"))):
+        m = re.search(r"(\d{8})", os.path.basename(f))
+        if not m:
+            continue
+        d = m.group(1)
+        date = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+        x = pd.read_csv(f)
+        nn = (x["first_name"].astype(str) + " " + x["last_name"].astype(str)).map(norm)
+        sal = pd.to_numeric(x["salary"], errors="coerce")
+        itt = pd.to_numeric(x["implied_team_score"], errors="coerce")
+        day = out.setdefault(date, {})
+        for n, s, t in zip(nn, sal, itt):
+            day.setdefault(n, (s, t))
+    return out
+
+
 def parse_contest(path: str) -> pd.DataFrame:
     raw = pd.read_csv(path)
-    # entry count comes from the LEFT (standings) block — one row per lineup —
-    # and must be read before the right-block Player dropna collapses the frame.
     n_entries = int(raw["EntryId"].notna().sum())
     df = raw.dropna(subset=["Player"]).copy()
     df["own"] = df["%Drafted"].astype(str).str.rstrip("%").astype(float)
@@ -108,6 +144,7 @@ def build_dataset() -> pd.DataFrame:
     if not dates:
         sys.exit(f"no sim history in HIST_DIR={HIST_DIR}")
     sims_by_date = {d: load_sims_for_date(d) for d in dates}
+    dff = load_dff()
 
     rows = []
     for path in sorted(glob.glob(os.path.join(CONTEST_DIR, "*.csv"))):
@@ -115,19 +152,27 @@ def build_dataset() -> pd.DataFrame:
         df = parse_contest(path)
         date, ov = map_contest_to_date(df, sims_by_date)
         sims = sims_by_date[date]
+        sal_map = dff.get(date, {})
         for r in df.itertuples():
             sc = sims.get(r.nname)
             if sc is None:
                 continue
             f = sim_features(sc)
+            salary, itt = sal_map.get(r.nname, (np.nan, np.nan))
+            value = f["proj"] / (salary / 1000.0) if salary and salary > 0 else np.nan
             rows.append({
                 "contest": cid, "date": date, "overlap": round(ov, 2),
                 "n_entries": r.n_entries, "name": r.nname, "pos": r.Pos,
                 "is_pitcher": r.Pos == "P", "own": r.own,
                 "proj": f["proj"], "ceil_shape": f["ceil_shape"],
+                "salary": salary, "value": value, "team_total": itt,
             })
     data = pd.DataFrame(rows)
+    ncov = data["salary"].notna().sum()
     print(f"matched {len(data)} player-rows across "
+          f"{data['contest'].nunique()} contests / {data['date'].nunique()} slates"
+          f"  ({ncov} with DFF salary)" if dff else
+          f"matched {len(data)} player-rows across "
           f"{data['contest'].nunique()} contests / {data['date'].nunique()} slates")
     return data
 
@@ -135,20 +180,20 @@ def build_dataset() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # conditional-logit fit (cross-entropy over per-slot softmax groups)
 # ---------------------------------------------------------------------------
-def _groups(data: pd.DataFrame):
-    """Yield (feature matrix Z, target share p, slot_total) per (contest, slot)."""
-    for (cid, pos), g in data.groupby(["contest", "pos"]):
+def _groups(data: pd.DataFrame, features: list[str]):
+    """Yield (Z, target share p) per (contest, slot) with complete features."""
+    need = data.dropna(subset=features)
+    for (cid, pos), g in need.groupby(["contest", "pos"]):
         if len(g) < 2:
             continue
-        slot_total = 100.0 * SLOT_COUNT.get(pos, 1)
-        Z = np.column_stack([_z(g[f].to_numpy()) for f in FIT_FEATURES])
+        Z = np.column_stack([_z(g[f].to_numpy()) for f in features])
         p = g["own"].to_numpy() / g["own"].sum() if g["own"].sum() > 0 else \
             np.full(len(g), 1.0 / len(g))
         yield Z, p
 
 
-def fit_betas(data: pd.DataFrame) -> dict:
-    groups = list(_groups(data))
+def fit_betas(data: pd.DataFrame, features: list[str]) -> dict:
+    groups = list(_groups(data, features))
 
     def nll(beta):
         tot = 0.0
@@ -160,20 +205,14 @@ def fit_betas(data: pd.DataFrame) -> dict:
             tot += -(p * np.log(np.clip(q, 1e-12, None))).sum()
         return tot
 
-    # non-negative bounds: more projection / more relative ceiling can only
-    # raise attractiveness, never lower it (guards against small-sample sign
-    # flips like a spuriously negative pitcher ceil_shape).
-    res = minimize(nll, np.full(len(FIT_FEATURES), 0.3), method="L-BFGS-B",
-                   bounds=[(0.0, 5.0)] * len(FIT_FEATURES))
-    return dict(zip(FIT_FEATURES, res.x))
+    res = minimize(nll, np.full(len(features), 0.3), method="L-BFGS-B",
+                   bounds=[(0.0, 5.0)] * len(features))
+    return dict(zip(features, res.x))
 
 
-# ---------------------------------------------------------------------------
-# validation
-# ---------------------------------------------------------------------------
-def predict_group(g: pd.DataFrame, betas: dict) -> np.ndarray:
+def predict_group(g: pd.DataFrame, betas: dict, features: list[str]) -> np.ndarray:
     u = np.zeros(len(g))
-    for f in FIT_FEATURES:
+    for f in features:
         u = u + betas[f] * _z(g[f].to_numpy())
     u -= u.max()
     q = np.exp(u)
@@ -181,72 +220,73 @@ def predict_group(g: pd.DataFrame, betas: dict) -> np.ndarray:
     return q * g["own"].sum()          # scale to the slot's realised total
 
 
-def evaluate(data: pd.DataFrame, betas_by_kind: dict, label: str):
+# ---------------------------------------------------------------------------
+# validation
+# ---------------------------------------------------------------------------
+def _metrics(pred, act):
+    sp = stats.spearmanr(pred, act).correlation
+    mae = np.abs(pred - act).mean()
+    k = max(1, int(0.10 * len(act)))
+    hit = len(set(np.argsort(-act)[:k]) & set(np.argsort(-pred)[:k])) / k
+    return sp, mae, hit
+
+
+def evaluate(data: pd.DataFrame, betas_by_kind: dict, feats_by_kind: dict, label: str):
     print(f"\n===== {label} =====")
     for kind, isp in (("HIT", False), ("PIT", True)):
-        sub = data[data["is_pitcher"] == isp]
+        feats = feats_by_kind[kind]
+        sub = data[data["is_pitcher"] == isp].dropna(subset=feats)
         preds, acts = [], []
         for (cid, pos), g in sub.groupby(["contest", "pos"]):
             if len(g) < 2:
                 continue
-            pred = predict_group(g, betas_by_kind[kind])
-            preds.append(pred)
+            preds.append(predict_group(g, betas_by_kind[kind], feats))
             acts.append(g["own"].to_numpy())
         if not preds:
             continue
-        pred = np.concatenate(preds)
-        act = np.concatenate(acts)
-        sp = stats.spearmanr(pred, act).correlation
-        mae = np.abs(pred - act).mean()
-        # top-decile identification (chalk hit-rate)
-        k = max(1, int(0.10 * len(act)))
-        top_act = set(np.argsort(-act)[:k])
-        top_pred = set(np.argsort(-pred)[:k])
-        hit = len(top_act & top_pred) / k
+        pred, act = np.concatenate(preds), np.concatenate(acts)
+        sp, mae, hit = _metrics(pred, act)
+        bs = {f: round(betas_by_kind[kind][f], 2) for f in feats}
         print(f"  {kind}: n={len(act):4d}  Spearman={sp:.3f}  MAE={mae:4.2f}%  "
-              f"top10%-hit={hit:.2f}  betas={ {f: round(betas_by_kind[kind][f],2) for f in FIT_FEATURES} }")
+              f"top10%-hit={hit:.2f}  betas={bs}")
 
 
-def cross_validate(data: pd.DataFrame):
-    """Leave-one-slate-out: fit on 3 days, predict the held-out day."""
-    print("\n===== leave-one-slate-out validation =====")
+def cross_validate(data: pd.DataFrame, feats_by_kind: dict, label: str):
+    print(f"\n===== leave-one-slate-out — {label} =====")
+    out = {}
     for kind, isp in (("HIT", False), ("PIT", True)):
+        feats = feats_by_kind[kind]
         sps, maes, hits, ns = [], [], [], []
         for d in sorted(data["date"].unique()):
-            train = data[(data["date"] != d)]
-            test = data[(data["date"] == d) & (data["is_pitcher"] == isp)]
+            train = data[data["date"] != d]
+            test = data[(data["date"] == d) & (data["is_pitcher"] == isp)].dropna(subset=feats)
             if len(test) < 3:
                 continue
-            betas = fit_betas(train[train["is_pitcher"] == isp])
+            betas = fit_betas(train[train["is_pitcher"] == isp], feats)
             preds, acts = [], []
             for (cid, pos), g in test.groupby(["contest", "pos"]):
                 if len(g) < 2:
                     continue
-                preds.append(predict_group(g, betas))
+                preds.append(predict_group(g, betas, feats))
                 acts.append(g["own"].to_numpy())
-            pred = np.concatenate(preds)
-            act = np.concatenate(acts)
-            sp = stats.spearmanr(pred, act).correlation
-            k = max(1, int(0.10 * len(act)))
-            hit = len(set(np.argsort(-act)[:k]) & set(np.argsort(-pred)[:k])) / k
-            sps.append(sp)
-            maes.append(np.abs(pred - act).mean())
-            hits.append(hit)
-            ns.append(len(act))
+            if not preds:
+                continue
+            pred, act = np.concatenate(preds), np.concatenate(acts)
+            sp, mae, hit = _metrics(pred, act)
+            sps.append(sp); maes.append(mae); hits.append(hit); ns.append(len(act))
             print(f"  {kind} holdout {d}: n={len(act):4d}  Spearman={sp:.3f}  "
-                  f"MAE={np.abs(pred-act).mean():4.2f}%  top10%-hit={hit:.2f}")
+                  f"MAE={mae:4.2f}%  top10%-hit={hit:.2f}")
         if sps:
             w = np.array(ns)
-            print(f"  {kind} OOS mean: Spearman={np.average(sps,weights=w):.3f}  "
-                  f"MAE={np.average(maes,weights=w):.2f}%  top10%-hit={np.average(hits,weights=w):.2f}")
+            m = (np.average(sps, weights=w), np.average(maes, weights=w),
+                 np.average(hits, weights=w))
+            out[kind] = m
+            print(f"  {kind} OOS mean: Spearman={m[0]:.3f}  MAE={m[1]:.2f}%  "
+                  f"top10%-hit={m[2]:.2f}")
+    return out
 
 
 def estimate_chalk_k(data: pd.DataFrame, n_medium: int) -> float:
-    """Estimate k in beta(N)=1-k*log10(N/n_medium) from same-slate size pairs.
-
-    For a same-slate pair, own_large ≈ own_small^(beta_l/beta_s); fitting that
-    exponent and attributing it to the size gap gives k.
-    """
     ks, ws = [], []
     for date, g in data.groupby("date"):
         sizes = sorted(g["n_entries"].unique())
@@ -260,18 +300,14 @@ def estimate_chalk_k(data: pd.DataFrame, n_medium: int) -> float:
         if len(m) < 6:
             continue
         expo = np.polyfit(np.log(m.own_s), np.log(m.own_l), 1)[0]
-        # own_l = own_s^expo, and own(N)=base^beta(N) => expo=beta(hi)/beta(lo).
-        # anchor beta(lo)=1 (small≈baseline chalk); k from the size gap.
         k = (1.0 - expo) / (np.log10(hi / n_medium) - np.log10(lo / n_medium)) \
             if hi != lo else 0.0
-        ks.append(k)
-        ws.append(len(m))     # trust a pair in proportion to its matched players
+        ks.append(k); ws.append(len(m))
         print(f"  chalk pair {date}: {lo}->{hi} entries  own_l~own_s^{expo:.2f}  "
               f"k~{k:.2f}  (matched {len(m)})")
     if not ks:
         return 0.20
-    k = float(np.average(ks, weights=ws))
-    return float(np.clip(k, 0.05, 0.6))     # keep the reshape gentle (few pairs)
+    return float(np.clip(np.average(ks, weights=ws), 0.05, 0.6))
 
 
 # ---------------------------------------------------------------------------
@@ -283,14 +319,26 @@ def main():
     args = ap.parse_args()
 
     data = build_dataset()
+    have_cost = data["salary"].notna().any()
 
-    # in-sample fit
-    betas = {"HIT": fit_betas(data[~data.is_pitcher]),
-             "PIT": fit_betas(data[data.is_pitcher])}
-    evaluate(data, betas, "in-sample fit (all 4 slates)")
+    sim_feats = {"HIT": SIM_FEATURES, "PIT": SIM_FEATURES}
+    sim_betas = {"HIT": fit_betas(data[~data.is_pitcher], SIM_FEATURES),
+                 "PIT": fit_betas(data[data.is_pitcher], SIM_FEATURES)}
+    evaluate(data, sim_betas, sim_feats, "in-sample — sim-only (proj, ceil_shape)")
+    cross_validate(data, sim_feats, "sim-only")
 
-    # honest generalisation
-    cross_validate(data)
+    full_betas, full_feats = sim_betas, sim_feats
+    if have_cost:
+        full_feats = {"HIT": FULL_HIT, "PIT": FULL_PIT}
+        # fit the full model on the salary-covered rows
+        full_betas = {"HIT": fit_betas(data[~data.is_pitcher], FULL_HIT),
+                      "PIT": fit_betas(data[data.is_pitcher], FULL_PIT)}
+        # report sim-only ON THE SAME salary-covered subset, for a fair lift
+        cov = data.dropna(subset=["value"])
+        evaluate(cov, sim_betas, sim_feats, "in-sample — sim-only (cost-covered rows)")
+        evaluate(cov, full_betas, full_feats, "in-sample — full (+value +team_total)")
+        cross_validate(cov, sim_feats, "sim-only (cost-covered rows)")
+        cross_validate(cov, full_feats, "full (+value +team_total)")
 
     print("\n===== contest-size chalk (k) =====")
     k = estimate_chalk_k(data, args.n_medium)
@@ -300,13 +348,22 @@ def main():
         P = OwnershipParams()
         P.n_medium = args.n_medium
         P.chalk_k = round(k, 3)
-        for f in FIT_FEATURES:
-            P.hit[f] = round(betas["HIT"][f], 3)
-            P.pit[f] = round(betas["PIT"][f], 3)
-        P.to_json(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               "ownership_params.json"))
-        print("\nwrote ownership_params.json:", P.hit, P.pit,
-              "chalk_k=", P.chalk_k)
+        for f in full_feats["HIT"]:
+            P.hit[f] = round(full_betas["HIT"][f], 3)
+        for f in full_feats["PIT"]:
+            P.pit[f] = round(full_betas["PIT"][f], 3)
+        # zero any prior term the fit didn't cover so the shipped model is honest
+        for f in list(P.hit):
+            if f not in full_feats["HIT"]:
+                P.hit[f] = 0.0
+        for f in list(P.pit):
+            if f not in full_feats["PIT"]:
+                P.pit[f] = 0.0
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "ownership_params.json")
+        P.to_json(path)
+        print(f"\nwrote {os.path.basename(path)}: hit={P.hit} pit={P.pit} "
+              f"chalk_k={P.chalk_k}")
 
 
 if __name__ == "__main__":

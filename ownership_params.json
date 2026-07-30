@@ -1,14 +1,14 @@
 {
   "hit": {
-    "proj": 0.533,
+    "proj": 0.406,
     "ceil_shape": 0.0,
-    "value": 0.55,
-    "team_total": 0.35
+    "value": 0.084,
+    "team_total": 0.17
   },
   "pit": {
-    "proj": 0.873,
+    "proj": 0.846,
     "ceil_shape": 0.0,
-    "value": 0.6,
+    "value": 0.0,
     "team_total": 0.0
   },
   "tau": 1.0,

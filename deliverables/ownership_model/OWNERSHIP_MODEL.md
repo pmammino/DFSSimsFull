@@ -56,51 +56,60 @@ Two constraints are then enforced exactly:
 |---|---|---|
 | `proj` | mean of the sims | base demand. Already encodes matchup, park **and Vegas total**, because those drove the sim. |
 | `ceil_shape` | `p90(sims) / mean(sims)` | upside *per unit of projection* — GPP "boom" appeal, orthogonal to the projection's level. |
-| `value` | `proj / (salary/1000)` | points per $1k — the classic ownership driver. **Needs cost.** |
+| `value` | `proj / (salary/1000)` | points per $1k — the classic ownership driver. |
 | `team_total` | implied runs for the hitter's team | stacking demand — high-total teams get piled on together. |
 
 `value` and `team_total` are **optional**. If salary or Vegas context is absent
 the term is dropped and the slot renormalises, so the model always produces a
 coherent field. In the production pipeline both are present (salary from the DK
-feed/CSV, implied totals from `slate_ingest`), so they refine the sim-only
-signal there.
+feed/CSV, implied totals from `slate_ingest`).
 
 ---
 
 ## 3. Calibration
 
 `fit_ownership.py` maps each contest CSV to its slate by player-name overlap
-with that day's sims, builds the sim features, and fits the conditional-logit
+with that day's sims, builds the features, and fits the conditional-logit
 coefficients by minimising cross-entropy between predicted and actual per-slot
 shares, pooled across all slate/slot groups, **separately for hitters and
 pitchers** (the two markets behave differently). Coefficients are bounded
-non-negative — more projection or more relative ceiling can only *raise*
-attractiveness.
+non-negative.
 
-### What the calibration set can and cannot fit
-
-The 4 days have sims + ownership + position, but **not** salary or Vegas totals
-for those specific days. So the harness fits the two purely sim-derived betas
-(`proj`, `ceil_shape`); `value` and `team_total` keep principled domain-prior
-defaults. Re-run with salary/Vegas columns joined in to fit those too — the
-hook is already in place (`FIT_FEATURES`).
+For this calibration set, **salary and Vegas implied totals come from the
+DailyFantasyFuel (DFF) daily cheatsheets** (`salary`, `implied_team_score`),
+joined per slate. DFF's main-slate sheets cover five of the six contests at
+71–99% of their players; the sixth (`192897375`) is the Jul-29 *Early* slate,
+whose salary sheet is present but whose **sims are not in the history**, so it
+is excluded from training.
 
 ### Fitted coefficients (`ownership_params.json`)
 
 ```
-hitters:   proj 0.533   ceil_shape 0.000   value 0.55*  team_total 0.35*
-pitchers:  proj 0.873   ceil_shape 0.000   value 0.60*  team_total 0.00
-chalk_k 0.347   n_medium 3000            (* = domain prior, not yet fit)
+hitters:   proj 0.406   ceil_shape 0.000   value 0.084   team_total 0.170
+pitchers:  proj 0.846   ceil_shape 0.000   value 0.000   team_total 0.000
+chalk_k 0.347   n_medium 3000
 ```
 
-**`proj` dominates and `ceil_shape` fits to zero.** On top of the raw
-projection, the sim's *relative* ceiling adds no separable ownership signal in
-this 4-day sample — the field prices ownership off the projection level, and
-the mean already summarises the distribution the field reacts to. This is a
-real finding, not a bug: the sims' value-add for *ownership* is modest beyond
-the mean (their value-add for *lineup construction* — correlation, ceilings —
-is a separate matter). Pitchers load ~1.6× harder on projection, i.e. pitcher
-ownership is far more concentrated on the top arms than hitter ownership is.
+Two honest findings the fit surfaces:
+
+1. **`ceil_shape` fits to zero.** On top of the raw projection, the sim's
+   *relative* ceiling adds no separable ownership signal in this sample — the
+   field prices ownership off the projection level, and the mean already
+   summarises the distribution it reacts to. (The sims still earn their keep in
+   *lineup construction* — correlation, ceilings — which is a separate matter.)
+
+2. **Cost and context are near-collinear with the projection.** `value` and
+   `team_total` get small weights, and pitcher `value` fits to zero, because the
+   sims are *built from* matchup, park and Vegas totals — a high-implied-total
+   hitter already has a high projection, and DK prices salary off projections,
+   so `proj/salary` barely varies across the useful range. Projection is close
+   to a **sufficient statistic** for ownership ranking. The shipped model keeps
+   the cost/context terms (they trim error on mispriced players and are a
+   first-class production input), but their marginal effect here is small — see
+   §4.
+
+Pitchers load ~2× harder on projection than hitters — pitcher ownership is far
+more concentrated on the top arms.
 
 ---
 
@@ -108,27 +117,36 @@ ownership is far more concentrated on the top arms than hitter ownership is.
 
 Leave-one-slate-out: fit on 3 days, predict the held-out day. Metrics are
 Spearman rank correlation, mean absolute ownership error, and the top-decile
-"chalk hit-rate" (share of the true top-10% most-owned that the model also puts
-in its top 10%). Full numbers in `validation_report.txt`.
+"chalk hit-rate". Full numbers in `validation_report.txt`.
 
 ```
-              out-of-sample (held-out slate)
-  HITTERS   Spearman 0.60    MAE 3.2%    top-10% hit 0.41
-  PITCHERS  Spearman 0.70    MAE 5.1%    top-10% hit 0.66
+                          out-of-sample (held-out slate)
+                          Spearman     MAE      top-10% hit
+  HITTERS  sim-only         0.662      3.03%       0.43
+  HITTERS  + value + tt     0.660      2.98%       0.41
+  PITCHERS sim-only         0.690      5.23%       0.65
+  PITCHERS + value          0.690      5.23%       0.65
+  (metrics on the salary-covered rows, so the two models compare like-for-like)
 ```
 
-End-to-end through the shipped `project_ownership` on the 9,803-entry Jul-29
-GPP (no salary supplied — the historical case): slot invariant exact, max
-single-player 43%, HIT Spearman 0.55 / PIT 0.63. The scorer reproduces the fit.
+**Adding cost and context does not move out-of-sample ranking** on these four
+days: hitter Spearman is flat (0.662 → 0.660), MAE improves a hair
+(3.03% → 2.98%). This is consistent with §3 — the projection already carries the
+matchup/park/Vegas information, so `value`/`team_total` are largely redundant
+with it in aggregate.
 
-### Where the residual lives — why `value` matters
+Where they *would* help is the minority of **mispriced** players (cheap
+high-projection punts; priced-up stars the field fades). But even there the
+4-day signal is noisy and can point the wrong way: on the Jul-29 main GPP the
+field owned **Shohei Ohtani at ~9%** despite an elite projection and a
+high-total LAD lineup — the `team_total` term actually pushes his prediction
+*up* (≈18%), the opposite of what happened. With four days there simply is not
+enough to model the "expensive-star fade" reliably; that is a data problem, not
+a model-form problem.
 
-The biggest miss on that slate was **Shohei Ohtani: predicted 21%, actual 9%**.
-He has an elite projection but is expensive, so the field faded him on
-*value* — precisely the signal the salary term carries and that the sim-only
-historical fit could not see. This is the single clearest argument for wiring
-salary into the production scorer (where it is available): the projection term
-gets the ranking right; the value term fixes the level on priced-up stars.
+Take-away: ship the model with cost/context wired in (production always has
+them, and they help on mispriced players), but understand that on this sample
+the sim projection is doing essentially all of the work.
 
 ---
 
@@ -146,8 +164,7 @@ Estimated from the two same-slate size pairs. The reliable pair (Jul-29,
 588 → 9,803 entries, 165 matched hitters) gives `own_large ≈ own_small^0.63`:
 **larger fields are flatter, smaller fields are chalkier.** The reshape is
 applied per slot and renormalised, so the invariant holds at every size. `k` is
-lightly estimated (two pairs, one thin) and kept gentle — refine it as more
-same-slate pairs at different sizes accumulate.
+lightly estimated (two pairs, one thin) and kept gentle.
 
 ---
 
@@ -161,7 +178,7 @@ same-slate pairs at different sizes accumulate.
 from ownership_model import add_ownership_column
 pool = add_ownership_column(pool, {**H, **P},
                             contest_size=field_size,
-                            team_total=implied_by_team)   # both optional
+                            team_total=implied_by_team)   # {TeamCode: runs}, optional
 ```
 
 The output is a drop-in replacement for the `Ownership` column that
@@ -173,14 +190,18 @@ feed. (App wiring into the Setup tab is a follow-up.)
 
 ## 7. Limitations & next steps
 
-- **Fit the cost/context betas.** Join DK salary and implied totals for the
-  calibration days and let `value` / `team_total` fit instead of using priors.
-  This is the highest-value next step (see the Ohtani residual).
-- **More slates for `chalk_k`.** Two size pairs is thin; one is noisy.
-- **Small-slate mapping.** Two of the six contests overlap their slate's sims
-  at only ~0.66 (likely partial/early sub-slates); a slate-id tag on the sims
-  would remove the name-overlap heuristic.
-- **Per-position hitter betas.** Currently all hitters share one coefficient
-  set; C/1B/etc. could differ with more data.
-- **`ceil_shape` re-test.** It is zero here; revisit once `value` is in the
-  model, in case cost unmasks an upside effect.
+- **Sims for the Jul-29 Early slate.** Salary/Vegas for it now exist (DFF
+  `..._20260729_1.csv`), but the sim history only has the Jul-29 *main* slate,
+  so contest `192897375` can't be trained on yet. Writing a slate-tagged sim
+  file for that slate would add a sixth contest.
+- **More slates to justify cost/context.** The `value`/`team_total` lift is
+  within noise on four days. A larger walk-forward set would say whether they
+  earn their weight — and let us model the expensive-star fade properly (e.g. a
+  nonlinear or rank-based value feature, or a min-salary "punt" indicator).
+- **Slate-ID tagging.** Contests are matched to sims by name overlap, which
+  mis-mapped the Early slate. Tagging each sim-history file with its DK
+  draftGroup/slate ID removes the heuristic.
+- **Per-position hitter betas.** All hitters share one coefficient set; C/1B/etc.
+  could differ with more data.
+- **`ceil_shape` re-test.** Zero here; revisit with more data in case a genuine
+  upside effect is being masked by collinearity with the projection.
