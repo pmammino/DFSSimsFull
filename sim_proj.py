@@ -226,12 +226,14 @@ def simulate(matchup, n_sims=10000, seed=20260610):
             # Event-based team run SHAPE (a positive combination of the realized
             # events; only its relative shape matters — it is rescaled below).
             team_raw = np.zeros(n)
+            team_hr = np.zeros(n, int)  # Σ hr — every HR is guaranteed a run + an RBI
             r_wsum = np.zeros(n)      # Σ r_pa·pa  (projection weight for R split)
             rbi_wsum = np.zeros(n)    # Σ rbi_pa·pa (projection weight for RBI split)
             r_exp = np.zeros(n)       # Σ r_pa·pa·m_off (projection team-run mean)
             for d in plist:
                 team_raw += (d['hr'] + 0.6*(d['dbl'] + d['trp'])
                              + 0.3*d['sgl'] + 0.2*(d['bb'] + d['hbp']))
+                team_hr += d['hr']
                 rw = d['vec']['r_pa'] * d['pa']
                 bw = d['vec']['rbi_pa'] * d['pa']
                 r_wsum += rw
@@ -242,21 +244,28 @@ def simulate(matchup, n_sims=10000, seed=20260610):
             # taking the bounded, event-driven shape). Rounded to an integer team
             # total per sim WITHOUT extra Poisson scale noise, so team runs are a
             # deterministic function of the realized box score — this is what
-            # BOUNDS the ceiling to what the events can actually drive in.
+            # BOUNDS the ceiling to what the events can actually drive in. Clamp up
+            # to the HR count: a team can never score fewer runs than it hit homers.
             raw_mean = team_raw.mean()
             c_scale = (r_exp.mean() / raw_mean) if raw_mean > 0 else 1.0
             team_runs_int = np.clip(np.round(team_raw * c_scale), 0, None).astype(int)
+            team_runs_int = np.maximum(team_runs_int, team_hr)
+            residual = team_runs_int - team_hr   # runs left after each HR self-scores
             r_wsum = np.where(r_wsum > 0, r_wsum, 1.0)
             rbi_wsum = np.where(rbi_wsum > 0, rbi_wsum, 1.0)
 
             # Allocate the SAME integer team total to R and to RBI via a
             # conditional-binomial decomposition of a multinomial (per-player
-            # shares from the projection weights). Because both R and RBI are
-            # drawn from the one team_runs_int, they satisfy
-            # Σ R == Σ RBI == team runs exactly (real box-score conservation),
-            # instead of two independent per-player Poisson channels.
+            # shares from the projection weights). Each HR is credited to its OWN
+            # hitter as +1 R (he scores) and +1 RBI (he drives himself in), and
+            # only the RESIDUAL team runs are split by the projection weights. This
+            # ties a player's HR to his own run/RBI within the sim (a solo HR always
+            # books its R+RBI points, a multi-HR game always collects them) instead
+            # of letting the shared pool decide, which fattens the boom tail. Both R
+            # and RBI still draw from the one team_runs_int, so
+            # Σ R == Σ RBI == team runs exactly (real box-score conservation).
             def _allocate(rate_key, wsum, out_key):
-                rem = team_runs_int.copy()
+                rem = residual.copy()
                 rem_share = np.ones(n)
                 shares = [(d['vec'][rate_key] * d['pa']) / wsum for d in plist]
                 for k, d in enumerate(plist):
@@ -265,7 +274,7 @@ def simulate(matchup, n_sims=10000, seed=20260610):
                     else:
                         p_cond = np.clip(shares[k] / np.maximum(rem_share, 1e-9), 0.0, 1.0)
                         take = rng.binomial(rem, p_cond)
-                    d[out_key] = take
+                    d[out_key] = d['hr'] + take   # guaranteed HR self-run/RBI + residual share
                     rem = rem - take
                     rem_share = rem_share - shares[k]
             _allocate('r_pa', r_wsum, 'R')
