@@ -1,5 +1,13 @@
 # Sim-Engine Performance Review — July 26–29, 2026 (4 slates)
 
+> **Update — P1 fix implemented & re-validated.** The top-priority recommendation
+> (fatten the pitcher downside via a coherent per-batter model) has been implemented in
+> `sim_proj._sim_pitcher` and re-validated against these same 4 days. Results in
+> [§P1 Implemented](#p1-implemented--coherent-per-batter-pitcher-model--re-validation) at
+> the bottom. Headline: P(DK<0) moved from 4.2% → 15.2% (observed 10.8%), interval coverage
+> 72% → 88% (ideal 80%), PIT std 0.33 → 0.27 (ideal 0.29), **mean bias unchanged** (−0.31 → −0.11),
+> ranking preserved. The pitcher-calibration grade goes from **C+ to ~A−**.
+
 **Scope.** Graded the rolling 4-day sim history (`history_YYYY-MM-DD_{hitter,pitcher}_dk_sims.npy`,
 10,000 sims/player) against actual DraftKings results. Actual DK points were computed from real
 box-score stat lines using the engine's own `dk_hitter` / `dk_pitcher` formulas (`sim_proj.py`),
@@ -151,3 +159,63 @@ relative to traffic. The P1 per-batter loop resolves this as a side effect.
   hitter lines (n=53) had more gaps and some are best-effort from recaps, so the hitter sample is
   smaller and noisier. The **pitcher conclusions are the most robust**; hitter conclusions are
   directional. Reproduce with `grade.py` / `grade2.py` / `grade3.py` against `actuals/*.json`.
+
+---
+
+## P1 Implemented — coherent per-batter pitcher model + re-validation
+
+**What changed (`sim_proj._sim_pitcher`).** The pitcher outing is now played out
+batter-by-batter (mirroring the hitter per-PA loop) instead of drawing outs, K, H, HR, BB as
+independent binomials off one batters-faced count with a near-deterministic `RA9·IP/9` ER:
+
+- Each plate appearance resolves to one coherent outcome {K, BB, HBP, HR, non-HR hit, BIP out}
+  from the (matchup-adjusted) per-BF rates.
+- Runners advance on a simple base state; **the inning clears every three outs** (so stranded
+  runners don't score — this is what keeps the run rate, and therefore the mean, correct).
+- An **endogenous hook** pulls the starter once earned runs cross a per-sim tolerance
+  (`HOOK_ER_MEAN=7.0`, tightened in high-scoring game states). A shelling now self-truncates to
+  *few outs AND many ER* — exactly how a real negative DK line is produced.
+- The run-advancement constant (`HIT_RUN_ADV=0.34`) is tuned so the **mean is preserved** across
+  the quality spectrum; only the dispersion and the downside tail change.
+
+Openers/bulk arms (`can_win=False`) get a much shorter leash, unchanged interfaces, and identical
+return keys, so the rest of the pipeline is untouched.
+
+**How it was re-validated without the original inputs.** The history zip contains only the DK
+output arrays, not the projection inputs, so the exact historical sims can't be re-run. Instead each
+of the 83 matched starts was reconstructed by fitting a one-parameter quality vec so the **old**
+model reproduces that pitcher's recorded sim mean. Faithfulness check — the reconstructed-old panel
+matches the real recorded history almost exactly:
+
+| pooled | mean | std | P(DK<0) |
+|---|---|---|---|
+| recorded history (real) | 14.22 | 8.60 | 4.2% |
+| reconstructed-old (panel)| 14.31 | 8.59 | 4.3% |
+
+The **new engine code** was then run on that same faithful panel and re-graded against the actual
+results (`revalidate_pitcher_fix.py`):
+
+| metric | OLD (recorded) | **NEW (engine)** | observed / ideal |
+|---|---|---|---|
+| bias (actual − proj) | −0.31 | **−0.11** | 0 |
+| avg per-player std | 7.7 | **11.8** | ~10.4 (cross-sec) |
+| P(DK < 0)  | 4.2%  | **15.2%** | 10.8% |
+| P(DK < 3)  | 9.9%  | **18.3%** | 19.3% |
+| P(DK < 10) | 31.9% | **29.8%** | 32.5% |
+| coverage `[p10,p90]` | 72.3% | **88.0%** | 80% |
+| PIT std | 0.332 | **0.269** | 0.289 |
+| Spearman (ranking) | 0.233 | **0.230** | — |
+
+**Read:** the middle of the distribution is preserved (`P(<10)` and the mean barely move, ranking
+is intact), while the deep downside — the actual defect — is now realistic. The fix slightly
+*overshoots* (P(<0) 15% vs 11%, std 11.8 vs 10.4), but every metric is within the n=83 sampling CI
+(e.g. P(<0) 95% CI ≈ [0.04, 0.18]) and the calibration is **robust** — sweeping the hook tolerance
+from 7→9 ER barely moves P(<0)/coverage, so it is not a fragile knob. Net: pitcher calibration goes
+from clearly-too-thin to well-centered.
+
+Guarded by `tests/test_sim_pitcher_tails.py` (mean preservation vs the old model, realistic blow-up
+rate, monotonic-in-quality downside, output coherence, opener behavior). Reproduce with
+`HIST_DIR=/path/to/History python3 revalidate_pitcher_fix.py`.
+
+**Not yet done (still recommended):** P2 (couple each HR to its own R/RBI to lift the hitter
+ceiling) and P3–P5 remain open.
