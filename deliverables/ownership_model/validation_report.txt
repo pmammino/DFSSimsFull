@@ -1,0 +1,56 @@
+matched 942 player-rows across 6 contests / 4 slates  (800 with DFF salary)
+
+===== in-sample — sim-only (proj, ceil_shape) =====
+  HIT: n= 856  Spearman=0.605  MAE=3.18%  top10%-hit=0.41  betas={'proj': np.float64(0.53), 'ceil_shape': np.float64(0.0)}
+  PIT: n=  86  Spearman=0.733  MAE=5.06%  top10%-hit=0.75  betas={'proj': np.float64(0.87), 'ceil_shape': np.float64(0.0)}
+
+===== leave-one-slate-out — sim-only =====
+  HIT holdout 2026-07-26: n= 177  Spearman=0.564  MAE=2.92%  top10%-hit=0.29
+  HIT holdout 2026-07-27: n= 213  Spearman=0.672  MAE=3.77%  top10%-hit=0.43
+  HIT holdout 2026-07-28: n= 168  Spearman=0.627  MAE=2.71%  top10%-hit=0.38
+  HIT holdout 2026-07-29: n= 298  Spearman=0.563  MAE=3.22%  top10%-hit=0.48
+  HIT OOS mean: Spearman=0.603  MAE=3.19%  top10%-hit=0.41
+  PIT holdout 2026-07-26: n=  21  Spearman=0.590  MAE=3.95%  top10%-hit=1.00
+  PIT holdout 2026-07-27: n=  14  Spearman=0.829  MAE=6.19%  top10%-hit=1.00
+  PIT holdout 2026-07-28: n=  19  Spearman=0.784  MAE=6.07%  top10%-hit=0.00
+  PIT holdout 2026-07-29: n=  32  Spearman=0.673  MAE=4.68%  top10%-hit=0.67
+  PIT OOS mean: Spearman=0.703  MAE=5.06%  top10%-hit=0.66
+
+===== in-sample — sim-only (cost-covered rows) =====
+  HIT: n= 716  Spearman=0.667  MAE=3.00%  top10%-hit=0.45  betas={'proj': np.float64(0.53), 'ceil_shape': np.float64(0.0)}
+  PIT: n=  83  Spearman=0.734  MAE=5.23%  top10%-hit=0.75  betas={'proj': np.float64(0.87), 'ceil_shape': np.float64(0.0)}
+
+===== in-sample — full (+value +team_total) =====
+  HIT: n= 716  Spearman=0.675  MAE=2.89%  top10%-hit=0.49  betas={'proj': np.float64(0.41), 'ceil_shape': np.float64(0.0), 'value': np.float64(0.08), 'team_total': np.float64(0.17)}
+  PIT: n=  83  Spearman=0.735  MAE=5.20%  top10%-hit=0.75  betas={'proj': np.float64(0.85), 'ceil_shape': np.float64(0.0), 'value': np.float64(0.0)}
+
+===== leave-one-slate-out — sim-only (cost-covered rows) =====
+  HIT holdout 2026-07-26: n= 175  Spearman=0.577  MAE=2.92%  top10%-hit=0.29
+  HIT holdout 2026-07-27: n= 116  Spearman=0.808  MAE=3.11%  top10%-hit=0.64
+  HIT holdout 2026-07-28: n= 145  Spearman=0.680  MAE=2.80%  top10%-hit=0.29
+  HIT holdout 2026-07-29: n= 280  Spearman=0.645  MAE=3.17%  top10%-hit=0.50
+  HIT OOS mean: Spearman=0.662  MAE=3.03%  top10%-hit=0.43
+  PIT holdout 2026-07-26: n=  21  Spearman=0.590  MAE=3.92%  top10%-hit=1.00
+  PIT holdout 2026-07-27: n=  12  Spearman=0.818  MAE=6.70%  top10%-hit=1.00
+  PIT holdout 2026-07-28: n=  18  Spearman=0.752  MAE=6.60%  top10%-hit=0.00
+  PIT holdout 2026-07-29: n=  32  Spearman=0.673  MAE=4.76%  top10%-hit=0.67
+  PIT OOS mean: Spearman=0.690  MAE=5.23%  top10%-hit=0.65
+
+===== leave-one-slate-out — full (+value +team_total) =====
+  HIT holdout 2026-07-26: n= 175  Spearman=0.615  MAE=2.77%  top10%-hit=0.35
+  HIT holdout 2026-07-27: n= 116  Spearman=0.772  MAE=3.24%  top10%-hit=0.64
+  HIT holdout 2026-07-28: n= 145  Spearman=0.682  MAE=2.63%  top10%-hit=0.29
+  HIT holdout 2026-07-29: n= 280  Spearman=0.631  MAE=3.17%  top10%-hit=0.43
+  HIT OOS mean: Spearman=0.660  MAE=2.98%  top10%-hit=0.41
+  PIT holdout 2026-07-26: n=  21  Spearman=0.590  MAE=3.92%  top10%-hit=1.00
+  PIT holdout 2026-07-27: n=  12  Spearman=0.818  MAE=6.70%  top10%-hit=1.00
+  PIT holdout 2026-07-28: n=  18  Spearman=0.752  MAE=6.60%  top10%-hit=0.00
+  PIT holdout 2026-07-29: n=  32  Spearman=0.673  MAE=4.76%  top10%-hit=0.67
+  PIT OOS mean: Spearman=0.690  MAE=5.23%  top10%-hit=0.65
+
+===== contest-size chalk (k) =====
+  chalk pair 2026-07-27: 411->2972 entries  own_l~own_s^0.23  k~0.89  (matched 13)
+  chalk pair 2026-07-29: 588->9803 entries  own_l~own_s^0.63  k~0.30  (matched 165)
+  estimated chalk_k = 0.347
+
+wrote ownership_params.json: hit={'proj': np.float64(0.406), 'ceil_shape': np.float64(0.0), 'value': np.float64(0.084), 'team_total': np.float64(0.17)} pit={'proj': np.float64(0.846), 'ceil_shape': np.float64(0.0), 'value': np.float64(0.0), 'team_total': 0.0} chalk_k=0.347

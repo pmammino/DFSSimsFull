@@ -37,6 +37,10 @@ ARTIFACTS = [
     "out/pitcher_pa_projections_2027.csv",
     "out/.build_stamp.json",
     "data/slate.json",
+    # tiny append-only ownership training log (a few dozen KB/slate). Synced as
+    # a single object so it accumulates across builds/instances, independent of
+    # the 4-day sim-history pruning below. See ownership_history.py.
+    "ownership_history/features.csv",
 ]
 STAMP = "out/.build_stamp.json"
 LOCK_KEY = "_refresh.lock"

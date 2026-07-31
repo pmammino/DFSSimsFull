@@ -1615,6 +1615,19 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
         if shared_store.enabled() and (projections_rebuilt or sims_changed):
             try:
                 with st.spinner("Publishing the refreshed build to the shared store…"):
+                    # append this slate's compact ownership features (proj +
+                    # Vegas context) to the accumulating training log before the
+                    # push, so it ships with the build. Salary/label are filled
+                    # in later via ownership_history ingest (see its docstring).
+                    # Best-effort: never let logging break a publish.
+                    try:
+                        import ownership_history
+                        _snap_date = (slate_day or stamp.get("slate_date"))
+                        if _snap_date:
+                            ownership_history.snapshot_slate_features(
+                                _snap_date, "deliverables")
+                    except Exception:
+                        pass
                     shared_store.push()
                     # archive this build into the rolling dated history so past
                     # slates stay available for accuracy review (deduped by build
