@@ -1807,7 +1807,8 @@ st.markdown(
     unsafe_allow_html=True)
 st.caption(
     "Simulate DraftKings MLB contest outcomes for machine-developed candidate "
-    "lineups, against an ownership-weighted field, using the day's correlated "
+    "lineups, against a realistic field (mostly stacked/ceiling-built like real "
+    "entrants, part chalk), using the day's correlated "
     "player sims. You provide the expected ownership; you choose the contest "
     "size, the number of sim runs, and how many candidate lineups to develop."
 )
@@ -2599,7 +2600,20 @@ with tabs[0]:
             cand_mat = score_matrix(cands, score_b, K)
 
             # ---- field for the chosen contest size ----
-            st.write(f"Building an ownership-weighted field of {contest_size:,}…")
+            # A realistic field is mostly built the way real entrants build —
+            # stacked, ceiling-seeking, with >=1 real ace — NOT pure chalk. A
+            # pure-ownership field is far too weak: even a *random* competently
+            # built lineup beats it (~+22% ROI with zero skill on a measured
+            # slate), which inflates every candidate's finish and the reported
+            # EV/ROI (a soft field is why 20 lineups looked like +260% ROII). So
+            # ~70% of the field is built with the SAME ceiling/stack/ace
+            # sophistication (drawn on the ownership base, so it still stacks
+            # popular teams), and ~30% stays naive chalk. On a measured slate this
+            # pulls a no-skill random set to ≈ −rake and a sharp set to a
+            # defensible edge, instead of handing out free money.
+            FIELD_SHARP_FRAC = 0.70
+            st.write(f"Building a {contest_size:,}-entry field "
+                     f"({FIELD_SHARP_FRAC:.0%} sharp + chalk)…")
             beta = beta_for_size(contest_size, int(medium), float(chalk))
             fdf = adjust_ownership(normalize_to_slots(pool, 0.15), beta=beta)
             tilted = tilt_structures(
@@ -2607,8 +2621,22 @@ with tabs[0]:
                 contest_size, int(medium), float(tilt))
             fp = dict(params)
             fp["stack_structures"] = [(list(s), w) for s, w in tilted]
+            # ceiling (p90) upside weight for the sharp portion — computed on the
+            # field's own pool so it's independent of the user's candidate tilt.
+            sfdf = fdf.copy()
+            _zc = zmap(hset, cel)
+            _zcp = zmap(set(cdf[cdf["Pos"] == "P"]["Name"]), cel)
+            sfdf["Upside"] = [
+                float(np.exp((_zcp if r.Pos == "P" else _zc).get(r.Name, 0.0)))
+                for r in sfdf.itertuples()]
+            n_sharp = int(round(FIELD_SHARP_FRAC * contest_size))
+            sfb = Builder(Pool(sfdf), fp, seed=int(seed_field) + 7, uniform=False,
+                          upside_attr="Upside", bringback_prob=0.25,
+                          game_stack_prob=0.35, ace_pitcher_prob=0.5)
             fb = Builder(Pool(fdf), fp, seed=int(seed_field), uniform=False)
-            field, f_att = build_many(fb, contest_size, "Field")
+            field_sharp, _fa1 = build_many(sfb, n_sharp, "Field (sharp)")
+            field_chalk, _fa2 = build_many(fb, contest_size - n_sharp, "Field (chalk)")
+            field = field_sharp + field_chalk
             if len(field) < contest_size:
                 st.warning(f"Built {len(field):,} of {contest_size:,} requested field "
                            "lineups (pool constrained); simulating against the field "
