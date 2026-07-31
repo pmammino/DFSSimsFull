@@ -124,35 +124,16 @@ def test_opener_is_short_and_cannot_win():
     assert o['ip'].mean() < 3.0
 
 
-def test_k_ceiling_is_opponent_environment_aware():
-    """The K-driven DK ceiling must co-move with the opponent's per-sim
-    environment (K_ENV_ELAST), NOT be a flat constant: strikeouts rise on the
-    offense's quiet days and fall when they square it up. The coupling must widen
-    the ceiling WITHOUT shifting the mean (the projection level is already
-    calibrated)."""
-    n = 60000
-    vec = _vec(0.7)
-    rng = np.random.default_rng(303)
-    bf, m_opp, z, wb = _workload(vec, rng, n)
-    on = sim_proj._sim_pitcher(vec, bf, m_opp, z, True, wb, 27, np.random.default_rng(9), n)
-    saved = sim_proj.K_ENV_ELAST
-    try:
-        sim_proj.K_ENV_ELAST = 0.0                     # flat-K baseline (old behavior)
-        off = sim_proj._sim_pitcher(vec, bf, m_opp, z, True, wb, 27, np.random.default_rng(9), n)
-    finally:
-        sim_proj.K_ENV_ELAST = saved
-    # mean (projection level) preserved by the mean-zero coupling
-    assert abs(on['dk'].mean() - off['dk'].mean()) < 0.5, (on['dk'].mean(), off['dk'].mean())
-    # ceiling breathes: more big-strikeout upside than the flat-K baseline
-    assert np.percentile(on['dk'], 97) > np.percentile(off['dk'], 97)
-    # strikeouts land on the opponent's quiet (low-z) days
-    assert np.corrcoef(on['k'], z)[0, 1] < -0.05
-
-
 def test_ceiling_separates_by_opponent_strength():
     """Holding the pitcher fixed, a favorable matchup (whiff-prone / weaker
     offense) must produce a materially higher DK ceiling than a brutal one
-    (contact / stronger offense). Guards against a matchup-invariant ceiling."""
+    (contact / stronger offense). Guards against a matchup-invariant ceiling.
+
+    The separation comes from the opponent-adjusted mean K rate (log5), the
+    higher hit/HR traffic vs a strong offense, and — in the starter branch — the
+    removal of the perverse +(opp_implied) workload term (which used to inflate a
+    tough matchup's ceiling); NOT from any added per-sim K variance, since the
+    shipped pitcher distribution is already fully dispersed (see sim_review)."""
     n = 60000
     soft = dict(_vec(0.5), k_pct=0.275, h_per_bf=0.220, hr_per_bf=0.030)  # high-K, modest
     tough = dict(_vec(0.5), k_pct=0.185, h_per_bf=0.245, hr_per_bf=0.040)  # low-K, power
