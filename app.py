@@ -60,6 +60,46 @@ ASSETS = os.path.join(HERE, "assets")
 PARAMS_PATH = os.path.join(HERE, "field_params.json")
 SIZE_PRESETS = [150, 1000, 6000, 20000, 50000, 150000]
 
+# --------------------------------------------------------------------------- #
+# Field model — the simulated opponent field every candidate is graded against
+# --------------------------------------------------------------------------- #
+# The field IS the yardstick: every candidate's finish, and the whole reported
+# EV / ROI, is decided by how its sims place against these opponents. So the
+# field's realism is the single biggest lever on accuracy — a field that's too
+# soft hands out free money (a pure-ownership field gave a *random* 20-lineup
+# set +22% ROI), a field that's too hard understates real edge.
+#
+# These knobs were calibrated against REAL DraftKings contest standings across
+# four matched slates (the same slates' sims were validated well-calibrated by a
+# per-player PIT test — real outcomes land ~uniformly across their predicted
+# percentiles — and the model field's median matched the real field's within a
+# few points). Two ideas, both confirmed by the real data:
+#
+#   1. SHARP vs chalk. Real entrants build stacked, ceiling-seeking lineups with
+#      >=1 real ace — not naive chalk. FIELD_SHARP_FRAC of the field is built that
+#      way (on the ownership base, so it still stacks popular teams); the rest is
+#      chalk, a realistic soft tail. 0.90 puts a no-skill random set at ≈ -rake
+#      (the correct floor) instead of the +22% a pure-chalk field hands out.
+#   2. SUBMITTED, not random. Real fields are the better lineups thousands of
+#      entrants actually submit, not raw builder draws. So we overbuild
+#      FIELD_OVERBUILD× and keep the highest-projection contest_size. This drops a
+#      sharp selection from a fantasy edge to a defensible one (~+80% on a
+#      measured slate) while the field's score *body* stays true to life.
+#
+# Deliberately NOT a knob: reshaping the sim score distribution. Real winners
+# score ~1.85× the field median; the sims run ~2.3×. But payouts depend on
+# PLACEMENT, not score magnitude — and compressing the sim tail to match measured
+# +82% → +180% ROI (less variance ⇒ luck matters less ⇒ the optimized set wins
+# *more*). The per-player sims are calibrated, so the tail is left untouched by
+# design; the field, not the scores, is where realism is enforced.
+FIELD_SHARP_FRAC = 0.90        # share built sharp (stacks/ceiling/ace) vs chalk
+FIELD_OVERBUILD = 2.0          # build this ×contest_size, keep the top by projection
+FIELD_OVERBUILD_CAP = 12000    # cap on EXTRA lineups built (perf guard, huge fields)
+FIELD_SHARP_CEIL_TILT = 1.0    # exp() tilt on p90 ceiling for the sharp portion's bats
+FIELD_SHARP_BRINGBACK = 0.25   # sharp lineups' primary-opponent bring-back rate
+FIELD_SHARP_GAMESTACK = 0.35   # sharp lineups' game-stack (secondary = opponent) rate
+FIELD_SHARP_ACE = 0.50         # sharp lineups' chance of a top-tier ceiling ace
+
 # Brand palette — navy / red
 BRAND = "#F22E45"   # red accent
 NAVY = "#002248"
@@ -2600,31 +2640,16 @@ with tabs[0]:
             cand_mat = score_matrix(cands, score_b, K)
 
             # ---- field for the chosen contest size ----
-            # A realistic field is mostly built the way real entrants build —
-            # stacked, ceiling-seeking, with >=1 real ace — NOT pure chalk. A
-            # pure-ownership field is far too weak: even a *random* competently
-            # built lineup beats it (~+22% ROI with zero skill on a measured
-            # slate), which inflates every candidate's finish and the reported
-            # EV/ROI (a soft field is why 20 lineups looked like +260% ROI). So
-            # ~90% of the field is built with the SAME ceiling/stack/ace
-            # sophistication (drawn on the ownership base, so it still stacks
-            # popular teams), and ~10% stays naive chalk — a realistic soft tail
-            # (real fields do carry unstacked/duplicate lineups). On a measured
-            # slate this pulls a no-skill random set below breakeven (≈ -17% ROI,
-            # past the -rake baseline) and a genuinely sharp set to a defensible
-            # edge, instead of handing out free money. Head-to-head at equal size
-            # the sharp field matches our candidates' full score distribution
-            # (mean/p99/ceiling), so the contest is self-consistent.
-            #
-            # Second, real entrants SUBMIT their better lineups — they don't enter
-            # random builder draws. So the effective field is stronger than raw
-            # draws: we overbuild ~2x and keep the higher-projection half as the
-            # "submitted" field. On a measured slate this drops a sharp 20-set from
-            # ~+110% to ~+80% ROI (a defensible elite edge) and a no-skill set to
-            # ≈ −25%, while the winning-score distribution stays realistic. The
-            # overbuild is capped so very large contests stay fast.
-            FIELD_SHARP_FRAC = 0.90
-            n_build = int(contest_size) + min(int(contest_size), 12000)
+            # Built to be realistic, not a soft chalk field — see the FIELD_* knobs
+            # (module top) for the calibration rationale and the real-contest
+            # evidence. In short: FIELD_SHARP_FRAC of the field is built the way
+            # real entrants build (stacked, ceiling-seeking, >=1 ace) with the rest
+            # chalk, then the whole thing is overbuilt and trimmed to the
+            # highest-projection contest_size (the "submitted" field). The overbuild
+            # is capped so very large contests stay fast.
+            _extra = min(int(round((FIELD_OVERBUILD - 1.0) * contest_size)),
+                         FIELD_OVERBUILD_CAP)
+            n_build = int(contest_size) + max(0, _extra)
             st.write(f"Building a {contest_size:,}-entry field "
                      f"({FIELD_SHARP_FRAC:.0%} sharp, top-projection of {n_build:,})…")
             beta = beta_for_size(contest_size, int(medium), float(chalk))
@@ -2640,12 +2665,14 @@ with tabs[0]:
             _zc = zmap(hset, cel)
             _zcp = zmap(set(cdf[cdf["Pos"] == "P"]["Name"]), cel)
             sfdf["Upside"] = [
-                float(np.exp((_zcp if r.Pos == "P" else _zc).get(r.Name, 0.0)))
+                float(np.exp(FIELD_SHARP_CEIL_TILT *
+                             (_zcp if r.Pos == "P" else _zc).get(r.Name, 0.0)))
                 for r in sfdf.itertuples()]
             n_sharp = int(round(FIELD_SHARP_FRAC * n_build))
             sfb = Builder(Pool(sfdf), fp, seed=int(seed_field) + 7, uniform=False,
-                          upside_attr="Upside", bringback_prob=0.25,
-                          game_stack_prob=0.35, ace_pitcher_prob=0.5)
+                          upside_attr="Upside", bringback_prob=FIELD_SHARP_BRINGBACK,
+                          game_stack_prob=FIELD_SHARP_GAMESTACK,
+                          ace_pitcher_prob=FIELD_SHARP_ACE)
             fb = Builder(Pool(fdf), fp, seed=int(seed_field), uniform=False)
             field_sharp, _fa1 = build_many(sfb, n_sharp, "Field (sharp)")
             field_chalk, _fa2 = build_many(fb, n_build - n_sharp, "Field (chalk)")
