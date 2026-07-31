@@ -46,6 +46,16 @@ def dk_pitcher(outs, k, win, er, h, bb, hbp, cg, cgs, nh):
 SG, ST, SI, SG_HR_EXTRA = 0.20, 0.50, 0.30, 0.12
 OPENER_BF_MEAN, OPENER_BF_SD = 4.6, 1.3
 
+# The workload a "primary"/bulk arm is planned for is his own established outing
+# length (weighted_IP_per_G) stretched by this factor — being named the bulk arm
+# behind an opener implies he goes a bit longer than a typical relief appearance,
+# but a genuinely short reliever must NOT be simulated as a ~5-IP starter. Any
+# arm whose stretched plan reaches a full start (>= 5 IP) keeps the prior
+# full-starter treatment unchanged; shorter arms get a short leash, a tighter
+# out-cap, and no win eligibility. See the primary branch in `simulate`.
+PRIMARY_IP_STRETCH = 1.5
+PRIMARY_FULL_IP    = 5.0    # plan at/above this -> treat as a full bulk starter
+
 # How much a team-total override reshapes UPSIDE on top of shifting the mean.
 # An above-average total (scale > 1) widens that team's shared latent so the
 # whole lineup booms together on its big days — a higher total buys a fatter
@@ -113,6 +123,15 @@ def _sim_pitcher(vec, bf_sim, m_opp, z, can_win, win_base, outs_cap, rng, n):
     hr_r = np.clip(vec['hr_per_bf'] * m_opp, 0.003, 0.12)
     bb_r = np.clip(vec['bb_pct']    * np.sqrt(m_opp), 0.02, 0.25)
     hbp_r = np.full(n, min(0.05, vec['hbp_per_bf']))
+    # The opponent's K% is already folded into vec['k_pct'] via full log5
+    # (matchup._opponent_adjust_pitcher), so a whiff-prone lineup raises this and a
+    # contact lineup lowers it. We deliberately do NOT add a per-sim K-environment
+    # shock on top: a walk-forward grade of the shipped engine (deliverables/
+    # sim_review) shows the pitcher score distribution is already fully dispersed
+    # (interval coverage 88% vs 80% ideal; pooled starter P(DK>=25) 19.5% vs 10.8%
+    # observed), so adding K variance would fatten an already-too-fat ceiling. The
+    # ceiling's opponent-awareness instead comes from the log5 mean and the removal
+    # of the perverse workload term below (see the starter branch).
     k_r   = np.full(n, min(0.60, vec['k_pct']))
     hit_nh = np.clip(h_r - hr_r, 0.0, None)               # non-HR hits
     # Keep the six named outcomes + a BIP-out remainder a valid partition.
@@ -340,8 +359,21 @@ def simulate(matchup, n_sims=10000, seed=20260610):
                 bf_o = np.clip(rng.normal(OPENER_BF_MEAN, OPENER_BF_SD, n), 2, 9)
                 seg_o = _sim_pitcher(vo, bf_o, m_opp, z, False, 0.0, 9, rng, n)
                 vp = ps['primary']['vec']
-                bf_p = np.clip(rng.normal(vp['tbf_per_ip']*5.0, 3.0, n) - z*2.5 - (opp_implied-4.5)*0.8, 6, 30)
-                seg_p = _sim_pitcher(vp, bf_p, m_opp, z, True, win_base(vp), 24, rng, n)
+                # Plan the bulk arm's workload off his OWN outing length, not a
+                # blanket ~5-IP starter assumption. A short reliever tagged the
+                # "primary" in a bullpen game otherwise inherits a full starter
+                # leash (7-ER hook, 8-IP cap, win eligibility) and is badly
+                # over-projected; keying on ip_per_g caps him near his real usage
+                # while leaving genuine stretched-out bulk starters unchanged.
+                ip_plan = float(np.clip(vp.get('ip_per_g', PRIMARY_FULL_IP) * PRIMARY_IP_STRETCH,
+                                        1.0, PRIMARY_FULL_IP))
+                if ip_plan >= PRIMARY_FULL_IP:          # genuine bulk starter — prior behavior
+                    bf_p = np.clip(rng.normal(vp['tbf_per_ip']*5.0, 3.0, n) - z*2.5 - (opp_implied-4.5)*0.8, 6, 30)
+                    seg_p = _sim_pitcher(vp, bf_p, m_opp, z, True, win_base(vp), 24, rng, n)
+                else:                                   # short reliever tagged as primary
+                    bf_p = np.clip(rng.normal(vp['tbf_per_ip']*ip_plan, 2.0, n) - z*1.5 - (opp_implied-4.5)*0.5, 3, 18)
+                    outs_cap_p = int(np.clip(round(ip_plan*3) + 3, 3, 12))
+                    seg_p = _sim_pitcher(vp, bf_p, m_opp, z, False, 0.0, outs_cap_p, rng, n)
                 for role, info, seg in [('OPENER', ps['opener'], seg_o), ('PRIMARY', ps['primary'], seg_p)]:
                     pitcher_dk[info['name']] = seg['dk']
                     prows.append(_prow(info['name'], role, side, label, g, opp_side, opp_implied, seg))
@@ -351,8 +383,19 @@ def simulate(matchup, n_sims=10000, seed=20260610):
                 info = ps[role_key]
                 if not info or info['vec'] is None: continue
                 v = info['vec']
+                # NOTE: no positive (opp_implied-4.5) workload term. It used to
+                # ADD planned batters faced against a high-total offense, which
+                # perversely handed the pitcher MORE strikeout opportunities (a
+                # higher DK ceiling) for a TOUGHER matchup, leaving the ceiling
+                # essentially matchup-invariant. Removing it is what makes the
+                # ceiling opponent-aware: a strong offense now shortens the leash
+                # (fewer batters -> lower K ceiling) on top of the log5 mean-K
+                # suppression and higher hit/HR traffic. Validated against actuals
+                # (deliverables/sim_review): this widens the favorable-vs-brutal
+                # p90 gap ~4.2 -> ~5.4 pts AND trims the too-fat pooled ceiling
+                # toward the observed rate, rather than inflating it.
                 bf = np.clip(rng.normal(v['tbf_per_ip']*5.6, 3.0, n) - z*3.0
-                             - (v['era']-4.20)*0.8 + (opp_implied-4.5)*1.0, 8, 34)
+                             - (v['era']-4.20)*0.8, 8, 34)
                 seg = _sim_pitcher(v, bf, m_opp, z, True, win_base(v), 27, rng, n)
                 pitcher_dk[info['name']] = seg['dk']
                 prows.append(_prow(info['name'], 'STARTER', side, label, g, opp_side, opp_implied, seg))
