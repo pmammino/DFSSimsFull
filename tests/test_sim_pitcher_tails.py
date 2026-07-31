@@ -124,6 +124,51 @@ def test_opener_is_short_and_cannot_win():
     assert o['ip'].mean() < 3.0
 
 
+def test_k_ceiling_is_opponent_environment_aware():
+    """The K-driven DK ceiling must co-move with the opponent's per-sim
+    environment (K_ENV_ELAST), NOT be a flat constant: strikeouts rise on the
+    offense's quiet days and fall when they square it up. The coupling must widen
+    the ceiling WITHOUT shifting the mean (the projection level is already
+    calibrated)."""
+    n = 60000
+    vec = _vec(0.7)
+    rng = np.random.default_rng(303)
+    bf, m_opp, z, wb = _workload(vec, rng, n)
+    on = sim_proj._sim_pitcher(vec, bf, m_opp, z, True, wb, 27, np.random.default_rng(9), n)
+    saved = sim_proj.K_ENV_ELAST
+    try:
+        sim_proj.K_ENV_ELAST = 0.0                     # flat-K baseline (old behavior)
+        off = sim_proj._sim_pitcher(vec, bf, m_opp, z, True, wb, 27, np.random.default_rng(9), n)
+    finally:
+        sim_proj.K_ENV_ELAST = saved
+    # mean (projection level) preserved by the mean-zero coupling
+    assert abs(on['dk'].mean() - off['dk'].mean()) < 0.5, (on['dk'].mean(), off['dk'].mean())
+    # ceiling breathes: more big-strikeout upside than the flat-K baseline
+    assert np.percentile(on['dk'], 97) > np.percentile(off['dk'], 97)
+    # strikeouts land on the opponent's quiet (low-z) days
+    assert np.corrcoef(on['k'], z)[0, 1] < -0.05
+
+
+def test_ceiling_separates_by_opponent_strength():
+    """Holding the pitcher fixed, a favorable matchup (whiff-prone / weaker
+    offense) must produce a materially higher DK ceiling than a brutal one
+    (contact / stronger offense). Guards against a matchup-invariant ceiling."""
+    n = 60000
+    soft = dict(_vec(0.5), k_pct=0.275, h_per_bf=0.220, hr_per_bf=0.030)  # high-K, modest
+    tough = dict(_vec(0.5), k_pct=0.185, h_per_bf=0.245, hr_per_bf=0.040)  # low-K, power
+    rng = np.random.default_rng(404)
+    bf, _, z, wb = _workload(_vec(0.5), rng, n)
+    Lg = np.random.default_rng(1).standard_normal(n); Lt = np.random.default_rng(2).standard_normal(n)
+    sho = 0.20 * Lg + 0.50 * Lt
+    m_soft = 0.92 * np.exp(sho - 0.5 * (0.2**2 + 0.5**2))
+    m_tough = 1.15 * np.exp(sho - 0.5 * (0.2**2 + 0.5**2))
+    zc = (sho - sho.mean()) / (sho.std() + 1e-9)
+    dk_soft = sim_proj._sim_pitcher(soft, bf, m_soft, zc, True, wb, 27, np.random.default_rng(5), n)['dk']
+    dk_tough = sim_proj._sim_pitcher(tough, bf, m_tough, zc, True, wb, 27, np.random.default_rng(5), n)['dk']
+    assert np.percentile(dk_soft, 90) > np.percentile(dk_tough, 90) + 3.0
+    assert (dk_soft >= 30).mean() > 2.0 * (dk_tough >= 30).mean()
+
+
 def _primary_seg(vp, rng, n, opp_implied=4.2):
     """Replicate the primary/bulk-arm branch of sim_proj.simulate so the
     ip_per_g governor can be exercised without building a full matchup."""

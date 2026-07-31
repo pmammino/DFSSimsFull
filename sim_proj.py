@@ -83,6 +83,23 @@ HIT_RUN_ADV   = 0.34   # P(a given runner scores) on a non-HR hit (mean-preservi
 HOOK_ER_MEAN  = 7.0    # earned runs a manager tolerates before pulling a starter
 HOOK_ER_SD    = 1.8
 
+# ── Strikeout ceiling: opponent awareness ──────────────────────────────────────
+# The MEAN opponent-K% adjustment is already baked into vec['k_pct'] via full
+# log5 (matchup._opponent_adjust_pitcher), so a low-strikeout contact lineup
+# lowers a pitcher's mean K rate and a whiff-prone one raises it. What was missing
+# is at the CEILING: inside the outing the K rate was a flat constant, decoupled
+# from how the opponent actually swung THAT sim, while hits/HR/BB already co-vary
+# with the per-sim opponent latent (m_opp). So a pitcher's big-strikeout ceiling
+# games did not line up with the offense's quiet days, and the DK ceiling barely
+# moved with the matchup. We now let the per-batter K rate co-move INVERSELY with
+# the standardized opponent shock z (mean 0 -> the mean K rate, and thus the
+# projection level, is preserved): on a sim where the offense is quiet the pitcher
+# misses more bats (fatter K ceiling), on a sim where they square it up he whiffs
+# fewer. K_ENV_ELAST is the per-sigma swing; K_ENV_CLIP bounds it so an extreme
+# latent draw can't drive the rate to a degenerate value.
+K_ENV_ELAST = 0.13
+K_ENV_CLIP  = 0.45
+
 
 # Plate appearances per game by lineup slot. Empirically PA/game falls ~linearly
 # from leadoff to the 9-hole with a slope of ~0.10/slot and a spread of ~0.8 PA
@@ -123,7 +140,12 @@ def _sim_pitcher(vec, bf_sim, m_opp, z, can_win, win_base, outs_cap, rng, n):
     hr_r = np.clip(vec['hr_per_bf'] * m_opp, 0.003, 0.12)
     bb_r = np.clip(vec['bb_pct']    * np.sqrt(m_opp), 0.02, 0.25)
     hbp_r = np.full(n, min(0.05, vec['hbp_per_bf']))
-    k_r   = np.full(n, min(0.60, vec['k_pct']))
+    # K rate co-moves inversely with the opponent's per-sim environment so the
+    # K-driven DK ceiling is matchup-aware (see K_ENV_ELAST): quiet offense -> more
+    # whiffs, mashing offense -> fewer. z has mean 0 so the mean K rate (already
+    # opponent-K% adjusted via log5) is preserved.
+    k_env = np.clip(1.0 - K_ENV_ELAST * z, 1.0 - K_ENV_CLIP, 1.0 + K_ENV_CLIP)
+    k_r   = np.clip(min(0.60, vec['k_pct']) * k_env, 0.03, 0.62)
     hit_nh = np.clip(h_r - hr_r, 0.0, None)               # non-HR hits
     # Keep the six named outcomes + a BIP-out remainder a valid partition.
     tot = hr_r + hit_nh + bb_r + hbp_r + k_r
@@ -374,8 +396,15 @@ def simulate(matchup, n_sims=10000, seed=20260610):
                 info = ps[role_key]
                 if not info or info['vec'] is None: continue
                 v = info['vec']
+                # NOTE: no positive (opp_implied-4.5) workload term. It used to
+                # ADD planned batters faced against a high-total offense, which
+                # perversely handed the pitcher MORE strikeout opportunities (a
+                # higher DK ceiling) for a tougher matchup. Matchup difficulty now
+                # flows through the ceiling correctly instead — a strong offense
+                # lowers the mean K rate (log5), raises hit/HR traffic, and via the
+                # per-sim K-environment coupling damps the big-strikeout tail.
                 bf = np.clip(rng.normal(v['tbf_per_ip']*5.6, 3.0, n) - z*3.0
-                             - (v['era']-4.20)*0.8 + (opp_implied-4.5)*1.0, 8, 34)
+                             - (v['era']-4.20)*0.8, 8, 34)
                 seg = _sim_pitcher(v, bf, m_opp, z, True, win_base(v), 27, rng, n)
                 pitcher_dk[info['name']] = seg['dk']
                 prows.append(_prow(info['name'], 'STARTER', side, label, g, opp_side, opp_implied, seg))
