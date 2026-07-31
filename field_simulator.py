@@ -160,6 +160,13 @@ def main():
     ap.add_argument('--params', default='field_params.json')
     ap.add_argument('--outdir', default='fields')
     ap.add_argument('--seed', type=int, default=11)
+    ap.add_argument('--own_uncertainty', action='store_true',
+                    help='treat projected ownership as a distribution: rebuild '
+                         'the field pool from a fresh ownership draw every '
+                         '--own_uncertainty_batch lineups, so the field mixes '
+                         'over ownership scenarios instead of one point estimate '
+                         '(see ownership_model.sample_ownership).')
+    ap.add_argument('--own_uncertainty_batch', type=int, default=100)
     a = ap.parse_args()
 
     os.makedirs(a.outdir, exist_ok=True)
@@ -175,11 +182,29 @@ def main():
         tilted = tilt_structures([(tuple(s), w) for s, w in params['stack_structures']],
                                  n, a.medium, a.stack_tilt)
         p = dict(params); p['stack_structures'] = [(list(s), w) for s, w in tilted]
-        pool = Pool(adj_df)
-        b = Builder(pool, p, seed=a.seed + n)
 
+        # ownership-uncertainty: optionally rebuild the pool from a fresh
+        # ownership draw every `batch` lineups so the field is a mixture over
+        # ownership scenarios (grading stops treating %Drafted as a fact).
+        unc_rng = None
+        if a.own_uncertainty:
+            from ownership_model import resample_ownership_pool
+            unc_rng = np.random.default_rng(a.seed + n)
+
+        def _builder(built):
+            if unc_rng is not None:
+                drawn = resample_ownership_pool(norm_df, unc_rng)
+                adj = adjust_ownership(drawn, beta)
+            else:
+                adj = adj_df
+            return Builder(Pool(adj), p, seed=a.seed + n + built)
+
+        b = _builder(0)
         lineups, fails = [], 0
         while len(lineups) < n and fails < n*20 + 500:
+            if unc_rng is not None and len(lineups) and \
+                    len(lineups) % a.own_uncertainty_batch == 0:
+                b = _builder(len(lineups))     # fresh ownership scenario
             lu = b.build_one()
             if lu is None:
                 fails += 1; continue

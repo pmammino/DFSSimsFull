@@ -23,6 +23,7 @@ import ownership_model as OM
 from ownership_model import (
     OwnershipParams, project_ownership, sim_features, size_beta,
     _cap_redistribute, SLOT_COUNT, norm,
+    ownership_sigma, sample_ownership, resample_ownership_pool,
 )
 
 
@@ -93,7 +94,7 @@ def test_no_player_over_100():
         sims[norm(f"OF{i}")] = np.full(2000, 1.0)
     own = project_ownership(pool, sims)
     assert own.max() <= 100.0 + 1e-6
-    assert abs(own.sum() - 300.0) < 1e-3      # invariant still holds
+    assert abs(own.sum() - 300.0) < _TOL      # invariant still holds (3-dp rounding)
 
 
 def test_cap_redistribute_conserves_total():
@@ -117,6 +118,23 @@ def test_value_effect_of_salary():
     own = project_ownership(pool, sims)
     own.index = pool["Name"]
     assert own["cheap"] > own["pricey"]
+
+
+def test_batting_order_effect():
+    # equal projection & salary; earlier in the order -> more owned
+    pool, sims = _of_slot([("leadoff", 9.0, 5000), ("nine_hole", 9.0, 5000)])
+    order = {norm("leadoff"): 1, norm("nine_hole"): 9}
+    own = project_ownership(pool, sims, order=order)
+    own.index = pool["Name"]
+    assert own["leadoff"] > own["nine_hole"]
+
+
+def test_batting_order_absent_is_graceful():
+    # no order info anywhere -> feature contributes nothing, invariant holds
+    pool, sims = _pool_and_sims()
+    own = project_ownership(pool, sims)          # order not supplied
+    for pos, s in _slot_sums(pool, own).items():
+        assert abs(s - 100.0 * SLOT_COUNT[pos]) < _TOL
 
 
 def test_missing_salary_graceful():
@@ -154,6 +172,65 @@ def test_size_beta_formula():
     assert size_beta(3000, P.n_medium, P.chalk_k) == 1.0        # medium = neutral
     assert size_beta(300, P.n_medium, P.chalk_k) > 1.0          # small = chalkier
     assert size_beta(30000, P.n_medium, P.chalk_k) < 1.0        # large = flatter
+
+
+def test_ownership_sigma_grows_with_ownership():
+    P = OwnershipParams()
+    sig = ownership_sigma([1.0, 10.0, 25.0], params=P)
+    assert sig[0] < sig[1] < sig[2]              # heteroskedastic
+    assert sig[0] >= P.sigma_min
+
+
+def test_ownership_sigma_unconfirmed_multiplier():
+    P = OwnershipParams()
+    conf = ownership_sigma([10.0], order=[3], params=P)[0]      # confirmed slot 3
+    unconf = ownership_sigma([10.0], order=[np.nan], params=P)[0]  # unconfirmed
+    assert unconf > conf
+
+
+def test_project_ownership_return_sigma():
+    pool, sims = _pool_and_sims()
+    own, sig = project_ownership(pool, sims, return_sigma=True)
+    assert len(sig) == len(own)
+    assert (sig > 0).all()
+    # higher-owned players carry more uncertainty
+    order = np.argsort(own.to_numpy())
+    assert sig.to_numpy()[order][-1] >= sig.to_numpy()[order][0]
+
+
+def test_sample_ownership_preserves_slot_invariant():
+    rng = np.random.default_rng(0)
+    own = np.array([30.0, 25.0, 20.0, 15.0, 10.0, 60.0, 40.0])
+    pos = np.array(["OF"] * 5 + ["P"] * 2)
+    sigma = ownership_sigma(own)
+    for _ in range(20):
+        draw = sample_ownership(own, sigma, pos, rng)
+        assert abs(draw[pos == "OF"].sum() - 300.0) < 1e-6
+        assert abs(draw[pos == "P"].sum() - 200.0) < 1e-6
+        assert draw.max() <= 100.0 + 1e-9
+
+
+def test_sample_ownership_varies():
+    rng = np.random.default_rng(1)
+    own = np.array([20.0, 18.0, 16.0, 14.0, 12.0, 10.0, 5.0, 5.0])
+    pos = np.array(["OF"] * 8)
+    sigma = ownership_sigma(own)
+    d1 = sample_ownership(own, sigma, pos, rng)
+    d2 = sample_ownership(own, sigma, pos, rng)
+    assert not np.allclose(d1, d2)               # draws differ
+    # the highest-σ (highest-own) player should move more than a low-own one
+    draws = np.array([sample_ownership(own, sigma, pos, rng) for _ in range(200)])
+    assert draws[:, 0].std() > draws[:, 6].std()
+
+
+def test_resample_ownership_pool():
+    rng = np.random.default_rng(2)
+    pool, sims = _pool_and_sims()
+    pool = OM.add_ownership_column(pool, sims)
+    out = resample_ownership_pool(pool, rng)
+    for pos, s in out.groupby("Pos")["Ownership"].sum().items():
+        assert abs(s - 100.0 * SLOT_COUNT[pos]) < _TOL
+    assert out["Ownership"].max() <= 100.0 + 1e-6
 
 
 def test_sim_features_shape():
