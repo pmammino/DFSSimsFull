@@ -178,6 +178,53 @@ def test_primary_governor_shortens_a_true_reliever():
     assert o['dk'].mean() < 9.0           # not a starter-sized projection
 
 
+def _starter_seg(v, rng, n, wb=0.5, opp_implied=4.2):
+    """Replicate the solo-STARTER branch of sim_proj.simulate (with the IP/G
+    governor) so a reliever listed as the starter can be exercised directly."""
+    z = rng.standard_normal(n); m_opp = np.ones(n)
+    if float(v.get('ip_per_g', sim_proj.PRIMARY_FULL_IP)) >= sim_proj.STARTER_MIN_IP_PER_G:
+        bf = np.clip(rng.normal(v['tbf_per_ip']*5.6, 3.0, n) - z*3.0
+                     - (v['era']-4.20)*0.8, 8, 34)
+        return sim_proj._sim_pitcher(v, bf, m_opp, z, True, wb, 27, rng, n)
+    ip_plan = float(np.clip(v['ip_per_g'] * sim_proj.PRIMARY_IP_STRETCH, 1.0, sim_proj.PRIMARY_FULL_IP))
+    bf = np.clip(rng.normal(v['tbf_per_ip']*ip_plan, 2.0, n) - z*1.5 - (opp_implied-4.5)*0.5, 3, 18)
+    oc = int(np.clip(round(ip_plan*3) + 3, 3, 12))
+    return sim_proj._sim_pitcher(v, bf, m_opp, z, False, 0.0, oc, rng, n)
+
+
+def test_starter_governor_shortens_a_reliever_listed_as_starter():
+    """A reliever the slate feed lists as the 'starter' (a spot start or a
+    bullpen-game bulk arm) must be simulated near his real usage, NOT as a
+    ~5.6-IP full start — the Jonathan Pintaro case (~15 DK, quality-start-capable
+    for an arm who never goes deep)."""
+    n = 40000
+    reliever = dict(_vec(0.6), ip_per_g=1.6)   # decent stuff, but a short arm
+    o = _starter_seg(reliever, np.random.default_rng(7), n)
+    assert o['win'].sum() == 0                  # can't earn a win in ~2-3 IP
+    assert o['ip'].mean() < 3.0                 # governed near his real outing
+    assert o['dk'].mean() < 10.0                # not a full-starter projection
+
+
+def test_starter_governor_leaves_genuine_starter_unchanged():
+    """A genuine starter (IP/G >= the starter line, or a missing IP/G that
+    defaults to a full start) keeps the prior full-starter treatment exactly —
+    same rng path, byte-for-byte."""
+    n = 40000
+    starter = dict(_vec(0.6), ip_per_g=5.4)
+    seed = 11
+    got = _starter_seg(starter, np.random.default_rng(seed), n)
+    rng = np.random.default_rng(seed); z = rng.standard_normal(n); m_opp = np.ones(n)
+    bf = np.clip(rng.normal(starter['tbf_per_ip']*5.6, 3.0, n) - z*3.0
+                 - (starter['era']-4.20)*0.8, 8, 34)
+    ref = sim_proj._sim_pitcher(starter, bf, m_opp, z, True, 0.5, 27, rng, n)
+    assert abs(got['dk'].mean() - ref['dk'].mean()) < 1e-6
+    assert got['ip'].mean() > 4.0
+    # a pitcher with NO established IP/G defaults to full-starter treatment
+    noipg = _vec(0.6)                            # no ip_per_g key
+    g2 = _starter_seg(noipg, np.random.default_rng(seed), n)
+    assert g2['ip'].mean() > 4.0 and g2['win'].sum() > 0
+
+
 def test_primary_governor_leaves_bulk_starter_unchanged():
     """A stretched-out bulk starter (weighted_IP_per_G >= PRIMARY_FULL_IP /
     STRETCH) must keep the prior full-starter treatment exactly."""
