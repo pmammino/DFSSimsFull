@@ -29,6 +29,8 @@ from collections import Counter, defaultdict
 
 import numpy as np
 
+import portfolio_ev as pev
+
 
 # --------------------------------------------------------------------------- #
 # Row parsing
@@ -385,7 +387,9 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
                         max_overlap=1.0, group_of=None, group_cap=1.0,
                         player_caps=None, team_caps=None,
                         player_mins=None, team_mins=None, eval_sims=None,
-                        tie_seed=None, pay_report=None):
+                        tie_seed=None, pay_report=None,
+                        report_scores=None, report_field_cut=None,
+                        report_cut_places=None, prize=None):
     """Greedily build the export set that maximizes the expected *utility* of the
     portfolio's per-simulation dollar return, subject to the same exposure /
     diversity caps as :func:`select_portfolio`.
@@ -570,8 +574,24 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
     if report.shape[1] != n_row:
         raise ValueError(f"pay_report has {report.shape[1]} cols but res_df has {n_row}")
     n_report = report.shape[0]
-    W = (report[:, chosen_pos].sum(axis=1) if chosen_pos
-         else np.zeros(n_report, dtype=np.float64))
+    # W is the portfolio's per-sim total winnings. When the chosen lineups' raw
+    # report-slice scores (+ the field ladder and prize curve) are supplied, place
+    # them against BOTH the field AND each other so correlated lineups that boom
+    # together are paid ONCE (1st + 2nd + …), not N times — otherwise summing the
+    # independent payout columns double-counts the top prize and the reported EV /
+    # ROI / winnings distribution overshoot. Falls back to the independent sum when
+    # the scores aren't provided (e.g. unit tests).
+    if (chosen_pos and report_scores is not None and report_field_cut is not None
+            and report_cut_places is not None and prize is not None):
+        rs = np.asarray(report_scores, dtype=np.float32)
+        if rs.shape[1] != n_row:
+            raise ValueError(f"report_scores has {rs.shape[1]} cols but res_df "
+                             f"has {n_row} rows")
+        W = pev.portfolio_payout(rs[:, chosen_pos], report_field_cut,
+                                 report_cut_places, prize)
+    else:
+        W = (report[:, chosen_pos].sum(axis=1) if chosen_pos
+             else np.zeros(n_report, dtype=np.float64))
     info = {
         "chosen": len(chosen), "requested": N, "skipped_unmapped": skipped,
         "max_pitcher": max((expo[n] for n in pitchers), default=0),

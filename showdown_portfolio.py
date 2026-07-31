@@ -28,6 +28,7 @@ from collections import Counter
 
 import numpy as np
 
+import portfolio_ev as pev
 from portfolio import (_split, _jaccard, _unmet_mins, detect_value_groups,  # noqa: F401
                        _tie_banded_sort, value_group_member_caps,
                        shrink_value_group_means)
@@ -213,7 +214,9 @@ def select_showdown_portfolio_ev(res_df, n_select, pay, util, *, cols=SD_COLS,
                                  group_cap=1.0, player_caps=None, captain_caps=None,
                                  team_caps=None, player_mins=None, captain_mins=None,
                                  team_mins=None, eval_sims=None, tie_seed=None,
-                                 pay_report=None):
+                                 pay_report=None, report_scores=None,
+                                 report_field_cut=None, report_cut_places=None,
+                                 prize=None):
     """Greedily build the export set that maximizes the expected *utility* of the
     portfolio's per-simulation dollar return, subject to the showdown exposure /
     diversity caps. Mirrors ``portfolio.select_portfolio_ev``; row order of
@@ -334,8 +337,21 @@ def select_showdown_portfolio_ev(res_df, n_select, pay, util, *, cols=SD_COLS,
     report = pay if pay_report is None else np.asarray(pay_report, dtype=np.float32)
     if report.shape[1] != n_row:
         raise ValueError(f"pay_report has {report.shape[1]} cols but res_df has {n_row}")
-    W = (report[:, chosen_pos].sum(axis=1) if chosen_pos
-         else np.zeros(report.shape[0], dtype=np.float64))
+    # Charge each lineup its true place among the field AND your other entries so
+    # correlated lineups that boom together are paid once (1st + 2nd + …) instead
+    # of each collecting the top prize — the independent sum overshoots the
+    # reported EV. Falls back to the independent sum when scores aren't supplied.
+    if (chosen_pos and report_scores is not None and report_field_cut is not None
+            and report_cut_places is not None and prize is not None):
+        rs = np.asarray(report_scores, dtype=np.float32)
+        if rs.shape[1] != n_row:
+            raise ValueError(f"report_scores has {rs.shape[1]} cols but res_df "
+                             f"has {n_row} rows")
+        W = pev.portfolio_payout(rs[:, chosen_pos], report_field_cut,
+                                 report_cut_places, prize)
+    else:
+        W = (report[:, chosen_pos].sum(axis=1) if chosen_pos
+             else np.zeros(report.shape[0], dtype=np.float64))
     info = _info(chosen, N, skipped, expo, capexpo, teamc, groupc,
                  player_minn, captain_minn, team_minn)
     info.update({

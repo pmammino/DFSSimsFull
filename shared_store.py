@@ -41,6 +41,11 @@ ARTIFACTS = [
     # a single object so it accumulates across builds/instances, independent of
     # the 4-day sim-history pruning below. See ownership_history.py.
     "ownership_history/features.csv",
+    # projected (expected) ownership, precomputed in the scheduled refresh and
+    # recomputed only when the player pool changes (see scripts/build_ownership.py).
+    # The signature travels with it so the pool-change gate survives across runs.
+    "deliverables/projected_ownership.csv",
+    "deliverables/.ownership_pool_sig.json",
 ]
 STAMP = "out/.build_stamp.json"
 LOCK_KEY = "_refresh.lock"

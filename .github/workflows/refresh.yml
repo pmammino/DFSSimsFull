@@ -12,10 +12,11 @@ name: refresh-sims
 
 on:
   schedule:
-    # 13:00 UTC ≈ 9am ET — rebuild projections early so they're ready before the
-    # day's users arrive. Projections don't need posted lineups; shift this
-    # earlier (e.g. "0 11 * * *" ≈ 7am ET) for a bigger head start if you like.
-    - cron: "0 13 * * *"
+    # 11:00 UTC ≈ 7am ET — rebuild projections early so they're ready well before
+    # the day's users arrive. Projections don't need posted lineups, so building
+    # this early is safe and gives the biggest head start. (Cron is fixed UTC;
+    # this lands at 7am during EDT / 6am during EST.)
+    - cron: "0 11 * * *"
   workflow_dispatch:
     inputs:
       stage:
@@ -86,6 +87,14 @@ jobs:
           else
             python scripts/stamp_build.py --projections
           fi
+
+      - name: Refresh projected ownership (only when the player pool changed)
+        run: |
+          # Precompute expected ownership from the freshly built sims so the app
+          # doesn't recompute it on every interactive run. The script fingerprints
+          # the slate's player pool and SKIPS the recompute when nothing moved, so
+          # a sims-only re-run with the same players costs nothing here.
+          python scripts/build_ownership.py
 
       - name: Publish artifacts to the object store
         run: |

@@ -71,6 +71,41 @@ def test_pay_report_makes_reported_ev_out_of_sample():
     assert info_is["exp_return"] > info["exp_return"]
 
 
+def test_portfolio_payout_pays_a_shared_boom_once():
+    # Two lineups both clear 1st place in the same sim. Summing the independent
+    # payout columns would pay 1st twice; the portfolio payout pays 1st + 2nd.
+    cut_places = np.array([1, 2, 3])
+    field_cut = np.array([[100.0, 90.0, 80.0]], dtype=np.float32)   # one sim
+    prize = np.array([0.0, 1000.0, 100.0, 10.0])
+    scores = np.array([[105.0, 101.0]], dtype=np.float32)           # both beat 1st
+    W = pev.portfolio_payout(scores, field_cut, cut_places, prize)
+    assert W[0] == 1000.0 + 100.0
+    indep = pev.candidate_payout_matrix(scores, field_cut, cut_places, prize)
+    assert indep.sum() == 2000.0 and W[0] < indep.sum()
+
+
+def test_select_portfolio_ev_collision_lowers_reported_ev():
+    # Two identical-scoring lineups that both win 1st in every sim. The naive
+    # (independent-sum) report double-counts the win; the collision-aware report
+    # (report_scores supplied) pays 1st + 2nd, so its EV is strictly lower.
+    df = pd.DataFrame([_mk('sA', 1, 5), _mk('sB', 2, 5)])
+    cut_places = np.array([1, 2, 3])
+    field_cut = np.array([[100.0, 90.0, 80.0], [100.0, 90.0, 80.0]], dtype=np.float32)
+    prize = np.array([0.0, 1000.0, 100.0, 10.0])
+    scores = np.array([[105.0, 105.0], [105.0, 105.0]], dtype=np.float32)  # both win
+    pay = pev.candidate_payout_matrix(scores, field_cut, cut_places, prize)
+    _, i_naive, _ = select_portfolio_ev(df, 2, pay, pev.utility("Balanced"),
+                                        cols=COLS, hitc=HITC)
+    _, i_coll, W = select_portfolio_ev(
+        df, 2, pay, pev.utility("Balanced"), cols=COLS, hitc=HITC,
+        report_scores=scores, report_field_cut=field_cut,
+        report_cut_places=cut_places, prize=prize)
+    assert i_naive["exp_return"] == 2000.0                 # 1000 double-counted
+    assert i_coll["exp_return"] == 1100.0                  # 1000 (1st) + 100 (2nd)
+    assert i_coll["exp_return"] < i_naive["exp_return"]
+    assert float(W.mean()) == 1100.0
+
+
 def test_pay_report_shape_mismatch_raises():
     df = pd.DataFrame([_mk('sA', 1, 5), _mk('sB', 2, 4)])
     pay = np.array([[100., 0.], [100., 0.]], dtype=np.float32)
