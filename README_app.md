@@ -383,12 +383,14 @@ instead of each banking the top prize.
    expanded, `SP/RP → P`, opponents inferred from the sims).
 2. Builds a uniform, ownership-blind **candidate** pool (the lineups you're
    evaluating).
-3. Builds a realistic **field** at your contest size — ~70% built the way real
-   entrants build (stacked, ceiling-seeking, ≥1 ace) and ~30% naive chalk. A
-   pure-ownership field is far too weak (even a random competently-built lineup
-   beats it), which inflates every candidate's finish and the reported EV/ROI;
-   the mixed field pulls a no-skill set to ≈ −rake and a sharp set to a
-   defensible edge. Chalk still sharpens in small fields, flattens in large.
+3. Builds a realistic **field** at your contest size — ~90% built the way real
+   entrants build (stacked, ceiling-seeking, ≥1 ace) and ~10% naive chalk (a
+   realistic soft tail). A pure-ownership field is far too weak (even a random
+   competently-built lineup beats it for ~+22% ROI), which inflates every
+   candidate's finish and the reported EV/ROI; the mixed field pushes a no-skill
+   set below breakeven and a genuinely sharp set to a defensible edge. At equal
+   size the sharp field matches the candidate pool's own score distribution, so
+   the contest is self-consistent. Chalk still sharpens in small fields.
 4. Inserts each candidate into the field per sim and ranks it →
    **Win% / Top10% / Top100% / AvgPlace** for every candidate.
 

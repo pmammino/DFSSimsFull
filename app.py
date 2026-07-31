@@ -2605,13 +2605,17 @@ with tabs[0]:
             # pure-ownership field is far too weak: even a *random* competently
             # built lineup beats it (~+22% ROI with zero skill on a measured
             # slate), which inflates every candidate's finish and the reported
-            # EV/ROI (a soft field is why 20 lineups looked like +260% ROII). So
-            # ~70% of the field is built with the SAME ceiling/stack/ace
+            # EV/ROI (a soft field is why 20 lineups looked like +260% ROI). So
+            # ~90% of the field is built with the SAME ceiling/stack/ace
             # sophistication (drawn on the ownership base, so it still stacks
-            # popular teams), and ~30% stays naive chalk. On a measured slate this
-            # pulls a no-skill random set to ≈ −rake and a sharp set to a
-            # defensible edge, instead of handing out free money.
-            FIELD_SHARP_FRAC = 0.70
+            # popular teams), and ~10% stays naive chalk — a realistic soft tail
+            # (real fields do carry unstacked/duplicate lineups). On a measured
+            # slate this pulls a no-skill random set below breakeven (≈ -17% ROI,
+            # past the -rake baseline) and a genuinely sharp set to a defensible
+            # edge, instead of handing out free money. Head-to-head at equal size
+            # the sharp field matches our candidates' full score distribution
+            # (mean/p99/ceiling), so the contest is self-consistent.
+            FIELD_SHARP_FRAC = 0.90
             st.write(f"Building a {contest_size:,}-entry field "
                      f"({FIELD_SHARP_FRAC:.0%} sharp + chalk)…")
             beta = beta_for_size(contest_size, int(medium), float(chalk))
