@@ -56,6 +56,15 @@ OPENER_BF_MEAN, OPENER_BF_SD = 4.6, 1.3
 PRIMARY_IP_STRETCH = 1.5
 PRIMARY_FULL_IP    = 5.0    # plan at/above this -> treat as a full bulk starter
 
+# The same governor applies to a feed-announced STARTER who is really a short
+# reliever (a reliever spot-starting, or a bullpen-game bulk arm listed as the
+# starter): an established IP/G below the starter line means he must NOT inherit
+# the blanket ~5.6-IP full-starter workload (27-out cap, 7-ER hook, win). Genuine
+# starters (IP/G >= this) keep the prior treatment exactly; below it, the arm is
+# governed to his real usage like the primary branch. Matches the starter/reliever
+# split in pitcher_outputs.assign_pitcher_roles (STARTER_IP_PER_G_THRESHOLD).
+STARTER_MIN_IP_PER_G = 3.5
+
 # How much a team-total override reshapes UPSIDE on top of shifting the mean.
 # An above-average total (scale > 1) widens that team's shared latent so the
 # whole lineup booms together on its big days — a higher total buys a fatter
@@ -383,20 +392,38 @@ def simulate(matchup, n_sims=10000, seed=20260610):
                 info = ps[role_key]
                 if not info or info['vec'] is None: continue
                 v = info['vec']
-                # NOTE: no positive (opp_implied-4.5) workload term. It used to
-                # ADD planned batters faced against a high-total offense, which
-                # perversely handed the pitcher MORE strikeout opportunities (a
-                # higher DK ceiling) for a TOUGHER matchup, leaving the ceiling
-                # essentially matchup-invariant. Removing it is what makes the
-                # ceiling opponent-aware: a strong offense now shortens the leash
-                # (fewer batters -> lower K ceiling) on top of the log5 mean-K
-                # suppression and higher hit/HR traffic. Validated against actuals
-                # (deliverables/sim_review): this widens the favorable-vs-brutal
-                # p90 gap ~4.2 -> ~5.4 pts AND trims the too-fat pooled ceiling
-                # toward the observed rate, rather than inflating it.
-                bf = np.clip(rng.normal(v['tbf_per_ip']*5.6, 3.0, n) - z*3.0
-                             - (v['era']-4.20)*0.8, 8, 34)
-                seg = _sim_pitcher(v, bf, m_opp, z, True, win_base(v), 27, rng, n)
+                # A feed-announced "starter" who is really a short reliever
+                # (established IP/G below the starter line — a reliever spot-
+                # starting, or a bullpen-game bulk arm listed as the starter) must
+                # NOT inherit the blanket ~5.6-IP full-starter workload: the 27-out
+                # cap, 7-ER hook, and win eligibility badly over-project an arm who
+                # never goes deep (a ~5-IP, quality-start-capable, ~15-DK line).
+                # Govern by his own weighted_IP_per_G exactly like the primary/bulk
+                # branch. Genuine starters (IP/G >= the starter line, and a missing
+                # IP/G which defaults to a full start) keep the prior treatment
+                # BYTE-FOR-BYTE — same rng path; only a truly short arm branches.
+                if float(v.get('ip_per_g', PRIMARY_FULL_IP)) >= STARTER_MIN_IP_PER_G:
+                    # NOTE: no positive (opp_implied-4.5) workload term. It used to
+                    # ADD planned batters faced against a high-total offense, which
+                    # perversely handed the pitcher MORE strikeout opportunities (a
+                    # higher DK ceiling) for a TOUGHER matchup, leaving the ceiling
+                    # essentially matchup-invariant. Removing it is what makes the
+                    # ceiling opponent-aware: a strong offense now shortens the leash
+                    # (fewer batters -> lower K ceiling) on top of the log5 mean-K
+                    # suppression and higher hit/HR traffic. Validated against actuals
+                    # (deliverables/sim_review): this widens the favorable-vs-brutal
+                    # p90 gap ~4.2 -> ~5.4 pts AND trims the too-fat pooled ceiling
+                    # toward the observed rate, rather than inflating it.
+                    bf = np.clip(rng.normal(v['tbf_per_ip']*5.6, 3.0, n) - z*3.0
+                                 - (v['era']-4.20)*0.8, 8, 34)
+                    seg = _sim_pitcher(v, bf, m_opp, z, True, win_base(v), 27, rng, n)
+                else:                                  # reliever/bulk arm listed as the starter
+                    ip_plan = float(np.clip(v['ip_per_g'] * PRIMARY_IP_STRETCH,
+                                            1.0, PRIMARY_FULL_IP))
+                    bf = np.clip(rng.normal(v['tbf_per_ip']*ip_plan, 2.0, n)
+                                 - z*1.5 - (opp_implied-4.5)*0.5, 3, 18)
+                    outs_cap_s = int(np.clip(round(ip_plan*3) + 3, 3, 12))
+                    seg = _sim_pitcher(v, bf, m_opp, z, False, 0.0, outs_cap_s, rng, n)
                 pitcher_dk[info['name']] = seg['dk']
                 prows.append(_prow(info['name'], 'STARTER', side, label, g, opp_side, opp_implied, seg))
 
