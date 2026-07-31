@@ -74,8 +74,31 @@ HOOK_ER_MEAN  = 7.0    # earned runs a manager tolerates before pulling a starte
 HOOK_ER_SD    = 1.8
 
 
+# Plate appearances per game by lineup slot. Empirically PA/game falls ~linearly
+# from leadoff to the 9-hole with a slope of ~0.10/slot and a spread of ~0.8 PA
+# (Baseball-Reference batting-order splits: ~4.65 leadoff → ~3.85 nine-hole).
+# The prior curve (4.2 - 0.055*(slot-1)) had only HALF that spread (slope 0.055,
+# spread 0.44), which under-weighted top-of-order bats: their PA-driven counting
+# stats — and thus DK points — were shrunk. That compressed the hitter range and
+# under-projected leadoff/2-hole hitters (diagnosed by comparing our hitter
+# projections to a consensus source: we ran ~0.6-0.8 pts below at the top of the
+# order and ~flat at the bottom).
+#
+# We steepen the slope to the empirical ~0.10 while HOLDING the lineup-average
+# PA fixed at its prior value, so this redistributes PAs from the bottom of the
+# order to the top WITHOUT changing team-total PA. That corrects the by-order
+# SHAPE without shifting the overall hitter LEVEL, which already validated
+# against actual box scores (near-zero mean bias). If a later re-grade shows
+# team-total PA itself is low (prior curve implies ~35.8 PA/game vs an empirical
+# ~38), raise PA_MEAN — but that shifts the level and needs a per-PA-rate
+# re-check, so it is deliberately left as a separate, validation-gated change.
+PA_MEAN = 3.98      # lineup-average PA/game (preserved from the prior curve)
+PA_SLOPE = 0.10     # PA lost per lineup slot (empirical ~0.10-0.11)
+
+
 def _pa_per_game(slot):
-    return 4.2 - (slot - 1) * 0.055
+    # centered on slot 5 so the 9-slot average stays exactly PA_MEAN
+    return PA_MEAN + PA_SLOPE * (5.0 - slot)
 
 
 def _sim_pitcher(vec, bf_sim, m_opp, z, can_win, win_base, outs_cap, rng, n):

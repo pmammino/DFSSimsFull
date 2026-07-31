@@ -58,11 +58,13 @@ Two constraints are then enforced exactly:
 | `ceil_shape` | `p90(sims) / mean(sims)` | upside *per unit of projection* — GPP "boom" appeal, orthogonal to the projection's level. |
 | `value` | `proj / (salary/1000)` | points per $1k — the classic ownership driver. |
 | `team_total` | implied runs for the hitter's team | stacking demand — high-total teams get piled on together. |
+| `order_score` | `10 − batting_order` (0 if unconfirmed) | lineup slot — top-of-order bats get more PAs and more ownership. |
 
-`value` and `team_total` are **optional**. If salary or Vegas context is absent
-the term is dropped and the slot renormalises, so the model always produces a
-coherent field. In the production pipeline both are present (salary from the DK
-feed/CSV, implied totals from `slate_ingest`).
+`value`, `team_total` and `order_score` are **optional**. If a feature's input
+is absent (no salary / no Vegas / no confirmed lineup) the term drops and the
+slot renormalises, so the model always produces a coherent field. In the
+production pipeline all are present (salary from the DK feed/CSV, implied totals
+and batting order from `slate_ingest`).
 
 ---
 
@@ -85,12 +87,16 @@ is excluded from training.
 ### Fitted coefficients (`ownership_params.json`)
 
 ```
-hitters:   proj 0.406   ceil_shape 0.000   value 0.084   team_total 0.170
-pitchers:  proj 0.846   ceil_shape 0.000   value 0.000   team_total 0.000
+hitters:   proj 0.198  ceil_shape 0.064  value 0.203  team_total 0.332  order_score 0.382
+pitchers:  proj 0.846  ceil_shape 0.000  value 0.000  team_total 0.000  order_score 0.000
 chalk_k 0.347   n_medium 3000
+uncertainty:  sigma_a 1.75   sigma_b 0.38   (see §8)
 ```
 
-Two honest findings the fit surfaces:
+**Batting order is the biggest hitter feature** (β 0.38) and pulls `proj` down
+from ~0.55 to ~0.20 — projection had been partly *proxying* for lineup slot, and
+`order_score` makes it explicit. Adding it lifts hitter out-of-sample Spearman
+from 0.66 to **0.74** (§4). Two further findings the fit surfaces:
 
 1. **`ceil_shape` fits to zero.** On top of the raw projection, the sim's
    *relative* ceiling adds no separable ownership signal in this sample — the
@@ -120,20 +126,21 @@ Spearman rank correlation, mean absolute ownership error, and the top-decile
 "chalk hit-rate". Full numbers in `validation_report.txt`.
 
 ```
-                          out-of-sample (held-out slate)
-                          Spearman     MAE      top-10% hit
-  HITTERS  sim-only         0.662      3.03%       0.43
-  HITTERS  + value + tt     0.660      2.98%       0.41
-  PITCHERS sim-only         0.690      5.23%       0.65
-  PITCHERS + value          0.690      5.23%       0.65
-  (metrics on the salary-covered rows, so the two models compare like-for-like)
+                               out-of-sample (held-out slate)
+                               Spearman     MAE      top-10% hit
+  HITTERS  sim-only              0.662      3.03%       0.43
+  HITTERS  + value + team_total  0.660      2.98%       0.41
+  HITTERS  + value + tt + ORDER  0.739      2.73%       0.46
+  PITCHERS (proj)                0.690      5.23%       0.65
+  (metrics on the salary-covered rows, so the models compare like-for-like)
 ```
 
-**Adding cost and context does not move out-of-sample ranking** on these four
-days: hitter Spearman is flat (0.662 → 0.660), MAE improves a hair
-(3.03% → 2.98%). This is consistent with §3 — the projection already carries the
-matchup/park/Vegas information, so `value`/`team_total` are largely redundant
-with it in aggregate.
+**Cost/context alone don't move out-of-sample ranking** (hitter Spearman
+0.662 → 0.660) — the projection already carries matchup/park/Vegas, so
+`value`/`team_total` are largely redundant in aggregate. **Batting order is the
+step change** (0.66 → 0.74, MAE 3.03 → 2.73), consistent across all four
+held-out slates: lineup slot is real information the projection only partially
+encoded.
 
 Where they *would* help is the minority of **mispriced** players (cheap
 high-projection punts; priced-up stars the field fades). But even there the
@@ -187,6 +194,47 @@ field simulator can be seeded from our own projections instead of an external
 feed. (App wiring into the Setup tab is a follow-up.)
 
 ---
+
+## 8. Ownership uncertainty (don't grade against a point estimate)
+
+Treating projected `%Drafted` as a fact makes candidate grading overconfident —
+a lineup can look great only because the field's ownership landed exactly where
+we projected. So the model also exposes **per-player ownership uncertainty**.
+
+Calibrated from out-of-sample residuals (predicted vs actual %Drafted), the
+spread grows sharply with the projection:
+
+```
+  predicted own   residual σ
+     0–3%            1.6
+     3–6%            3.3
+     6–10%           5.7
+     10–15%          7.4
+     15%+           10.6
+  fit:  σ(own) = 1.75 + 0.38·own   (%-owned points)
+```
+
+A 20%-projected chalk play realistically swings ±~10%; a 1% punt ±~2%. The model
+adds a **`sigma_unconfirmed_mult`** (default 1.4) that inflates σ for players
+whose lineup slot isn't confirmed — a principled default, not yet fit (every
+calibration player had a confirmed lineup).
+
+API (`ownership_model.py`):
+
+```python
+own, sig = project_ownership(pool, sims, return_sigma=True)     # point + σ
+draw = sample_ownership(own, sig, pool.Pos, rng)                # one realization
+realized = resample_ownership_pool(pool, rng)                   # pool with a drawn Ownership
+```
+
+Every draw is **invariant-preserving**: values are clipped to [0, 100] and
+water-filled back to each slot's total, so a realization is always a valid
+field composition. The field simulator consumes it via `--own_uncertainty`,
+which rebuilds the field pool from a fresh ownership draw every
+`--own_uncertainty_batch` lineups — so the graded field is a **mixture over
+ownership scenarios** rather than one point estimate, and candidates that are
+fragile to ownership swings are penalised appropriately. (Off by default;
+needs a live field-sim run to tune the batch size and confirm the EV effect.)
 
 ## 7. Limitations & next steps
 

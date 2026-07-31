@@ -62,7 +62,7 @@ DFF_DIR = os.environ.get("DFF_DIR", "")
 # feature sets per player kind. proj/ceil_shape are always available (sims);
 # value/team_total require DFF salary + Vegas. Pitchers get no team_total.
 SIM_FEATURES = ["proj", "ceil_shape"]
-FULL_HIT = ["proj", "ceil_shape", "value", "team_total"]
+FULL_HIT = ["proj", "ceil_shape", "value", "team_total", "order_score"]
 FULL_PIT = ["proj", "ceil_shape", "value"]
 
 
@@ -109,10 +109,20 @@ def load_dff() -> dict:
         nn = (x["first_name"].astype(str) + " " + x["last_name"].astype(str)).map(norm)
         sal = pd.to_numeric(x["salary"], errors="coerce")
         itt = pd.to_numeric(x["implied_team_score"], errors="coerce")
+        order = pd.to_numeric(x.get("confirmed_order"), errors="coerce") \
+            if "confirmed_order" in x else pd.Series(np.nan, index=x.index)
         day = out.setdefault(date, {})
-        for n, s, t in zip(nn, sal, itt):
-            day.setdefault(n, (s, t))
+        for n, s, t, o in zip(nn, sal, itt, order):
+            day.setdefault(n, (s, t, o))
     return out
+
+
+def _order_score(o) -> float:
+    try:
+        o = float(o)
+    except (TypeError, ValueError):
+        return 0.0
+    return (10.0 - o) if 1.0 <= o <= 9.0 else 0.0
 
 
 def parse_contest(path: str) -> pd.DataFrame:
@@ -158,7 +168,7 @@ def build_dataset() -> pd.DataFrame:
             if sc is None:
                 continue
             f = sim_features(sc)
-            salary, itt = sal_map.get(r.nname, (np.nan, np.nan))
+            salary, itt, order = sal_map.get(r.nname, (np.nan, np.nan, np.nan))
             value = f["proj"] / (salary / 1000.0) if salary and salary > 0 else np.nan
             rows.append({
                 "contest": cid, "date": date, "overlap": round(ov, 2),
@@ -166,6 +176,7 @@ def build_dataset() -> pd.DataFrame:
                 "is_pitcher": r.Pos == "P", "own": r.own,
                 "proj": f["proj"], "ceil_shape": f["ceil_shape"],
                 "salary": salary, "value": value, "team_total": itt,
+                "order_score": _order_score(order),
             })
     data = pd.DataFrame(rows)
     ncov = data["salary"].notna().sum()
@@ -286,6 +297,35 @@ def cross_validate(data: pd.DataFrame, feats_by_kind: dict, label: str):
     return out
 
 
+def estimate_sigma(data: pd.DataFrame, feats: list[str]) -> tuple[float, float]:
+    """Fit the heteroskedastic ownership-uncertainty model σ(own) ≈ a + b·own
+    from hitter residuals (predicted vs actual %Drafted), pooled across slates.
+    """
+    sub = data[~data.is_pitcher].dropna(subset=feats + ["own"]).copy()
+    betas = fit_betas(sub, feats)
+    preds = []
+    for (cid, pos), g in sub.groupby(["contest", "pos"]):
+        if len(g) < 2:
+            continue
+        p = predict_group(g, betas, feats)
+        preds.append(pd.DataFrame({"pred": p, "own": g["own"].to_numpy()},
+                                  index=g.index))
+    if not preds:
+        return 1.7, 0.41
+    r = pd.concat(preds)
+    r["resid"] = r["own"] - r["pred"]
+    r["bin"] = pd.cut(r["pred"], [0, 3, 6, 10, 15, 100])
+    binned = r.groupby("bin", observed=True).agg(
+        pred=("pred", "mean"), sd=("resid", "std")).dropna()
+    print("  σ(own) by predicted-ownership bin:")
+    for _, row in binned.iterrows():
+        print(f"    pred~{row['pred']:5.1f}%  resid σ={row['sd']:.2f}")
+    if len(binned) < 2:
+        return 1.7, 0.41
+    b, a = np.polyfit(binned["pred"], binned["sd"], 1)
+    return float(max(0.5, a)), float(max(0.0, b))
+
+
 def estimate_chalk_k(data: pd.DataFrame, n_medium: int) -> float:
     ks, ws = [], []
     for date, g in data.groupby("date"):
@@ -325,6 +365,7 @@ def build_dataset_from_log(path: str) -> pd.DataFrame:
     df["contest"] = df["date"]
     df["is_pitcher"] = df["pos"] == "P"
     df["ceil_shape"] = (df["ceiling"] / df["proj"]).clip(1.0, 6.0)
+    df["order_score"] = df["order"].map(_order_score) if "order" in df else 0.0
     df["n_entries"] = 3000
     print(f"history log: {len(df)} labeled rows across {df['date'].nunique()} slates"
           f"  ({df['salary'].notna().sum()} with salary)")
@@ -381,10 +422,19 @@ def main():
         k = estimate_chalk_k(data, args.n_medium)
         print(f"  estimated chalk_k = {k:.3f}")
 
+    if have_cost:
+        print("\n===== ownership uncertainty σ(own) = a + b·own =====")
+        sig_a, sig_b = estimate_sigma(data, full_feats["HIT"])
+        print(f"  fitted sigma_a={sig_a:.2f}  sigma_b={sig_b:.2f}")
+    else:
+        sig_a, sig_b = OwnershipParams().sigma_a, OwnershipParams().sigma_b
+
     if args.write:
         P = OwnershipParams()
         P.n_medium = args.n_medium
         P.chalk_k = round(k, 3)
+        P.sigma_a = round(sig_a, 3)
+        P.sigma_b = round(sig_b, 3)
         for f in full_feats["HIT"]:
             P.hit[f] = round(full_betas["HIT"][f], 3)
         for f in full_feats["PIT"]:

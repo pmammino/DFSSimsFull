@@ -123,13 +123,27 @@ class OwnershipParams:
     # hitter attractiveness coefficients (feature -> beta)
     hit: dict = field(default_factory=lambda: {
         "proj": 1.00, "ceil_shape": 0.30, "value": 0.55, "team_total": 0.35,
+        "order_score": 0.35,
     })
-    # pitcher attractiveness coefficients
+    # pitcher attractiveness coefficients (order_score is a hitter concept)
     pit: dict = field(default_factory=lambda: {
         "proj": 1.35, "ceil_shape": 0.25, "value": 0.60, "team_total": 0.0,
+        "order_score": 0.0,
     })
     # softmax temperature at the medium field (1.0 = betas as-is)
     tau: float = 1.0
+    # ownership UNCERTAINTY: σ (in %-owned points) around each point projection,
+    # for treating ownership as a distribution rather than a fact in grading.
+    # Calibrated heteroskedastic model σ(own) = sigma_a + sigma_b·own — residual
+    # spread grows with ownership (a 20%-owned chalk play swings ±~10%, a 1% punt
+    # ±~2%). sigma_unconfirmed_mult inflates σ for players whose lineup slot is
+    # not confirmed (more news-driven), a principled default (not yet fit — all
+    # calibration players had confirmed lineups).
+    sigma_a: float = 1.7
+    sigma_b: float = 0.41
+    sigma_unconfirmed_mult: float = 1.4
+    sigma_min: float = 1.0
+    sigma_max: float = 15.0
     # contest-size chalk sensitivity  beta(N) = 1 - k*log10(N/n_medium)
     chalk_k: float = 0.20
     n_medium: int = 3000
@@ -225,31 +239,32 @@ def _cap_redistribute(own: np.ndarray, slot_total: float, cap: float = 100.0,
     to slot_total. A single player can be on at most 100% of lineups, so a raw
     softmax spike above 100 must spill its excess onto the rest of the slot.
     """
-    own = np.clip(own.astype(float), floor, None)
+    own = np.clip(own.astype(float), floor, cap)
     if len(own) == 0:
         return own
-    # if the cap makes the target infeasible, just clip (degenerate slot)
+    # if the cap makes the target infeasible, everyone maxes out (degenerate)
     if slot_total >= cap * len(own):
         return np.full(len(own), cap)
+    # Water-fill: repeatedly scale the un-capped players so the slot hits its
+    # total, clamp anyone who spills over the cap, and repeat. Converges whether
+    # the input sums above OR below slot_total (a random ownership draw can do
+    # either), always landing at Σ = slot_total with every player ≤ cap.
     for _ in range(100):
-        over = own > cap
-        if not over.any():
+        total = own.sum()
+        if abs(total - slot_total) < 1e-9:
             break
-        excess = (own[over] - cap).sum()
-        own[over] = cap
-        room = (~over) & (own < cap)
-        if not room.any():
+        capped = own >= cap - 1e-12
+        free = ~capped
+        if not free.any():
             break
-        w = own[room]
-        own[room] = w + excess * (w / w.sum())
-    own = np.clip(own, floor, cap)
-    # renormalise the uncapped mass back to the exact slot total
-    capped = own >= cap - 1e-9
-    resid = slot_total - own[capped].sum()
-    free = own[~capped]
-    if free.sum() > 0 and resid > 0:
-        own[~capped] = free * (resid / free.sum())
-    return np.clip(own, floor, cap)
+        deficit = slot_total - own[capped].sum()      # what the free players owe
+        cur = own[free].sum()
+        if cur > 0:
+            own[free] = own[free] * (deficit / cur)    # keep their proportions
+        else:
+            own[free] = deficit / free.sum()           # all-zero: split evenly
+        own = np.clip(own, floor, cap)
+    return own
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +278,8 @@ def project_ownership(
     params: OwnershipParams | None = None,
     salary_col: str = "Salary",
     team_total: dict | None = None,
+    order: dict | None = None,
+    return_sigma: bool = False,
     pos_col: str = "Pos",
     name_col: str = "Name",
 ) -> pd.Series:
@@ -313,6 +330,25 @@ def project_ownership(
     else:
         df["team_total"] = np.nan
 
+    # batting order: earlier in the order => more PAs => more owned. A confirmed
+    # slot 1-9 scores 10-slot (9 best); an unconfirmed/absent order scores 0
+    # (worst), so late-swap/unconfirmed bats sink relative to the confirmed field.
+    # Source: an `order` dict {norm(name)->slot} or a pool "Order" column.
+    def _order_score(nm, row_order):
+        o = None
+        if order is not None:
+            o = order.get(norm(nm))
+        if o is None and row_order is not None and pd.notna(row_order):
+            o = row_order
+        try:
+            o = float(o)
+        except (TypeError, ValueError):
+            return 0.0
+        return (10.0 - o) if 1.0 <= o <= 9.0 else 0.0
+    row_orders = df["Order"] if "Order" in df.columns else [None] * len(df)
+    df["order_score"] = [_order_score(nm, ro)
+                         for nm, ro in zip(df[name_col], row_orders)]
+
     # --- conditional logit within each roster slot -------------------------
     own = np.full(len(df), np.nan)
     for pos, gidx in df.groupby(pos_col).groups.items():
@@ -326,7 +362,7 @@ def project_ownership(
         have = np.isfinite(proj)
         u = np.zeros(len(g))
         # only features with a fitted, non-zero beta AND available data are used
-        for feat in ("proj", "ceil_shape", "value", "team_total"):
+        for feat in ("proj", "ceil_shape", "value", "team_total", "order_score"):
             b = betas.get(feat, 0.0)
             if b == 0.0:
                 continue
@@ -357,7 +393,12 @@ def project_ownership(
 
     out = pd.Series(own, index=df["_orig_idx"].to_numpy())
     out.index = pool.index
-    return out.round(3)
+    out = out.round(3)
+    if return_sigma:
+        order_in = df["order_score"].map(lambda s: 10.0 - s if s else np.nan)
+        sig = ownership_sigma(out.to_numpy(), order=order_in.to_numpy(), params=P)
+        return out, pd.Series(np.round(sig, 3), index=pool.index)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +408,91 @@ def add_ownership_column(pool: pd.DataFrame, sims: dict, **kw) -> pd.DataFrame:
     """Return a copy of ``pool`` with the projected ``Ownership`` column set."""
     out = pool.copy()
     out["Ownership"] = project_ownership(out, sims, **kw)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# ownership uncertainty — treat %Drafted as a distribution, not a fact
+# ---------------------------------------------------------------------------
+def ownership_sigma(own, order=None, params: OwnershipParams | None = None,
+                    confirmed=None) -> np.ndarray:
+    """Per-player ownership standard deviation (in %-owned points).
+
+    σ(own) = clip(sigma_a + sigma_b·own, sigma_min, sigma_max), inflated by
+    ``sigma_unconfirmed_mult`` for players whose lineup slot is not confirmed.
+
+    own         array-like of projected %Drafted.
+    order       optional array-like batting order (1-9 confirmed; NaN/0/None =
+                unconfirmed → σ inflated). Ignored if ``confirmed`` is given.
+    confirmed   optional boolean array (True = lineup confirmed) overriding
+                ``order`` as the confirmation signal.
+    """
+    P = params or load_params()
+    own = np.asarray(own, dtype=float)
+    sig = np.clip(P.sigma_a + P.sigma_b * np.clip(own, 0, None),
+                  P.sigma_min, P.sigma_max)
+    if confirmed is None and order is not None:
+        o = pd.to_numeric(pd.Series(order), errors="coerce").to_numpy()
+        confirmed = (o >= 1) & (o <= 9)
+    if confirmed is not None:
+        conf = np.asarray(confirmed, dtype=bool)
+        sig = np.where(conf, sig, sig * P.sigma_unconfirmed_mult)
+    return np.clip(sig, P.sigma_min, P.sigma_max * P.sigma_unconfirmed_mult)
+
+
+def sample_ownership(own, sigma, pos, rng, *, cap: float = 100.0,
+                     floor: float = 0.0, corr: float = 0.0) -> np.ndarray:
+    """Draw ONE ownership realization, invariant-preserving per roster slot.
+
+    Each player is drawn ~ own + σ·z (clipped to [floor, cap]); the draw is then
+    renormalised within each position slot back to that slot's total (100 ×
+    slot_count), so a realization is always a valid field composition. Feed the
+    result into the field simulator per simulation to propagate ownership
+    uncertainty into candidate grading.
+
+    corr in [0,1] mixes in a shared per-slate chalk shock (correlated
+    up/down-weighting of the whole slate); 0 = purely idiosyncratic draws.
+    """
+    own = np.asarray(own, dtype=float)
+    sigma = np.asarray(sigma, dtype=float)
+    pos = np.asarray(pos)
+    z = rng.standard_normal(len(own))
+    if corr > 0:
+        g = rng.standard_normal()
+        z = np.sqrt(1 - corr) * z + np.sqrt(corr) * g
+    draw = np.clip(own + sigma * z, floor, cap)
+    out = draw.copy()
+    for p in np.unique(pos):
+        idx = np.where(pos == p)[0]
+        tgt = 100.0 * SLOT_COUNT.get(str(p), 1)
+        # renormalise to the slot total while respecting the per-player cap
+        # (water-fill), so the draw stays a valid field composition.
+        out[idx] = _cap_redistribute(draw[idx], tgt, cap=cap, floor=floor)
+    return out
+
+
+def resample_ownership_pool(pool: pd.DataFrame, rng, *,
+                            params: OwnershipParams | None = None,
+                            own_col: str = "Ownership", pos_col: str = "Pos",
+                            order_col: str = "Order",
+                            sigma_col: str | None = None) -> pd.DataFrame:
+    """Return a copy of ``pool`` with ``own_col`` replaced by one uncertainty
+    draw. σ is taken from ``sigma_col`` if present, else computed from the point
+    ownership (and ``order_col`` if present). Drop-in for a field-sim loop:
+
+        for _ in range(n_contests):
+            realized = resample_ownership_pool(pool, rng)
+            field = build_field(realized)   # existing field build
+    """
+    P = params or load_params()
+    out = pool.copy()
+    own = pd.to_numeric(out[own_col], errors="coerce").to_numpy()
+    if sigma_col and sigma_col in out.columns:
+        sig = out[sigma_col].to_numpy(dtype=float)
+    else:
+        order = out[order_col] if order_col in out.columns else None
+        sig = ownership_sigma(own, order=order, params=P)
+    out[own_col] = sample_ownership(own, sig, out[pos_col].to_numpy(), rng)
     return out
 
 

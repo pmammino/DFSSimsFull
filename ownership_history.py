@@ -51,7 +51,7 @@ DEFAULT_LOG = os.path.join(
 )
 
 COLUMNS = ["date", "name", "team", "opp", "pos", "role", "salary",
-           "proj", "ceiling", "floor", "std", "team_total", "value", "own"]
+           "proj", "ceiling", "floor", "std", "team_total", "order", "value", "own"]
 _KEY = ["date", "name", "pos"]
 
 # projection-engine baseball position -> DK roster slot. Multi-eligibility isn't
@@ -87,28 +87,32 @@ def salary_lookup_from_dk(dk) -> dict:
 
 
 def context_from_dff(dff_csv: str) -> dict:
-    """{norm(name): (salary, implied_team_score)} from a DailyFantasyFuel sheet."""
+    """{norm(name): (salary, implied_team_score, confirmed_order)} from a DFF sheet."""
     x = pd.read_csv(dff_csv)
     nn = (x["first_name"].astype(str) + " " + x["last_name"].astype(str)).map(norm)
     sal = pd.to_numeric(x["salary"], errors="coerce")
     itt = pd.to_numeric(x["implied_team_score"], errors="coerce")
-    return {n: (s, t) for n, s, t in zip(nn, sal, itt)}
+    order = pd.to_numeric(x.get("confirmed_order"), errors="coerce") \
+        if "confirmed_order" in x else pd.Series(np.nan, index=x.index)
+    return {n: (s, t, o) for n, s, t, o in zip(nn, sal, itt, order)}
 
 
 # --------------------------------------------------------------------------- #
 # build a slate's feature rows
 # --------------------------------------------------------------------------- #
 def slate_rows_from_pool(date, pool, sims, *, salary=None, team_total=None,
-                         ceil_pct=90.0) -> pd.DataFrame:
+                         order=None, ceil_pct=90.0) -> pd.DataFrame:
     """Compact feature rows from a pool + sim dict.
 
-    pool        DataFrame with Name, Pos [, Team, Opp, Role, Salary].
+    pool        DataFrame with Name, Pos [, Team, Opp, Role, Salary, Order].
     sims        {norm(name) -> sim scores}.
     salary      optional {norm(name) -> salary}; falls back to pool.Salary.
     team_total  optional {TeamCode -> implied runs} or {norm(name) -> runs}.
+    order       optional {norm(name) -> batting order 1-9}; falls back to pool.Order.
     """
     salary = salary or {}
     team_total = team_total or {}
+    order = order or {}
     rows = []
     for r in pool.itertuples():
         nm = getattr(r, "Name")
@@ -124,6 +128,10 @@ def slate_rows_from_pool(date, pool, sims, *, salary=None, team_total=None,
             sal = float(ps) if ps is not None and pd.notna(ps) else np.nan
         team = getattr(r, "Team", "")
         tt = team_total.get(team, team_total.get(nn, np.nan))
+        od = order.get(nn)
+        if od is None:
+            pr = getattr(r, "Order", None)
+            od = pr if pr is not None and pd.notna(pr) else np.nan
         value = (f["proj"] / (sal / 1000.0)
                  if sal and not pd.isna(sal) and sal > 0 else np.nan)
         rows.append({
@@ -131,7 +139,7 @@ def slate_rows_from_pool(date, pool, sims, *, salary=None, team_total=None,
             "opp": getattr(r, "Opp", ""), "pos": getattr(r, "Pos", ""),
             "role": getattr(r, "Role", ""), "salary": sal,
             "proj": f["proj"], "ceiling": f["ceiling"], "floor": floor,
-            "std": sd, "team_total": tt, "value": value, "own": np.nan,
+            "std": sd, "team_total": tt, "order": od, "value": value, "own": np.nan,
         })
     return pd.DataFrame(rows, columns=COLUMNS)
 
@@ -210,6 +218,8 @@ def slate_rows_from_projection_csvs(date, deliv_dir="deliverables",
             "floor": pd.to_numeric(x.get("p10"), errors="coerce"),
             "std": pd.to_numeric(x.get("std"), errors="coerce"),
             "team_total": tt,
+            "order": pd.to_numeric(x["slot"], errors="coerce") if "slot" in x
+                     else np.nan,   # projection CSV 'slot' is the batting order
             "value": np.where((sal.notna()) & (sal > 0), proj / (sal / 1000.0), np.nan),
             "own": np.nan,
         }))
@@ -302,6 +312,7 @@ def ingest_slate(date, *, sims_dir=None, deliv_dir="deliverables", dff=None,
             ctx.setdefault(k, v)
     salary = {k: v[0] for k, v in ctx.items()}
     team_total = {k: v[1] for k, v in ctx.items()}
+    order = {k: v[2] for k, v in ctx.items()}
 
     if sims_dir:
         sims = _sims_for_date(sims_dir, date)
@@ -315,7 +326,7 @@ def ingest_slate(date, *, sims_dir=None, deliv_dir="deliverables", dff=None,
                               "Team": "", "Salary": salary.get(n, np.nan)}
                              for n in sims])
         rows = slate_rows_from_pool(date, pool, sims, salary=salary,
-                                    team_total=team_total)
+                                    team_total=team_total, order=order)
     else:
         rows = slate_rows_from_projection_csvs(date, deliv_dir, salary=salary)
         # team_total from DFF where the projection CSV lacked it

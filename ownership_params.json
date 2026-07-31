@@ -1,17 +1,24 @@
 {
   "hit": {
-    "proj": 0.406,
-    "ceil_shape": 0.0,
-    "value": 0.084,
-    "team_total": 0.17
+    "proj": 0.198,
+    "ceil_shape": 0.064,
+    "value": 0.203,
+    "team_total": 0.332,
+    "order_score": 0.382
   },
   "pit": {
     "proj": 0.846,
     "ceil_shape": 0.0,
     "value": 0.0,
-    "team_total": 0.0
+    "team_total": 0.0,
+    "order_score": 0.0
   },
   "tau": 1.0,
+  "sigma_a": 1.748,
+  "sigma_b": 0.38,
+  "sigma_unconfirmed_mult": 1.4,
+  "sigma_min": 1.0,
+  "sigma_max": 15.0,
   "chalk_k": 0.347,
   "n_medium": 3000,
   "ceil_pct": 90.0,
