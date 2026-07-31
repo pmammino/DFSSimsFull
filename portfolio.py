@@ -29,6 +29,8 @@ from collections import Counter, defaultdict
 
 import numpy as np
 
+import portfolio_ev as pev
+
 
 # --------------------------------------------------------------------------- #
 # Row parsing
@@ -385,7 +387,11 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
                         max_overlap=1.0, group_of=None, group_cap=1.0,
                         player_caps=None, team_caps=None,
                         player_mins=None, team_mins=None, eval_sims=None,
-                        tie_seed=None, pay_report=None):
+                        tie_seed=None, pay_report=None,
+                        report_scores=None, report_field_cut=None,
+                        report_cut_places=None, prize=None, entry_fee=0.0,
+                        select_scores=None, select_field_cut=None,
+                        select_cut_places=None):
     """Greedily build the export set that maximizes the expected *utility* of the
     portfolio's per-simulation dollar return, subject to the same exposure /
     diversity caps as :func:`select_portfolio`.
@@ -438,6 +444,28 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
     else:
         sel_idx = np.arange(n_sim)
     pay_sel = pay[sel_idx]
+
+    # Collision-aware selection: when the candidates' raw select-slice scores (+
+    # the field ladder + prize curve) are supplied, the greedy scores each step by
+    # placing the WHOLE running portfolio into the contest together — every entry
+    # against the field AND against your other lineups — instead of summing the
+    # per-lineup payouts as if each were your only entry. That's what captures the
+    # correlation between lineups: a candidate that only wins in sims the set
+    # already covers slots in behind your existing winners (own_ahead high), so it
+    # collects a deep-place prize, not another 1st. Falls back to the independent
+    # payout objective when the scores aren't supplied (unit tests, old callers).
+    collide = (select_scores is not None and select_field_cut is not None
+               and select_cut_places is not None and prize is not None)
+    if collide:
+        prize_arr = np.asarray(prize, dtype=np.float64)
+        max_place = len(prize_arr) - 1
+        ss_sel = np.asarray(select_scores, dtype=np.float32)[sel_idx]
+        fcut_sel = np.asarray(select_field_cut, dtype=np.float32)[sel_idx]
+        fp_sel, q_sel = pev.field_places(ss_sel, fcut_sel, select_cut_places)
+        # how many CHOSEN lineups outscore each candidate, per sim (maintained
+        # incrementally as picks are added). Candidate j's place if added now is
+        # fp_sel[:, j] + own_ahead[:, j].
+        own_ahead = np.zeros((len(sel_idx), n_row), dtype=np.int64)
 
     def cap_n(frac):
         f = float(frac)
@@ -521,8 +549,17 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
         if not avail.any():
             break
         avail_idx = np.where(avail)[0]
-        # marginal gain of each available candidate: mean(util(W + pay)) - cur_u
-        u_new = util(W_sel[:, None] + pay_sel[:, avail_idx])
+        # marginal gain of each available candidate: mean(util(W + Δ)) - cur_u.
+        # Collision-aware: Δ is the candidate's payout at its place BEHIND the
+        # field and your already-chosen lineups (fp + own_ahead); the independent
+        # fallback treats Δ as the candidate's standalone payout.
+        if collide:
+            marg_place = np.clip(fp_sel[:, avail_idx] + own_ahead[:, avail_idx],
+                                 0, max_place)
+            marg = np.where(q_sel[:, avail_idx], prize_arr[marg_place], 0.0)
+            u_new = util(W_sel[:, None] + marg)
+        else:
+            u_new = util(W_sel[:, None] + pay_sel[:, avail_idx])
         gains = u_new.mean(axis=0) - cur_u
         if tie_seed is not None and n_sel > 1:
             # treat gain differences below their Monte-Carlo SE as ties: perturb by
@@ -550,7 +587,19 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
             break
         i = picked; f = feats[i]
         chosen_pos.append(i); chosen_sets.append(f["playerset"]); taken[i] = True
-        W_sel += pay_sel[:, i]
+        if collide:
+            # add the pick's payout at its place BEHIND the field and the lineups
+            # already chosen (its own_ahead), so a lineup that shares the set's
+            # winning sims contributes a deep-place prize, not another 1st — the
+            # running W reflects the contest, not a sum of standalone payouts. Then
+            # mark it ahead of every candidate it outscores so future picks slot in
+            # behind it. (The reported W re-places the final set exactly, so this
+            # insertion-order running total only needs to guide the greedy.)
+            place_pick = np.clip(fp_sel[:, i] + own_ahead[:, i], 0, max_place)
+            W_sel = W_sel + np.where(q_sel[:, i], prize_arr[place_pick], 0.0)
+            own_ahead += (ss_sel[:, [i]] > ss_sel).astype(np.int64)
+        else:
+            W_sel += pay_sel[:, i]
         cur_u = float(np.mean(util(W_sel)))
         for j, n in enumerate(f["names"]):
             expo[n] += 1
@@ -570,8 +619,24 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
     if report.shape[1] != n_row:
         raise ValueError(f"pay_report has {report.shape[1]} cols but res_df has {n_row}")
     n_report = report.shape[0]
-    W = (report[:, chosen_pos].sum(axis=1) if chosen_pos
-         else np.zeros(n_report, dtype=np.float64))
+    # W is the portfolio's per-sim total winnings. When the chosen lineups' raw
+    # report-slice scores (+ the field ladder and prize curve) are supplied, place
+    # them against BOTH the field AND each other so correlated lineups that boom
+    # together are paid ONCE (1st + 2nd + …), not N times — otherwise summing the
+    # independent payout columns double-counts the top prize and the reported EV /
+    # ROI / winnings distribution overshoot. Falls back to the independent sum when
+    # the scores aren't provided (e.g. unit tests).
+    if (chosen_pos and report_scores is not None and report_field_cut is not None
+            and report_cut_places is not None and prize is not None):
+        rs = np.asarray(report_scores, dtype=np.float32)
+        if rs.shape[1] != n_row:
+            raise ValueError(f"report_scores has {rs.shape[1]} cols but res_df "
+                             f"has {n_row} rows")
+        W = pev.portfolio_payout(rs[:, chosen_pos], report_field_cut,
+                                 report_cut_places, prize)
+    else:
+        W = (report[:, chosen_pos].sum(axis=1) if chosen_pos
+             else np.zeros(n_report, dtype=np.float64))
     info = {
         "chosen": len(chosen), "requested": N, "skipped_unmapped": skipped,
         "max_pitcher": max((expo[n] for n in pitchers), default=0),
@@ -592,7 +657,10 @@ def select_portfolio_ev(res_df, n_select, pay, util, *, cols, hitc,
         "floor_p10": float(np.percentile(W, 10)),
         "median": float(np.percentile(W, 50)),
         "ceiling_p90": float(np.percentile(W, 90)),
-        "cash_rate": float(np.mean(W > 0)),
+        # "cash rate" = share of slates the portfolio turns a PROFIT on, i.e. its
+        # winnings clear what it cost to enter (chosen × entry_fee). With the
+        # default entry_fee=0 this reduces to the old "any winnings" rate.
+        "cash_rate": float(np.mean(W > len(chosen) * float(entry_fee))),
     }
     return chosen, info, W
 

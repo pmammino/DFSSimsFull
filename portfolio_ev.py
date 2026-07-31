@@ -229,6 +229,83 @@ def candidate_payout_matrix(cand_scores, field_cut_scores, cut_places, prize):
     return pay
 
 
+def field_places(cand_scores, field_cut_scores, cut_places):
+    """Best field finishing place (and a paid/unpaid mask) for each candidate/sim.
+
+    ``place[s, j]`` is the shallowest (fewest-place) cutoff in ``cut_places`` whose
+    field score candidate ``j`` clears in sim ``s`` — i.e. its place among the
+    FIELD alone, read exactly as ``candidate_payout_matrix`` reads the thresholds.
+    ``qualified[s, j]`` is False when the score is below the deepest sampled cutoff
+    (out of the money regardless of how your other lineups place). Precompute this
+    once and it drives both the reported payout and the collision-aware selection
+    objective without re-scanning the field each greedy step.
+    """
+    cand_scores = np.asarray(cand_scores, dtype=np.float32)
+    field_cut_scores = np.asarray(field_cut_scores, dtype=np.float32)
+    cut_places = np.asarray(cut_places, dtype=np.int64)
+    n_sim, M = cand_scores.shape
+    places_desc = cut_places[::-1]              # deepest (largest) place first
+    place = np.empty((n_sim, M), dtype=np.int64)
+    qualified = np.empty((n_sim, M), dtype=bool)
+    last = len(places_desc) - 1
+    for s in range(n_sim):
+        thr_asc = field_cut_scores[s][::-1]     # field thresholds ascending in $
+        kk = np.searchsorted(thr_asc, cand_scores[s], side="right")
+        qualified[s] = kk > 0
+        place[s] = places_desc[np.clip(kk - 1, 0, last)]
+    return place, qualified
+
+
+def portfolio_payout(cand_scores, field_cut_scores, cut_places, prize,
+                     field_place=None, qualified=None):
+    """Per-sim TOTAL winnings for a set of lineups entered into ONE contest.
+
+    ``candidate_payout_matrix`` scores every lineup as if it were your only entry,
+    so two lineups that both clear 1st place in the same simulation each collect
+    the 1st-place prize. In a real contest only one entry finishes 1st — the next
+    takes 2nd, and so on — so summing the independent columns double-counts the
+    prize exactly when your lineups are correlated (they boom in the SAME sims,
+    which is precisely the case top-Win% builds fall into). That inflated sum is
+    what makes a correlated portfolio's reported expected return / ROI overshoot.
+
+    This charges each lineup its true finishing place among BOTH the field and
+    your other lineups: a lineup's place is its field place (from the sampled cut
+    thresholds, exactly as ``candidate_payout_matrix`` reads them) plus the number
+    of your own lineups that outscore it in that sim. Distinct own-lineup ranks
+    break score ties so two entries never share a place, so a shared boom is paid
+    once (1st + 2nd + …) instead of N times.
+
+    Parameters
+    ----------
+    cand_scores      : (n_sim, k) fantasy-point totals for the k CHOSEN lineups.
+    field_cut_scores : (n_sim, n_cut) field score needed to reach each cut place.
+    cut_places       : (n_cut,) the places ``field_cut_scores`` samples, ascending.
+    prize            : payout array from ``make_payout_curve`` (index = place).
+
+    Returns (n_sim,) float64 total portfolio winnings per simulation.
+    """
+    cand_scores = np.asarray(cand_scores, dtype=np.float32)
+    prize = np.asarray(prize, dtype=np.float64)
+    n_sim, k = cand_scores.shape
+    max_place = len(prize) - 1
+    W = np.zeros(n_sim, dtype=np.float64)
+    if k == 0:
+        return W
+    if field_place is None or qualified is None:
+        field_place, qualified = field_places(cand_scores, field_cut_scores,
+                                              cut_places)
+    field_place = np.asarray(field_place, dtype=np.int64)
+    qualified = np.asarray(qualified, dtype=bool)
+    # rank each sim's own lineups (0 = highest score); distinct ranks break score
+    # ties so two entries never claim the same place. own_ahead = that rank.
+    order = np.argsort(-cand_scores, axis=1, kind="stable")
+    own_ahead = np.empty((n_sim, k), dtype=np.int64)
+    np.put_along_axis(own_ahead, order,
+                      np.broadcast_to(np.arange(k), (n_sim, k)), axis=1)
+    place = np.clip(field_place + own_ahead, 0, max_place)
+    return np.where(qualified, prize[place], 0.0).sum(axis=1)
+
+
 # --------------------------------------------------------------------------- #
 # Self-test
 # --------------------------------------------------------------------------- #
@@ -266,6 +343,22 @@ if __name__ == "__main__":
     pay = candidate_payout_matrix(cand, field_cut, cut_places, pr)
     assert pay[0, 0] == 100 and pay[0, 1] == 0, pay
     assert pay[1, 0] == 1000 and pay[1, 1] == 10, pay
+
+    # ---- collision-aware portfolio payout ----
+    # sim0: both candidates clear 1st (>=100); summing independent payouts would
+    # pay 1000+1000, but only one can win 1st -> 1000 (1st) + 100 (2nd).
+    Wp = portfolio_payout(np.array([[105, 101]], dtype=np.float32),
+                          field_cut[:1], cut_places, pr)
+    assert Wp[0] == 1000 + 100, Wp
+    # independent sum over the same scores double-counts the top prize
+    indep = candidate_payout_matrix(np.array([[105, 101]], dtype=np.float32),
+                                    field_cut[:1], cut_places, pr)
+    assert indep.sum() == 2000 and Wp[0] < indep.sum(), (indep, Wp)
+    # the best lineup's own payout is unchanged (nothing of yours is above it):
+    # here c0 makes 2nd ($100) alone; add a lower c1 that misses -> still $100.
+    Wp2 = portfolio_payout(np.array([[95, 50]], dtype=np.float32),
+                           field_cut[:1], cut_places, pr)
+    assert Wp2[0] == 100, Wp2
 
     # ---- cutpoints ----
     cp = field_place_cutpoints(20000)

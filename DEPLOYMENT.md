@@ -140,7 +140,7 @@ at most it does a fast Stage C re-sim if lineups moved.
 (**Settings → Secrets and variables → Actions**): `SHARED_STORE_BUCKET`,
 `SHARED_STORE_ENDPOINT`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_REGION` (and `SHARED_STORE_PREFIX` if used). The workflow
-`.github/workflows/refresh.yml` then runs **daily at 13:00 UTC (~9am ET)**:
+`.github/workflows/refresh.yml` then runs **daily at 11:00 UTC (~7am ET)**:
 
 - It rebuilds **projections + sims** (`refresh_and_run.py --skip-bip`, reusing the
   committed `bip_inputs/`), stamps the build (`scripts/stamp_build.py
@@ -172,7 +172,7 @@ baselines (Stage B) were last refreshed.
 
 | Symptom | Fix |
 |---|---|
-| Banner: baselines not from today | The morning refresh didn't run/publish — trigger **Actions → refresh-sims → Run workflow** (or your cron), or tick **Force full refresh** on a Run. |
+| Banner: baselines not from today | The morning refresh didn't run/publish — trigger **Actions → refresh-sims → Run workflow** (or your cron). |
 | Shared build not appearing for a user | Hit **↻ Refresh** on the Setup tab (pulls the latest build); confirm the `[shared_store]` secrets match the store the Action publishes to. |
 | Slate catalog / team-totals empty | Those hit live RotoWire/Vegas feeds; retry when the feed is back. |
 | Stage B rebuild fails in the app | Needs `scikit-learn`/`xgboost`/`pybaseball`/`pyarrow` and reachable `statsapi.mlb.com`; on Python 3.14 those wheels may be missing — run on Python 3.11–3.12. The sims still rebuild on the existing projections. |

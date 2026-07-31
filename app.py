@@ -491,10 +491,15 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
         max_overlap=max_overlap, group_of=group_of, group_cap=group_cap,
         player_caps=player_caps, team_caps=team_caps,
         player_mins=player_mins, team_mins=team_mins, eval_sims=eval_sims,
-        tie_seed=tie_seed, pay_report=pay_report)
+        tie_seed=tie_seed, pay_report=pay_report,
+        report_scores=cs_rep, report_field_cut=fcs_report,
+        report_cut_places=cut_places, prize=prize, entry_fee=entry_fee,
+        select_scores=cs_sel, select_field_cut=fcs_select,
+        select_cut_places=cut_places)
 
     # rank-selected baseline of the SAME size (eligible only) for the comparison,
-    # scored on the same held-out report slice as the EV set.
+    # scored on the same held-out report slice as the EV set — and with the SAME
+    # collision-aware placement, so both sets are counted on equal footing.
     naive_pos = []
     for i in range(M):
         nms = [str(short.iloc[i][c]).rsplit(" (", 1)[0] for c in COLS]
@@ -502,8 +507,9 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
             naive_pos.append(i)
         if len(naive_pos) >= info["chosen"]:
             break
-    W_naive = (pay_report[:, naive_pos].sum(axis=1) if naive_pos
-               else np.zeros(pay_report.shape[0], np.float64))
+    W_naive = (pev.portfolio_payout(cs_rep[:, naive_pos], fcs_report, cut_places,
+                                    prize) if naive_pos
+               else np.zeros(cs_rep.shape[0], np.float64))
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -1066,10 +1072,17 @@ def render_showdown_export(sim):
             player_cap=player_cap, captain_cap=captain_cap, team_cap=team_cap,
             max_overlap=max_overlap, group_of=group_of, group_cap=group_cap,
             player_caps=player_caps, eval_sims=4000,
-            tie_seed=_tie_seed, pay_report=pay_report)
+            tie_seed=_tie_seed, pay_report=pay_report,
+            report_scores=_cs_rep, report_field_cut=_fcs_rep,
+            report_cut_places=_dist["cut_places"], prize=prize,
+            entry_fee=ev_entry_fee, select_scores=_cs_sel,
+            select_field_cut=_fcs_sel, select_cut_places=_dist["cut_places"])
         csv_text, uinfo = su.upload_csv(chosen, tmap, cands)
-        st.caption(f"Portfolio EV (held-out) — exp return ${info['exp_return']:.0f}"
-                   f"/slate · cash rate {100*info['cash_rate']:.0f}% · "
+        _sd_cost = info['chosen'] * float(ev_entry_fee)
+        _sd_net = info['exp_return'] - _sd_cost
+        st.caption(f"Portfolio EV (held-out) — exp profit ${_sd_net:,.0f}/slate "
+                   f"(net of ${_sd_cost:,.0f} entry) · profit rate "
+                   f"{100*info['cash_rate']:.0f}% · "
                    f"{info['distinct_captains']} distinct captains.")
     else:
         chosen, info = sp.select_showdown_portfolio(
@@ -2273,11 +2286,6 @@ with tabs[0]:
                      "never pair two middling pitchers; 0.6 (default) leans that "
                      "way. 0 = pure ceiling-weighted draw with no forced ace.")
 
-        force_refresh = st.checkbox(
-            "Force full refresh (rebuild projections + sims now)", value=False,
-            help="Rebuild projections (Stage B) and correlated sims (Stage C) "
-                 "regardless of staleness — bypasses the once-a-day retry guard. "
-                 "Use after fixing a data/connection issue.")
         submitted = st.form_submit_button(
             "▶ Run simulation", type="primary", width="stretch",
             disabled=(not tt_ready),
@@ -2332,7 +2340,7 @@ with tabs[0]:
                              if dk_df is not None and "FullName" in dk_df else None)
             slate_window = st.session_state.get("_slate_window")
             notes, sims_changed, live_playable = ensure_fresh(
-                status, force=force_refresh, totals_path=tt_path,
+                status, force=False, totals_path=tt_path,
                 slate_players=slate_players, slate_window=slate_window)
             for n in notes:
                 st.write("• " + n)
@@ -3492,30 +3500,43 @@ with tabs[3]:
                             f"Entry cost {info['chosen']}×${ev_entry_fee:,.0f} "
                             f"= ${cost:,.0f}.")
 
-                        # EV set vs a rank-selected set of the same size
+                        # EV set vs a rank-selected set of the same size. Winnings
+                        # are gross; "Expected profit"/ROI net out the entry cost
+                        # (the buy-in), so a portfolio only shows a positive number
+                        # when it out-earns what it costs to enter.
                         naive_ret = float(np.mean(W_naive))
-                        naive_cash = float(np.mean(W_naive > 0))
+                        naive_cash = float(np.mean(W_naive > cost))
+                        net_ret = info['exp_return'] - cost
+                        net_naive = naive_ret - cost
                         mc1, mc2, mc3, mc4 = st.columns(4)
-                        mc1.metric("Expected return", f"${info['exp_return']:,.0f}",
-                                   f"{info['exp_return'] - naive_ret:+,.0f} vs ranked")
-                        mc2.metric("ROI", f"{100*(info['exp_return']/cost - 1):+.1f}%")
-                        mc3.metric("Cash rate (≥1 lineup)",
+                        mc1.metric("Expected profit", f"${net_ret:,.0f}",
+                                   f"{net_ret - net_naive:+,.0f} vs ranked",
+                                   help="Mean per-slate winnings minus the entry "
+                                        "cost (buy-in removed).")
+                        mc2.metric("ROI", f"{100*(net_ret/cost):+.1f}%",
+                                   help="Expected profit ÷ entry cost.")
+                        mc3.metric("Profit rate",
                                    f"{100*info['cash_rate']:.1f}%",
-                                   f"{100*(info['cash_rate'] - naive_cash):+.1f} pts vs ranked")
-                        mc4.metric("Floor (p10) / Ceiling (p90)",
-                                   f"${info['floor_p10']:,.0f} / ${info['ceiling_p90']:,.0f}")
+                                   f"{100*(info['cash_rate'] - naive_cash):+.1f} pts vs ranked",
+                                   help="Share of simulated slates where the "
+                                        "portfolio's winnings beat its entry cost "
+                                        "(a net-profitable slate).")
+                        mc4.metric("Winnings floor (p10) / ceiling (p90)",
+                                   f"${info['floor_p10']:,.0f} / ${info['ceiling_p90']:,.0f}",
+                                   help="Gross winnings percentiles across slates "
+                                        "(before the entry cost).")
                         st.altair_chart(portfolio_return_chart(W, W_naive),
                                         use_container_width=True)
                         st.caption(
-                            "“Cash rate” is the share of simulated slates where at "
-                            "least one exported lineup finishes in the money — the "
-                            "portfolio-level win/cash metric. Compared against a "
-                            "top-N-by-rank set of the same size, drawn from the same "
-                            "candidate pool. All figures are scored on a **held-out "
-                            "slice of sims** that neither set was ranked or selected "
-                            "on, so they're out-of-sample (and typically lower than "
-                            "an in-sample estimate — that gap is the optimizer's "
-                            "selection bias, now removed).")
+                            "“Profit rate” is the share of simulated slates where "
+                            "the portfolio's winnings exceed its entry cost — a "
+                            "net-profitable slate, not just one lineup cashing. "
+                            "Compared against a top-N-by-rank set of the same size, "
+                            "drawn from the same candidate pool. All figures are "
+                            "scored on a **held-out slice of sims** that neither set "
+                            "was ranked or selected on, so they're out-of-sample "
+                            "(and typically lower than an in-sample estimate — that "
+                            "gap is the optimizer's selection bias, now removed).")
 
 
 # --------------------------------------------------------------------------- #
