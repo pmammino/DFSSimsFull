@@ -2615,9 +2615,18 @@ with tabs[0]:
             # edge, instead of handing out free money. Head-to-head at equal size
             # the sharp field matches our candidates' full score distribution
             # (mean/p99/ceiling), so the contest is self-consistent.
+            #
+            # Second, real entrants SUBMIT their better lineups — they don't enter
+            # random builder draws. So the effective field is stronger than raw
+            # draws: we overbuild ~2x and keep the higher-projection half as the
+            # "submitted" field. On a measured slate this drops a sharp 20-set from
+            # ~+110% to ~+80% ROI (a defensible elite edge) and a no-skill set to
+            # ≈ −25%, while the winning-score distribution stays realistic. The
+            # overbuild is capped so very large contests stay fast.
             FIELD_SHARP_FRAC = 0.90
+            n_build = int(contest_size) + min(int(contest_size), 12000)
             st.write(f"Building a {contest_size:,}-entry field "
-                     f"({FIELD_SHARP_FRAC:.0%} sharp + chalk)…")
+                     f"({FIELD_SHARP_FRAC:.0%} sharp, top-projection of {n_build:,})…")
             beta = beta_for_size(contest_size, int(medium), float(chalk))
             fdf = adjust_ownership(normalize_to_slots(pool, 0.15), beta=beta)
             tilted = tilt_structures(
@@ -2633,14 +2642,19 @@ with tabs[0]:
             sfdf["Upside"] = [
                 float(np.exp((_zcp if r.Pos == "P" else _zc).get(r.Name, 0.0)))
                 for r in sfdf.itertuples()]
-            n_sharp = int(round(FIELD_SHARP_FRAC * contest_size))
+            n_sharp = int(round(FIELD_SHARP_FRAC * n_build))
             sfb = Builder(Pool(sfdf), fp, seed=int(seed_field) + 7, uniform=False,
                           upside_attr="Upside", bringback_prob=0.25,
                           game_stack_prob=0.35, ace_pitcher_prob=0.5)
             fb = Builder(Pool(fdf), fp, seed=int(seed_field), uniform=False)
             field_sharp, _fa1 = build_many(sfb, n_sharp, "Field (sharp)")
-            field_chalk, _fa2 = build_many(fb, contest_size - n_sharp, "Field (chalk)")
-            field = field_sharp + field_chalk
+            field_chalk, _fa2 = build_many(fb, n_build - n_sharp, "Field (chalk)")
+            built = field_sharp + field_chalk
+            # keep the top `contest_size` by projected points (talent blend) — the
+            # "submitted" field: entrants play their higher-projection lineups.
+            built.sort(key=lambda lu: sum(tal.get(pl.Name, base)
+                                          for pl in lu["players"]), reverse=True)
+            field = built[:int(contest_size)]
             if len(field) < contest_size:
                 st.warning(f"Built {len(field):,} of {contest_size:,} requested field "
                            "lineups (pool constrained); simulating against the field "

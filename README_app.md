@@ -385,12 +385,14 @@ instead of each banking the top prize.
    evaluating).
 3. Builds a realistic **field** at your contest size — ~90% built the way real
    entrants build (stacked, ceiling-seeking, ≥1 ace) and ~10% naive chalk (a
-   realistic soft tail). A pure-ownership field is far too weak (even a random
+   realistic soft tail), then **overbuilt ~2× and trimmed to the higher-projection
+   half** so the field is the better lineups people actually *submit*, not random
+   builder draws. A pure-ownership field is far too weak (even a random
    competently-built lineup beats it for ~+22% ROI), which inflates every
-   candidate's finish and the reported EV/ROI; the mixed field pushes a no-skill
-   set below breakeven and a genuinely sharp set to a defensible edge. At equal
-   size the sharp field matches the candidate pool's own score distribution, so
-   the contest is self-consistent. Chalk still sharpens in small fields.
+   candidate's finish and the reported EV/ROI. The realistic field pushes a
+   no-skill set well below breakeven and a genuinely sharp set to a defensible
+   edge (~+80% on a measured slate, vs a fantasy +260% against pure chalk), while
+   winning scores stay true to life. Chalk still sharpens in small fields.
 4. Inserts each candidate into the field per sim and ranks it →
    **Win% / Top10% / Top100% / AvgPlace** for every candidate.
 
