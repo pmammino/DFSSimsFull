@@ -31,7 +31,7 @@ LG_HIT_VEC = dict(p_1b=0.150, p_2b=0.045, p_3b=0.004, p_hr=0.030,
                   r_pa=0.11, rbi_pa=0.11, p_sb=0.010, proj_slot=7)
 LG_PIT_VEC = dict(k_pct=0.215, bb_pct=0.082, hbp_per_bf=0.010,
                   h_per_bf=0.235, hr_per_bf=0.032, era=4.50, ra9=4.80,
-                  tbf_per_ip=4.35, wp_per_pa=0.0, hand='R')
+                  tbf_per_ip=4.35, ip_per_g=5.0, wp_per_pa=0.0, hand='R')
 
 # ── Opponent-quality matchup (log5 / odds-ratio) ────────────────────────────────
 # A pitcher's allowed rates depend on the QUALITY of the lineup he faces, not just
@@ -236,6 +236,11 @@ def _pitcher_vector(row, opp_lineup_hand_share, venue_pf):
                 era=float(row['ERA']) if 'ERA' in row and pd.notna(row['ERA']) else 4.5,
                 ra9=float(row['RA9']) if 'RA9' in row and pd.notna(row['RA9']) else 4.7,
                 tbf_per_ip=float(row['TBF_per_IP']) if 'TBF_per_IP' in row and pd.notna(row['TBF_per_IP']) else 4.3,
+                # The pitcher's established outing length. The sim uses this to
+                # govern a "primary"/bulk arm's workload so a short reliever
+                # tagged as the primary in a bullpen game is NOT simulated as a
+                # stretched-out ~5-IP starter (see sim_proj primary branch).
+                ip_per_g=float(row['weighted_IP_per_G']) if 'weighted_IP_per_G' in row and pd.notna(row['weighted_IP_per_G']) else 5.0,
                 wp_per_pa=float(row['Pred_WP_per_PA']) if 'Pred_WP_per_PA' in row and pd.notna(row['Pred_WP_per_PA']) else 0.0,
                 hand=row.get('PitchHand', 'R'))
 

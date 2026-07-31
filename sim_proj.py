@@ -46,6 +46,16 @@ def dk_pitcher(outs, k, win, er, h, bb, hbp, cg, cgs, nh):
 SG, ST, SI, SG_HR_EXTRA = 0.20, 0.50, 0.30, 0.12
 OPENER_BF_MEAN, OPENER_BF_SD = 4.6, 1.3
 
+# The workload a "primary"/bulk arm is planned for is his own established outing
+# length (weighted_IP_per_G) stretched by this factor — being named the bulk arm
+# behind an opener implies he goes a bit longer than a typical relief appearance,
+# but a genuinely short reliever must NOT be simulated as a ~5-IP starter. Any
+# arm whose stretched plan reaches a full start (>= 5 IP) keeps the prior
+# full-starter treatment unchanged; shorter arms get a short leash, a tighter
+# out-cap, and no win eligibility. See the primary branch in `simulate`.
+PRIMARY_IP_STRETCH = 1.5
+PRIMARY_FULL_IP    = 5.0    # plan at/above this -> treat as a full bulk starter
+
 # How much a team-total override reshapes UPSIDE on top of shifting the mean.
 # An above-average total (scale > 1) widens that team's shared latent so the
 # whole lineup booms together on its big days — a higher total buys a fatter
@@ -340,8 +350,21 @@ def simulate(matchup, n_sims=10000, seed=20260610):
                 bf_o = np.clip(rng.normal(OPENER_BF_MEAN, OPENER_BF_SD, n), 2, 9)
                 seg_o = _sim_pitcher(vo, bf_o, m_opp, z, False, 0.0, 9, rng, n)
                 vp = ps['primary']['vec']
-                bf_p = np.clip(rng.normal(vp['tbf_per_ip']*5.0, 3.0, n) - z*2.5 - (opp_implied-4.5)*0.8, 6, 30)
-                seg_p = _sim_pitcher(vp, bf_p, m_opp, z, True, win_base(vp), 24, rng, n)
+                # Plan the bulk arm's workload off his OWN outing length, not a
+                # blanket ~5-IP starter assumption. A short reliever tagged the
+                # "primary" in a bullpen game otherwise inherits a full starter
+                # leash (7-ER hook, 8-IP cap, win eligibility) and is badly
+                # over-projected; keying on ip_per_g caps him near his real usage
+                # while leaving genuine stretched-out bulk starters unchanged.
+                ip_plan = float(np.clip(vp.get('ip_per_g', PRIMARY_FULL_IP) * PRIMARY_IP_STRETCH,
+                                        1.0, PRIMARY_FULL_IP))
+                if ip_plan >= PRIMARY_FULL_IP:          # genuine bulk starter — prior behavior
+                    bf_p = np.clip(rng.normal(vp['tbf_per_ip']*5.0, 3.0, n) - z*2.5 - (opp_implied-4.5)*0.8, 6, 30)
+                    seg_p = _sim_pitcher(vp, bf_p, m_opp, z, True, win_base(vp), 24, rng, n)
+                else:                                   # short reliever tagged as primary
+                    bf_p = np.clip(rng.normal(vp['tbf_per_ip']*ip_plan, 2.0, n) - z*1.5 - (opp_implied-4.5)*0.5, 3, 18)
+                    outs_cap_p = int(np.clip(round(ip_plan*3) + 3, 3, 12))
+                    seg_p = _sim_pitcher(vp, bf_p, m_opp, z, False, 0.0, outs_cap_p, rng, n)
                 for role, info, seg in [('OPENER', ps['opener'], seg_o), ('PRIMARY', ps['primary'], seg_p)]:
                     pitcher_dk[info['name']] = seg['dk']
                     prows.append(_prow(info['name'], role, side, label, g, opp_side, opp_implied, seg))

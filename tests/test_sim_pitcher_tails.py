@@ -122,3 +122,47 @@ def test_opener_is_short_and_cannot_win():
     o = sim_proj._sim_pitcher(vec, bf, m_opp, z, False, 0.0, 9, rng, n)
     assert o['win'].sum() == 0
     assert o['ip'].mean() < 3.0
+
+
+def _primary_seg(vp, rng, n, opp_implied=4.2):
+    """Replicate the primary/bulk-arm branch of sim_proj.simulate so the
+    ip_per_g governor can be exercised without building a full matchup."""
+    z = rng.standard_normal(n); m_opp = np.ones(n)
+    ip_plan = float(np.clip(vp.get('ip_per_g', sim_proj.PRIMARY_FULL_IP) * sim_proj.PRIMARY_IP_STRETCH,
+                            1.0, sim_proj.PRIMARY_FULL_IP))
+    if ip_plan >= sim_proj.PRIMARY_FULL_IP:
+        bf = np.clip(rng.normal(vp['tbf_per_ip'] * 5.0, 3.0, n) - z * 2.5 - (opp_implied - 4.5) * 0.8, 6, 30)
+        return sim_proj._sim_pitcher(vp, bf, m_opp, z, True, 0.28, 24, rng, n)
+    bf = np.clip(rng.normal(vp['tbf_per_ip'] * ip_plan, 2.0, n) - z * 1.5 - (opp_implied - 4.5) * 0.5, 3, 18)
+    oc = int(np.clip(round(ip_plan * 3) + 3, 3, 12))
+    return sim_proj._sim_pitcher(vp, bf, m_opp, z, False, 0.0, oc, rng, n)
+
+
+def test_primary_governor_shortens_a_true_reliever():
+    """A short reliever (low weighted_IP_per_G) tagged as the 'primary' in a
+    bullpen game must be simulated near his real usage — NOT as a ~5-IP starter.
+    Regression for a bulk-reliever (e.g. Will Klein, ~1.15 IP/G) that shipped
+    with a full-starter line (~4.8 IP, ~15 DK)."""
+    n = 40000
+    vec = _vec(0.6)                       # decent per-batter skill
+    reliever = dict(vec, ip_per_g=1.15)   # but never goes deep
+    o = _primary_seg(reliever, np.random.default_rng(3), n)
+    assert o['win'].sum() == 0            # can't vulture a win in ~1-2 IP
+    assert o['ip'].mean() < 2.5           # governed to near his real outing length
+    assert o['dk'].mean() < 9.0           # not a starter-sized projection
+
+
+def test_primary_governor_leaves_bulk_starter_unchanged():
+    """A stretched-out bulk starter (weighted_IP_per_G >= PRIMARY_FULL_IP /
+    STRETCH) must keep the prior full-starter treatment exactly."""
+    n = 40000
+    vec = _vec(0.6)
+    starter = dict(vec, ip_per_g=4.86)    # genuine bulk starter
+    seed = 4
+    got = _primary_seg(starter, np.random.default_rng(seed), n)
+    # Reference: prior fixed ~5-IP / 24-out / win-eligible treatment.
+    rng = np.random.default_rng(seed); z = rng.standard_normal(n); m_opp = np.ones(n)
+    bf = np.clip(rng.normal(starter['tbf_per_ip'] * 5.0, 3.0, n) - z * 2.5 - (4.2 - 4.5) * 0.8, 6, 30)
+    ref = sim_proj._sim_pitcher(starter, bf, m_opp, z, True, 0.28, 24, rng, n)
+    assert abs(got['dk'].mean() - ref['dk'].mean()) < 1e-6
+    assert got['ip'].mean() > 4.0
