@@ -106,6 +106,53 @@ def test_select_portfolio_ev_collision_lowers_reported_ev():
     assert float(W.mean()) == 1100.0
 
 
+def test_collision_selection_spreads_correlated_winners():
+    # A wins sims 0,1,2; B wins only 0,1 (a correlated twin of A); C wins only
+    # sim 3 (a fresh, decorrelated slate). Picking 2:
+    #   * independent objective adds A then B — the twin looks worth another full
+    #     1st because its payout is summed as if A weren't there.
+    #   * collision-aware selection adds A then C — B would merely place 2nd behind
+    #     A in the sims A already wins, so it adds almost nothing.
+    df = pd.DataFrame([_mk('sA', 1, 9), _mk('sB', 2, 9), _mk('sC', 3, 9)])
+    cut_places = np.array([1, 2, 3])
+    field_cut = np.tile([100.0, 90.0, 80.0], (4, 1)).astype(np.float32)
+    prize = np.array([0.0, 1000.0, 100.0, 10.0])
+    scores = np.array([[106, 104, 50],      # sim0: A & B clear 1st, C misses
+                       [106, 104, 50],      # sim1: same
+                       [106, 50, 50],       # sim2: A alone
+                       [50, 50, 105]],      # sim3: C alone
+                      dtype=np.float32)
+    pay = pev.candidate_payout_matrix(scores, field_cut, cut_places, prize)
+    util = pev.utility("Aggressive (max ceiling)")   # linear: isolate the objective
+    ind, _, _ = select_portfolio_ev(df, 2, pay, util, cols=COLS, hitc=HITC)
+    col, ci, W = select_portfolio_ev(
+        df, 2, pay, util, cols=COLS, hitc=HITC,
+        select_scores=scores, select_field_cut=field_cut,
+        select_cut_places=cut_places, prize=prize,
+        report_scores=scores, report_field_cut=field_cut,
+        report_cut_places=cut_places)
+    assert {int(r['Candidate']) for r in ind} == {1, 2}     # A + correlated twin
+    assert {int(r['Candidate']) for r in col} == {1, 3}     # A + fresh-sim lineup
+    # A+C wins 1st in a different sim every slate (A: 0,1,2; C: 3) -> $1000 each.
+    assert float(W.mean()) == 1000.0
+
+
+def test_cash_rate_is_a_net_profit_rate_with_entry_fee():
+    # one lineup, two sims: wins $30 then $0. "cash rate" now means the slate
+    # turned a profit — winnings cleared the entry cost (chosen * entry_fee).
+    df = pd.DataFrame([_mk('sA', 1, 5)])
+    pay = np.array([[30.0], [0.0]], dtype=np.float32)
+    kw = dict(cols=COLS, hitc=HITC)
+    _, i0, _ = select_portfolio_ev(df, 1, pay, pev.utility("Balanced"), **kw)
+    assert i0["cash_rate"] == 0.5                 # entry_fee=0 -> any winnings
+    _, i20, _ = select_portfolio_ev(df, 1, pay, pev.utility("Balanced"),
+                                    entry_fee=20.0, **kw)
+    assert i20["cash_rate"] == 0.5                # $30 > $20 cost -> profitable
+    _, i50, _ = select_portfolio_ev(df, 1, pay, pev.utility("Balanced"),
+                                    entry_fee=50.0, **kw)
+    assert i50["cash_rate"] == 0.0                # $30 < $50 cost -> unprofitable
+
+
 def test_pay_report_shape_mismatch_raises():
     df = pd.DataFrame([_mk('sA', 1, 5), _mk('sB', 2, 4)])
     pay = np.array([[100., 0.], [100., 0.]], dtype=np.float32)

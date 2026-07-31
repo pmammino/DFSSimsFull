@@ -229,7 +229,35 @@ def candidate_payout_matrix(cand_scores, field_cut_scores, cut_places, prize):
     return pay
 
 
-def portfolio_payout(cand_scores, field_cut_scores, cut_places, prize):
+def field_places(cand_scores, field_cut_scores, cut_places):
+    """Best field finishing place (and a paid/unpaid mask) for each candidate/sim.
+
+    ``place[s, j]`` is the shallowest (fewest-place) cutoff in ``cut_places`` whose
+    field score candidate ``j`` clears in sim ``s`` — i.e. its place among the
+    FIELD alone, read exactly as ``candidate_payout_matrix`` reads the thresholds.
+    ``qualified[s, j]`` is False when the score is below the deepest sampled cutoff
+    (out of the money regardless of how your other lineups place). Precompute this
+    once and it drives both the reported payout and the collision-aware selection
+    objective without re-scanning the field each greedy step.
+    """
+    cand_scores = np.asarray(cand_scores, dtype=np.float32)
+    field_cut_scores = np.asarray(field_cut_scores, dtype=np.float32)
+    cut_places = np.asarray(cut_places, dtype=np.int64)
+    n_sim, M = cand_scores.shape
+    places_desc = cut_places[::-1]              # deepest (largest) place first
+    place = np.empty((n_sim, M), dtype=np.int64)
+    qualified = np.empty((n_sim, M), dtype=bool)
+    last = len(places_desc) - 1
+    for s in range(n_sim):
+        thr_asc = field_cut_scores[s][::-1]     # field thresholds ascending in $
+        kk = np.searchsorted(thr_asc, cand_scores[s], side="right")
+        qualified[s] = kk > 0
+        place[s] = places_desc[np.clip(kk - 1, 0, last)]
+    return place, qualified
+
+
+def portfolio_payout(cand_scores, field_cut_scores, cut_places, prize,
+                     field_place=None, qualified=None):
     """Per-sim TOTAL winnings for a set of lineups entered into ONE contest.
 
     ``candidate_payout_matrix`` scores every lineup as if it were your only entry,
@@ -257,30 +285,25 @@ def portfolio_payout(cand_scores, field_cut_scores, cut_places, prize):
     Returns (n_sim,) float64 total portfolio winnings per simulation.
     """
     cand_scores = np.asarray(cand_scores, dtype=np.float32)
-    field_cut_scores = np.asarray(field_cut_scores, dtype=np.float32)
-    cut_places = np.asarray(cut_places, dtype=np.int64)
     prize = np.asarray(prize, dtype=np.float64)
     n_sim, k = cand_scores.shape
-    places_desc = cut_places[::-1]              # deepest (largest) place first
     max_place = len(prize) - 1
     W = np.zeros(n_sim, dtype=np.float64)
     if k == 0:
         return W
-    for s in range(n_sim):
-        c = cand_scores[s]
-        thr_asc = field_cut_scores[s][::-1]     # field thresholds ascending in $
-        # best field place each lineup qualifies for (kk == 0 => below the deepest
-        # paid cutoff, i.e. out of the money regardless of own placement).
-        kk = np.searchsorted(thr_asc, c, side="right")
-        qualified = kk > 0
-        field_place = places_desc[np.clip(kk - 1, 0, len(places_desc) - 1)]
-        # your own lineups strictly ahead of each; distinct ranks (stable argsort)
-        # keep two entries from claiming the same place on a score tie.
-        rank = np.empty(k, dtype=np.int64)
-        rank[np.argsort(-c, kind="stable")] = np.arange(k)
-        place = np.clip(field_place + rank, 0, max_place)
-        W[s] = np.where(qualified, prize[place], 0.0).sum()
-    return W
+    if field_place is None or qualified is None:
+        field_place, qualified = field_places(cand_scores, field_cut_scores,
+                                              cut_places)
+    field_place = np.asarray(field_place, dtype=np.int64)
+    qualified = np.asarray(qualified, dtype=bool)
+    # rank each sim's own lineups (0 = highest score); distinct ranks break score
+    # ties so two entries never claim the same place. own_ahead = that rank.
+    order = np.argsort(-cand_scores, axis=1, kind="stable")
+    own_ahead = np.empty((n_sim, k), dtype=np.int64)
+    np.put_along_axis(own_ahead, order,
+                      np.broadcast_to(np.arange(k), (n_sim, k)), axis=1)
+    place = np.clip(field_place + own_ahead, 0, max_place)
+    return np.where(qualified, prize[place], 0.0).sum(axis=1)
 
 
 # --------------------------------------------------------------------------- #

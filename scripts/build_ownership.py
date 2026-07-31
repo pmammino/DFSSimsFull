@@ -17,16 +17,17 @@ when nothing moved — that's the resource-constraining part. It is wired into t
 scheduled GitHub Actions refresh (see .github/workflows/refresh.yml) so the
 expensive-to-assemble inputs are read once, in CI, right after the sims rebuild.
 
-Limitation: CI has no DraftKings salary/eligibility feed, so this uses the
-sim-derived features (proj, ceiling shape, batting order, team total) only — the
-``value`` (proj/salary) term is left out and outfield-eligible bats are grouped
-by their listed defensive position. It is a projection to seed/compare against,
-not a replacement for a live DK ownership feed.
+Salary comes from the DraftKings salaries feed (the same RotoWire proxy the app
+uses, ``dk_slate_feed``), joined onto the pool by name so the ``value``
+(proj/salary) term is fitted — the biggest single ownership driver after order.
+If the feed is unreachable (offline CI), it degrades to the sim-only features and
+says so. Outfield-eligible bats are grouped by their listed defensive position.
 
 Usage
 -----
     python scripts/build_ownership.py                 # gated on pool change
     python scripts/build_ownership.py --force         # always recompute
+    python scripts/build_ownership.py --no-fetch      # skip the DK salary feed
     python scripts/build_ownership.py --contest-size 20000
 """
 from __future__ import annotations
@@ -96,6 +97,43 @@ def _load_pool(date: str) -> pd.DataFrame:
     return pool, hd
 
 
+def _salary_map(fetch: bool = True):
+    """(by_name, by_name_team) DK salary lookups from the salaries feed.
+
+    Keyed by ``norm(name)`` and by ``(norm(name), team)`` so a same-named player
+    on two teams resolves to the right salary. Returns empty maps (salary-blind)
+    if the feed can't be reached — the projection still runs on the sim features.
+    """
+    if not fetch:
+        return {}, {}
+    try:
+        import dk_slate_feed as feed
+        _date, slates = feed.parse_salaries(feed._http_get(feed.FEED_SALARIES))
+    except Exception as e:                       # offline / feed hiccup
+        print(f"build_ownership: DK salary feed unavailable "
+              f"({type(e).__name__}: {e}) — projecting without the value term.")
+        return {}, {}
+    by_n, by_nt = {}, {}
+    for s in slates.values():
+        for pl in s.get("players", []):
+            sal = int(pl.get("salary") or 0)
+            if sal <= 0:
+                continue
+            nm = norm(pl["name"])
+            by_n[nm] = sal
+            by_nt[(nm, pl.get("team"))] = sal
+    return by_n, by_nt
+
+
+def _attach_salary(pool: pd.DataFrame, by_n: dict, by_nt: dict) -> pd.DataFrame:
+    """Add a ``Salary`` column, matching (name, team) first then name."""
+    def look(r):
+        return by_nt.get((norm(r.Name), r.Team)) or by_n.get(norm(r.Name)) or np.nan
+    pool = pool.copy()
+    pool["Salary"] = [look(r) for r in pool.itertuples()]
+    return pool
+
+
 def _load_sims(date: str) -> dict:
     """Merged {norm(name) -> sim array} for hitters and pitchers."""
     h = np.load(os.path.join(DELIV, "hitter_dk_sims.npy"), allow_pickle=True).item()
@@ -109,9 +147,12 @@ def _load_sims(date: str) -> dict:
 
 def _pool_signature(pool: pd.DataFrame, contest_size) -> str:
     """A fingerprint that changes only when the slate's players / order / team /
-    the requested contest size change — the inputs that move projected ownership."""
+    salary / the requested contest size change — the inputs that move projected
+    ownership."""
+    has_sal = "Salary" in pool.columns
     rows = sorted(
-        f"{norm(r.Name)}|{r.Pos}|{r.Team}|{float(r.Order):.0f}"
+        f"{norm(r.Name)}|{r.Pos}|{r.Team}|{float(r.Order):.0f}|"
+        f"{'' if not has_sal or pd.isna(r.Salary) else int(r.Salary)}"
         for r in pool.itertuples()
     )
     payload = json.dumps({"cs": contest_size, "rows": rows}, sort_keys=True)
@@ -125,6 +166,8 @@ def main() -> int:
                          "model's medium baseline).")
     ap.add_argument("--force", action="store_true",
                     help="recompute even when the player pool is unchanged.")
+    ap.add_argument("--no-fetch", action="store_true",
+                    help="skip the DK salary feed (project without the value term).")
     args = ap.parse_args()
 
     date = _latest_date()
@@ -134,6 +177,9 @@ def main() -> int:
         return 0
 
     pool, hd = _load_pool(date)
+    by_n, by_nt = _salary_map(fetch=not args.no_fetch)
+    pool = _attach_salary(pool, by_n, by_nt)
+    n_sal = int(pool["Salary"].notna().sum())
     sig = _pool_signature(pool, args.contest_size)
 
     # gate: skip the recompute when the pool (and contest size) is unchanged and
@@ -156,7 +202,7 @@ def main() -> int:
 
     own = project_ownership(pool, sims, contest_size=args.contest_size,
                             team_total=team_total)
-    out = pool.copy()
+    out = pool[["Name", "Pos", "Team", "Order", "Salary"]].copy()
     out["ProjOwnership"] = own.round(2).to_numpy()
     out["Date"] = date
     out = out.sort_values("ProjOwnership", ascending=False).reset_index(drop=True)
@@ -165,6 +211,7 @@ def main() -> int:
     json.dump({"sig": sig, "date": date}, open(SIG_PATH, "w"))
     print(f"build_ownership: wrote {os.path.relpath(OUT_CSV, HERE)} "
           f"({len(out)} players, slate {date}, "
+          f"salary on {n_sal}/{len(out)}, "
           f"contest_size={args.contest_size or 'medium-baseline'}).")
     return 0
 

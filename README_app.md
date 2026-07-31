@@ -144,9 +144,9 @@ tab shows a warning listing the affected games and player count. This is
 best-effort: if the schedule can't be reached, every game is kept (a StatsAPI
 outage never empties the slate).
 
-A **Force full refresh** checkbox (in step 2) rebuilds both projections and
-sims regardless of staleness and bypasses the once-a-day projection-retry guard
-— use it right after fixing a data/connection issue.
+A Run refreshes only what's stale (projections then sims), governed by the
+once-a-day retry guard; there's no manual full-reset toggle. To force a rebuild,
+use **Actions → refresh-sims → Run workflow** (or the scheduled job below).
 
 ### Scheduled morning rebuild (so Stage B never blocks a Run)
 
@@ -156,7 +156,7 @@ keep it off the interactive path, a scheduled job rebuilds the projections
 today and skips Stage B, leaving only the fast Stage C re-sim when lineups move.
 
 - **Deployed (R2/S3 + Actions):** `.github/workflows/refresh.yml` runs daily at
-  13:00 UTC (~9am ET). It runs `refresh_and_run.py --skip-bip` (Stage B + C,
+  11:00 UTC (~7am ET). It runs `refresh_and_run.py --skip-bip` (Stage B + C,
   reusing the committed BIP inputs), stamps the build with
   `scripts/stamp_build.py --projections`, and pushes to the object store. The
   **full** dispatch mode additionally runs the Statcast BIP scrape (Stage A);
@@ -354,15 +354,18 @@ Controls (Export → *Top N by ranking* → Selection method → **Portfolio EV*
   candidates; larger = more freedom to diversify, slower.
 
 After selecting, a **coverage panel** shows the portfolio's outcome across every
-simulated slate — expected return, ROI, **cash rate** (share of slates where at
-least one exported lineup finishes in the money — the portfolio-level cash
-metric), floor/ceiling, and a return distribution — all compared against a
-top-N-by-rank set of the same size drawn from the same pool, so you can see the
-boom/bust being broken up.
+simulated slate — expected profit (winnings net of the entry cost), ROI,
+**profit rate** (share of slates where the portfolio's winnings clear its entry
+cost — a net-profitable slate), gross winnings floor/ceiling, and a return
+distribution — all compared against a top-N-by-rank set of the same size drawn
+from the same pool, so you can see the boom/bust being broken up. Every entry is
+placed into the contest **together** — against the field *and* your other
+lineups — so two correlated lineups that boom in the same slate split 1st/2nd/…
+instead of each banking the top prize.
 
 > **Out-of-sample by construction.** The sims are split into disjoint slices:
 > candidates are **ranked** on one slice, the set is **selected** on a second,
-> and every headline figure (expected return, ROI, cash rate, floor/ceiling) is
+> and every headline figure (expected profit, ROI, profit rate, floor/ceiling) is
 > **scored on a third, held-out slice** that neither set was ranked or selected
 > on. Ranking, selecting, and reporting on one shared sim set inflates the
 > reported EV — you grade the set on the very sims it was optimized against (the

@@ -216,7 +216,8 @@ def select_showdown_portfolio_ev(res_df, n_select, pay, util, *, cols=SD_COLS,
                                  team_mins=None, eval_sims=None, tie_seed=None,
                                  pay_report=None, report_scores=None,
                                  report_field_cut=None, report_cut_places=None,
-                                 prize=None):
+                                 prize=None, entry_fee=0.0, select_scores=None,
+                                 select_field_cut=None, select_cut_places=None):
     """Greedily build the export set that maximizes the expected *utility* of the
     portfolio's per-simulation dollar return, subject to the showdown exposure /
     diversity caps. Mirrors ``portfolio.select_portfolio_ev``; row order of
@@ -242,6 +243,21 @@ def select_showdown_portfolio_ev(res_df, n_select, pay, util, *, cols=SD_COLS,
     else:
         sel_idx = np.arange(n_sim)
     pay_sel = pay[sel_idx]
+
+    # Collision-aware selection (mirrors portfolio.select_portfolio_ev): score each
+    # step by placing the whole running portfolio into the contest together — every
+    # entry against the field AND your other lineups — so correlated lineups don't
+    # each bank the top prize. Falls back to the independent-payout objective when
+    # the raw select-slice scores aren't supplied.
+    collide = (select_scores is not None and select_field_cut is not None
+               and select_cut_places is not None and prize is not None)
+    if collide:
+        prize_arr = np.asarray(prize, dtype=np.float64)
+        max_place = len(prize_arr) - 1
+        ss_sel = np.asarray(select_scores, dtype=np.float32)[sel_idx]
+        fcut_sel = np.asarray(select_field_cut, dtype=np.float32)[sel_idx]
+        fp_sel, q_sel = pev.field_places(ss_sel, fcut_sel, select_cut_places)
+        own_ahead = np.zeros((len(sel_idx), n_row), dtype=np.int64)
 
     (pcap, ccap, tcap, gcap, player_capn, captain_capn, team_capn,
      player_minn, captain_minn, team_minn) = _prep_caps(
@@ -299,7 +315,13 @@ def select_showdown_portfolio_ev(res_df, n_select, pay, util, *, cols=SD_COLS,
         if not avail.any():
             break
         avail_idx = np.where(avail)[0]
-        u_new = util(W_sel[:, None] + pay_sel[:, avail_idx])
+        if collide:
+            marg_place = np.clip(fp_sel[:, avail_idx] + own_ahead[:, avail_idx],
+                                 0, max_place)
+            marg = np.where(q_sel[:, avail_idx], prize_arr[marg_place], 0.0)
+            u_new = util(W_sel[:, None] + marg)
+        else:
+            u_new = util(W_sel[:, None] + pay_sel[:, avail_idx])
         gains = u_new.mean(axis=0) - cur_u
         if tie_seed is not None and n_sel > 1:
             se = u_new.std(axis=0) / np.sqrt(n_sel)
@@ -323,7 +345,15 @@ def select_showdown_portfolio_ev(res_df, n_select, pay, util, *, cols=SD_COLS,
             break
         i = picked; f = feats[i]
         chosen_pos.append(i); chosen_sets.append(f["playerset"]); taken[i] = True
-        W_sel += pay_sel[:, i]
+        if collide:
+            # add the pick's payout at its place behind the field + already-chosen
+            # lineups, then mark it ahead of the candidates it outscores (see
+            # portfolio.select_portfolio_ev). Reported W re-places the set exactly.
+            place_pick = np.clip(fp_sel[:, i] + own_ahead[:, i], 0, max_place)
+            W_sel = W_sel + np.where(q_sel[:, i], prize_arr[place_pick], 0.0)
+            own_ahead += (ss_sel[:, [i]] > ss_sel).astype(np.int64)
+        else:
+            W_sel += pay_sel[:, i]
         cur_u = float(np.mean(util(W_sel)))
         for n in f["names"]:
             expo[n] += 1
@@ -359,7 +389,9 @@ def select_showdown_portfolio_ev(res_df, n_select, pay, util, *, cols=SD_COLS,
         "floor_p10": float(np.percentile(W, 10)),
         "median": float(np.percentile(W, 50)),
         "ceiling_p90": float(np.percentile(W, 90)),
-        "cash_rate": float(np.mean(W > 0)),
+        # profit rate: slates whose winnings clear the entry cost (see
+        # portfolio.select_portfolio_ev). entry_fee=0 -> old "any winnings" rate.
+        "cash_rate": float(np.mean(W > len(chosen) * float(entry_fee))),
     })
     return chosen, info, W
 

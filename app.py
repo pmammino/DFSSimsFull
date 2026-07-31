@@ -493,7 +493,9 @@ def build_dk_upload_ev(src, sim, dkid, n_select, *, entry_fee, pct_paid, rake,
         player_mins=player_mins, team_mins=team_mins, eval_sims=eval_sims,
         tie_seed=tie_seed, pay_report=pay_report,
         report_scores=cs_rep, report_field_cut=fcs_report,
-        report_cut_places=cut_places, prize=prize)
+        report_cut_places=cut_places, prize=prize, entry_fee=entry_fee,
+        select_scores=cs_sel, select_field_cut=fcs_select,
+        select_cut_places=cut_places)
 
     # rank-selected baseline of the SAME size (eligible only) for the comparison,
     # scored on the same held-out report slice as the EV set — and with the SAME
@@ -1072,12 +1074,14 @@ def render_showdown_export(sim):
             player_caps=player_caps, eval_sims=4000,
             tie_seed=_tie_seed, pay_report=pay_report,
             report_scores=_cs_rep, report_field_cut=_fcs_rep,
-            report_cut_places=_dist["cut_places"], prize=prize)
+            report_cut_places=_dist["cut_places"], prize=prize,
+            entry_fee=ev_entry_fee, select_scores=_cs_sel,
+            select_field_cut=_fcs_sel, select_cut_places=_dist["cut_places"])
         csv_text, uinfo = su.upload_csv(chosen, tmap, cands)
         _sd_cost = info['chosen'] * float(ev_entry_fee)
         _sd_net = info['exp_return'] - _sd_cost
         st.caption(f"Portfolio EV (held-out) — exp profit ${_sd_net:,.0f}/slate "
-                   f"(net of ${_sd_cost:,.0f} entry) · cash rate "
+                   f"(net of ${_sd_cost:,.0f} entry) · profit rate "
                    f"{100*info['cash_rate']:.0f}% · "
                    f"{info['distinct_captains']} distinct captains.")
     else:
@@ -3501,7 +3505,7 @@ with tabs[3]:
                         # (the buy-in), so a portfolio only shows a positive number
                         # when it out-earns what it costs to enter.
                         naive_ret = float(np.mean(W_naive))
-                        naive_cash = float(np.mean(W_naive > 0))
+                        naive_cash = float(np.mean(W_naive > cost))
                         net_ret = info['exp_return'] - cost
                         net_naive = naive_ret - cost
                         mc1, mc2, mc3, mc4 = st.columns(4)
@@ -3511,9 +3515,12 @@ with tabs[3]:
                                         "cost (buy-in removed).")
                         mc2.metric("ROI", f"{100*(net_ret/cost):+.1f}%",
                                    help="Expected profit ÷ entry cost.")
-                        mc3.metric("Cash rate (≥1 lineup)",
+                        mc3.metric("Profit rate",
                                    f"{100*info['cash_rate']:.1f}%",
-                                   f"{100*(info['cash_rate'] - naive_cash):+.1f} pts vs ranked")
+                                   f"{100*(info['cash_rate'] - naive_cash):+.1f} pts vs ranked",
+                                   help="Share of simulated slates where the "
+                                        "portfolio's winnings beat its entry cost "
+                                        "(a net-profitable slate).")
                         mc4.metric("Winnings floor (p10) / ceiling (p90)",
                                    f"${info['floor_p10']:,.0f} / ${info['ceiling_p90']:,.0f}",
                                    help="Gross winnings percentiles across slates "
@@ -3521,15 +3528,15 @@ with tabs[3]:
                         st.altair_chart(portfolio_return_chart(W, W_naive),
                                         use_container_width=True)
                         st.caption(
-                            "“Cash rate” is the share of simulated slates where at "
-                            "least one exported lineup finishes in the money — the "
-                            "portfolio-level win/cash metric. Compared against a "
-                            "top-N-by-rank set of the same size, drawn from the same "
-                            "candidate pool. All figures are scored on a **held-out "
-                            "slice of sims** that neither set was ranked or selected "
-                            "on, so they're out-of-sample (and typically lower than "
-                            "an in-sample estimate — that gap is the optimizer's "
-                            "selection bias, now removed).")
+                            "“Profit rate” is the share of simulated slates where "
+                            "the portfolio's winnings exceed its entry cost — a "
+                            "net-profitable slate, not just one lineup cashing. "
+                            "Compared against a top-N-by-rank set of the same size, "
+                            "drawn from the same candidate pool. All figures are "
+                            "scored on a **held-out slice of sims** that neither set "
+                            "was ranked or selected on, so they're out-of-sample "
+                            "(and typically lower than an in-sample estimate — that "
+                            "gap is the optimizer's selection bias, now removed).")
 
 
 # --------------------------------------------------------------------------- #
