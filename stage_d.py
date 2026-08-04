@@ -99,17 +99,43 @@ def lineups_to_df(lineups):
         out.append(r)
     return pd.DataFrame(out)
 
-def score_matrix(lineups, score, n_sim):
-    # Fill the (n_sim, n_lineups) result in place. Building a list of columns and
-    # column_stack()-ing them transiently doubles peak memory (the list AND the
-    # stacked copy coexist), which on a small host OOM-kills the process on large
-    # candidate/field matrices — allocate once and write each column instead.
+def _score_matrix_loop(lineups, score, n_sim):
+    # Fallback: fill the (n_sim, n_lineups) result in place (no column_stack copy).
     out = np.zeros((n_sim, len(lineups)), np.float32)
     for j, lu in enumerate(lineups):
         col = out[:, j]
         for pl in lu['players']:
             col += score[norm(pl.Name)]
     return out
+
+
+def score_matrix(lineups, score, n_sim):
+    """Total DK points per (sim, lineup): out[s, j] = sum over lineup j's players
+    of their per-sim score. Vectorized as a sparse (lineups x players) incidence
+    matrix times the (players x sims) score stack — one BLAS-backed matmul, much
+    faster than a Python loop over every lineup on large candidate/field sets, and
+    without the column_stack peak-memory spike. Falls back to the explicit loop if
+    SciPy isn't importable. Result matches the loop to float32 rounding."""
+    if not lineups:
+        return np.zeros((n_sim, 0), np.float32)
+    try:
+        from scipy import sparse
+    except Exception:
+        return _score_matrix_loop(lineups, score, n_sim)
+    name_idx = {nm: i for i, nm in enumerate(score)}
+    S = np.empty((len(name_idx), n_sim), np.float32)      # (players x sims)
+    for nm, i in name_idx.items():
+        S[i] = score[nm]
+    rows, cols = [], []
+    for j, lu in enumerate(lineups):
+        for pl in lu['players']:
+            rows.append(j)
+            cols.append(name_idx[norm(pl.Name)])          # KeyError if unscored, as before
+    M = sparse.csr_matrix(
+        (np.ones(len(rows), np.float32),
+         (np.asarray(rows, np.int64), np.asarray(cols, np.int64))),
+        shape=(len(lineups), len(name_idx)))
+    return (M @ S).T                                      # (sims x lineups)
 
 def run_contest(field_mat, cand_mat, n_sim, N_FIELD):
     N = cand_mat.shape[1]
