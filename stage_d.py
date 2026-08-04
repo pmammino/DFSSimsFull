@@ -100,12 +100,16 @@ def lineups_to_df(lineups):
     return pd.DataFrame(out)
 
 def score_matrix(lineups, score, n_sim):
-    cols = []
-    for lu in lineups:
-        t = np.zeros(n_sim, np.float32)
-        for pl in lu['players']: t += score[norm(pl.Name)]
-        cols.append(t)
-    return np.column_stack(cols)
+    # Fill the (n_sim, n_lineups) result in place. Building a list of columns and
+    # column_stack()-ing them transiently doubles peak memory (the list AND the
+    # stacked copy coexist), which on a small host OOM-kills the process on large
+    # candidate/field matrices — allocate once and write each column instead.
+    out = np.zeros((n_sim, len(lineups)), np.float32)
+    for j, lu in enumerate(lineups):
+        col = out[:, j]
+        for pl in lu['players']:
+            col += score[norm(pl.Name)]
+    return out
 
 def run_contest(field_mat, cand_mat, n_sim, N_FIELD):
     N = cand_mat.shape[1]

@@ -59,6 +59,28 @@ unhealthy.
   to open a browser on the server. CORS/XSRF are disabled in the run command so
   the WebSocket connects cleanly through DO's proxy.
 
+#### Sizing the DO instance (memory)
+
+Running a contest holds **two float32 score matrices** in RAM at once — the
+candidate matrix (`sim_runs × candidates`) and the field matrix
+(`sim_runs × contest_size`) — so:
+
+```
+peak memory ≈ 4 bytes × sim_runs × (candidates + contest_size)
+```
+
+e.g. 10,000 sim runs × 10,000 candidates ≈ 1.6 GB for the candidate matrix
+alone, before the (larger) field. On a 512 MB / 1 GB instance a normal run
+**OOM-kills the process right after building the candidates, before the field** —
+which looks like the app hanging and then the run silently stopping. The app now
+does a **pre-flight memory check** and stops with a clear message (how much it
+needs vs. what's available) instead of crashing, but the fix for real runs is to
+size the instance to the workload: **2 GB is a sane floor**, more for big
+contests/candidate pools. Set `instance_size_slug` in `.do/app.yaml` (see the
+comment there) or bump the size in the DO UI; list valid slugs with
+`doctl apps tier instance-size list`. Lowering **sim runs**, **candidate
+lineups**, or **contest size** reduces the requirement proportionally.
+
 #### The shared store is REQUIRED on DigitalOcean (not optional)
 
 On your own always-on box the object store in Step 2 is optional — the app can

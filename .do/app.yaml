@@ -30,7 +30,13 @@ services:
         --server.enableXsrfProtection=false
     http_port: 8080
     instance_count: 1
-    instance_size_slug: basic-xs
+    # Contest scoring holds two float32 matrices in RAM at once — the candidate
+    # matrix (sim_runs × candidates) and the field matrix (sim_runs × contest_size)
+    # — so memory ≈ 4 bytes × sim_runs × (candidates + contest_size). A 1 GB box
+    # OOM-kills a 10k-candidate × 10k-sim run right after building candidates. Pick
+    # a size that fits the runs you actually do; 2 GB is a sane floor. List valid
+    # slugs with `doctl apps tier instance-size list`.
+    instance_size_slug: apps-s-1vcpu-2gb
     # Shared object store (R2/S3): REQUIRED on App Platform. This host can't build
     # projections itself — Stage B needs statsapi.mlb.com, which blocks datacenter
     # IPs — so the app loads prebuilt artifacts the morning-refresh Action

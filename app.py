@@ -334,6 +334,60 @@ def build_many(builder, target, label, hard_cap_mult=60):
     return out, attempts
 
 
+def _avail_memory_bytes():
+    """Best-effort available RAM in bytes (Linux /proc/meminfo). None if unknown
+    (e.g. non-Linux); callers then skip the guard rather than block."""
+    try:
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                info[key] = rest
+        for key in ("MemAvailable", "MemTotal"):   # prefer available, fall back
+            if key in info:
+                return int(info[key].split()[0]) * 1024
+    except Exception:
+        pass
+    return None
+
+
+def _estimate_run_memory_bytes(n_sim, num_candidates, contest_size):
+    """Rough peak RAM for the contest scoring matrices. The candidate and field
+    score matrices are float32 of shape (n_sim × N) and both coexist during
+    scoring; the held-out sim split also makes transient row-slice copies. The
+    1.7× factor covers those copies plus the overbuilt field list."""
+    entries = int(num_candidates) + int(contest_size)
+    return int(4 * int(n_sim) * entries * 1.7)
+
+
+def guard_run_memory(n_sim, num_candidates, contest_size):
+    """Stop a run that would almost certainly exhaust RAM *before* it silently
+    OOM-kills the process (which looks like a hang that dies right after the
+    candidates, before the field). No-op when available RAM can't be determined."""
+    avail = _avail_memory_bytes()
+    if not avail:
+        return
+    need = _estimate_run_memory_bytes(n_sim, num_candidates, contest_size)
+    gb = 1024 ** 3
+    if need > 0.85 * avail:
+        st.error(
+            f"This run needs roughly **{need/gb:.1f} GB** of memory for the "
+            f"candidate + field score matrices, but only **{avail/gb:.1f} GB** is "
+            "available on this instance — it would be killed mid-run (the process "
+            "gets OOM-killed right after building the candidates, before the "
+            "field).\n\n"
+            "Lower **sim runs**, **candidate lineups**, and/or **contest size** "
+            "— memory ≈ 4 bytes × sim_runs × (candidates + contest_size) — or "
+            "deploy on a larger instance (see DEPLOYMENT.md → *Sizing the DO "
+            "instance*).")
+        st.stop()
+    if need > 0.6 * avail:
+        st.warning(
+            f"This run needs ~{need/gb:.1f} GB of ~{avail/gb:.1f} GB available — "
+            "close to the limit. If it crashes, reduce sim runs / candidate "
+            "lineups / contest size, or use a larger instance.")
+
+
 def parse_dk_template(text):
     """Map norm(player name) -> DraftKings player ID from a DKSalaries CSV.
     The player table header is the row whose column 11 == 'Position', with
@@ -2455,6 +2509,11 @@ with tabs[0]:
                 st.error("After the freshness check, none of your slate players "
                          "matched the sim universe. Check the slate file.")
                 st.stop()
+
+            # memory pre-flight: stop cleanly if the candidate/field score
+            # matrices wouldn't fit in RAM, instead of OOM-killing the process
+            # mid-run (covers both the showdown and classic paths below).
+            guard_run_memory(K, int(num_candidates), int(contest_size))
 
             # ---- Showdown slates take a dedicated path (1 CPT + 5 UTIL, single
             # game). Everything above (freshness, sim load, name-match guard) is
