@@ -19,9 +19,42 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 
+def _effective_cpus():
+    """CPUs actually available to THIS container — not the host's core count.
+
+    On DO App Platform / k8s the process runs on a many-core host but is limited
+    to a fraction of a vCPU by the cgroup CPU quota. ``os.cpu_count()`` reports
+    the host cores, so trusting it makes us spawn many threads on one real vCPU —
+    oversubscription that runs *slower* than serial. Prefer the cgroup quota, then
+    the CPU-affinity mask, then os.cpu_count()."""
+    import math
+    # cgroup v2: "<quota> <period>" (quota == "max" means unlimited)
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as f:
+            quota, period = f.read().split()[:2]
+        if quota != "max":
+            q, p = int(quota), int(period)
+            if q > 0 and p > 0:
+                return max(1, int(math.floor(q / p)))
+    except Exception:
+        pass
+    # cgroup v1
+    try:
+        q = int(open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read())
+        p = int(open("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read())
+        if q > 0 and p > 0:
+            return max(1, int(math.floor(q / p)))
+    except Exception:
+        pass
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except Exception:
+        return max(1, os.cpu_count() or 1)
+
+
 def _contest_workers(n_sim):
     """How many threads to score the contest with. Serial for small workloads
-    (thread setup isn't worth it) or a single core; capped so we don't
+    (thread setup isn't worth it) or a single available vCPU; capped so we don't
     oversubscribe. ``CONTEST_WORKERS`` env var forces a specific count."""
     env = os.environ.get("CONTEST_WORKERS")
     if env:
@@ -31,7 +64,7 @@ def _contest_workers(n_sim):
             w = 0
         if w >= 1:
             return w if n_sim >= 1000 else 1
-    cpu = os.cpu_count() or 1
+    cpu = _effective_cpus()
     if cpu <= 1 or n_sim < 2000:
         return 1
     return min(cpu, 8)
