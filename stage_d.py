@@ -137,6 +137,46 @@ def score_matrix(lineups, score, n_sim):
         shape=(len(lineups), len(name_idx)))
     return (M @ S).T                                      # (sims x lineups)
 
+
+def incidence(lineups, name_index):
+    """Sparse (n_lineups x n_players) 0/1 incidence matrix under `name_index`
+    (norm(name) -> column). Build it ONCE per lineup set and reuse it across sim
+    slices via :func:`score_from_incidence`, so the field/candidates are only
+    scored on the sims each held-out slice needs — never the full (K x N) matrix.
+    Returns None if SciPy is unavailable (callers fall back to the dense path)."""
+    try:
+        from scipy import sparse
+    except Exception:
+        return None
+    rows, cols = [], []
+    for j, lu in enumerate(lineups):
+        for pl in lu['players']:
+            rows.append(j)
+            cols.append(name_index[norm(pl.Name)])
+    return sparse.csr_matrix(
+        (np.ones(len(rows), np.float32),
+         (np.asarray(rows, np.int64), np.asarray(cols, np.int64))),
+        shape=(len(lineups), len(name_index)))
+
+
+def score_from_incidence(M, lineups, name_index, score, sim_index):
+    """(len(sim_index) x n_lineups) point totals for just the sims in `sim_index`.
+    Equivalent to ``score_matrix(lineups, score, K)[sim_index]`` but it never
+    materializes the full-K matrix — the memory driver on large contests. `M` is
+    the incidence from :func:`incidence` (or None → dense fallback)."""
+    n = len(sim_index)
+    if M is None:
+        out = np.zeros((n, len(lineups)), np.float32)
+        for j, lu in enumerate(lineups):
+            col = out[:, j]
+            for pl in lu['players']:
+                col += score[norm(pl.Name)][sim_index]
+        return out
+    S = np.empty((len(name_index), n), np.float32)
+    for nm, i in name_index.items():
+        S[i] = score[nm][sim_index]
+    return (M @ S).T
+
 def run_contest(field_mat, cand_mat, n_sim, N_FIELD):
     N = cand_mat.shape[1]
     wins=np.zeros(N,np.int64); t10=np.zeros(N,np.int64); t100=np.zeros(N,np.int64); ps=np.zeros(N,np.int64)

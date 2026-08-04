@@ -30,7 +30,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from stage_d import (load_sims, build_pool, lineups_to_df, score_matrix,
+from stage_d import (load_sims, build_pool, lineups_to_df,
+                     incidence, score_from_incidence,
                      norm as normname, COLS, HITC, SLOT)
 from mlb_lineup_builder import Pool, Builder, candidate_stack_structures
 from portfolio import (select_portfolio, select_portfolio_ev, detect_value_groups,
@@ -354,12 +355,13 @@ def _avail_memory_bytes():
 
 
 def _estimate_run_memory_bytes(n_sim, num_candidates, contest_size):
-    """Rough peak RAM for the contest scoring matrices. The candidate and field
-    score matrices are float32 of shape (n_sim × N) and both coexist during
-    scoring; the held-out sim split also makes transient row-slice copies. The
-    1.7× factor covers those copies plus the overbuilt field list."""
+    """Rough peak RAM for the contest scoring. The contest scores each held-out
+    sim slice separately (never the full n_sim × N matrix), so peak is driven by
+    the largest slice — the ~0.4·n_sim RANK slice, which holds the candidate AND
+    field score matrices at once. float32 (4 bytes); the 0.6 factor is that ~0.4
+    fraction plus slicing/allocation overhead."""
     entries = int(num_candidates) + int(contest_size)
-    return int(4 * int(n_sim) * entries * 1.7)
+    return int(4 * int(n_sim) * entries * 0.6)
 
 
 def guard_run_memory(n_sim, num_candidates, contest_size):
@@ -2716,7 +2718,6 @@ with tabs[0]:
                 status.update(label="Could not build candidate lineups", state="error")
                 st.error("Failed to construct any valid candidate lineup from this pool.")
                 st.stop()
-            cand_mat = score_matrix(cands, score_b, K)
 
             # ---- field for the chosen contest size ----
             # Built to be realistic, not a soft chalk field — see the FIELD_* knobs
@@ -2784,7 +2785,6 @@ with tabs[0]:
                 st.warning(f"Built {len(field):,} of {contest_size:,} requested field "
                            "lineups (pool constrained); simulating against the field "
                            "that could be built.")
-            field_mat = score_matrix(field, score_b, K)
 
             # ---- the contest (captures each candidate's finishing-place distro,
             #      plus the field's per-sim placement ladder for payout-aware
@@ -2794,19 +2794,33 @@ with tabs[0]:
             # REPORT slice. Ranking + selecting + reporting on one shared sim set
             # inflates the reported EV (the winner's curse); disjoint slices make
             # the exported set's headline numbers genuinely out-of-sample.
+            #
+            # We score each slice on ONLY its sims (never the full K x N matrix):
+            # build each lineup set's sparse incidence once, then multiply by the
+            # sliced score stack. Identical results to scoring-then-indexing, at a
+            # fraction of the peak memory (the field matrix is the memory driver).
             st.write(f"Simulating the contest over {K:,} runs…")
             cut_places = pev.field_place_cutpoints(len(field))
             rank_idx, sel_idx, rep_idx = pev.sim_split(K, seed=int(seed_field))
+            name_index = {nm: i for i, nm in enumerate(score_b)}
+            M_cand = incidence(cands, name_index)
+            M_field = incidence(field, name_index)
+            cand_rank = score_from_incidence(M_cand, cands, name_index, score_b, rank_idx)
+            field_rank = score_from_incidence(M_field, field, name_index, score_b, rank_idx)
             wins, t10, t100, avg, dist = run_contest_dist(
-                field_mat[rank_idx], cand_mat[rank_idx], len(rank_idx), len(field))
+                field_rank, cand_rank, len(rank_idx), len(field))
+            del cand_rank, field_rank            # free the rank matrices before the next slice
             Krank = len(rank_idx)
-            # placement ladders for the two held-out slices (payout-aware export)
+            # placement ladders for the two held-out slices (payout-aware export) —
+            # only the FIELD is needed for these, scored on each slice's sims.
             dist["cut_places"] = cut_places
             dist["field_cut_scores_select"] = pev.field_cut_scores(
-                field_mat[sel_idx], cut_places)
+                score_from_incidence(M_field, field, name_index, score_b, sel_idx),
+                cut_places)
             # keep the canonical key = the REPORT ladder (also gates EV readiness)
             dist["field_cut_scores"] = pev.field_cut_scores(
-                field_mat[rep_idx], cut_places)
+                score_from_incidence(M_field, field, name_index, score_b, rep_idx),
+                cut_places)
             status.update(label=f"Done in {time.time()-t0:.1f}s", state="complete")
 
         # ---- per-lineup attributes for filtering/search ----
