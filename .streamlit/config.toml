@@ -9,3 +9,8 @@ font = "sans serif"
 
 [server]
 enableStaticServing = true
+# Headless so no email prompt / browser auto-open on a server (e.g. DigitalOcean).
+# The port/address are set on the `streamlit run` command line (see Procfile) so
+# the app binds to the platform-provided $PORT; these are safe local defaults.
+headless = true
+address = "0.0.0.0"
