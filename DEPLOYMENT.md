@@ -89,13 +89,13 @@ the `envs` block in `.do/app.yaml`) — Streamlit `secrets.toml` is not used on 
 Use the **same values** as the GitHub Action's repo secrets (Step 4) so the app
 reads exactly what the Action writes. After setting them, redeploy.
 
-**Verify it's working:** the app has a collapsible **🔌 Shared store** panel on
-the main screen. It should read *connected ✅* and show the latest published
-build. If it says *not configured* the env vars aren't set; if *configured, but
-no build reachable*, the panel prints the underlying error (wrong bucket/
-endpoint, bad credentials, empty bucket, or endpoint unreachable). Live slate /
-Vegas feeds hit RotoWire and can also be blocked from a datacenter IP — that's
-independent of the store.
+**Verify it's working:** when the store is connected the app loads the prebuilt
+sims and shows the normal freshness banner. If it can't find any sims it stops
+with a **🔌 Shared store** diagnostics panel that tells you why — *not configured*
+(env vars not set) or *configured, but no build reachable* with the underlying
+error (wrong bucket/endpoint, bad credentials, empty bucket, or endpoint
+unreachable). Live slate / Vegas feeds hit RotoWire and can also be blocked from
+a datacenter IP — that's independent of the store.
 
 ---
 

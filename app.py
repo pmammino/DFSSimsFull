@@ -1988,10 +1988,6 @@ else:
     st.caption("🧬 Baselines (Stage B projections) have no recorded build date — "
                "the next Run will build them (the slow step).")
 
-# Shared-store diagnostics (collapsed) — expand to see whether this deployment is
-# pulling prebuilt artifacts, and why a build might be stale/absent.
-_render_store_status(expanded=not _bi["proj_date"])
-
 
 tabs = st.tabs(["⚙️  Setup", "📊  Players", "🏆  Results", "⬇️  Export"])
 
