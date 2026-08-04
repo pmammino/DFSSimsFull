@@ -37,6 +37,7 @@ from portfolio import (select_portfolio, select_portfolio_ev, detect_value_group
                        value_group_member_caps, shrink_value_group_means)
 import portfolio_ev as pev
 from contest_sim import run_contest_dist
+import run_cache
 import dk_ids
 from field_simulator import (normalize_to_slots, adjust_ownership,
                              beta_for_size, tilt_structures)
@@ -2691,13 +2692,30 @@ with tabs[0]:
                 + (f", order tilt={order_tilt:g} on {n_order} posted bats"
                    if order_tilt > 0 and n_order else "")
                 + ".")
-            cb = Builder(Pool(cdf), cand_params, seed=int(seed_cand), uniform=True,
-                         team_weights=team_weights, jitter=float(cand_jitter),
-                         upside_attr="Upside", bringback_prob=float(bringback),
-                         game_stack_prob=float(game_stack),
-                         order_weight=float(order_tilt),
-                         ace_pitcher_prob=float(ace_pitcher))
-            cands, c_att = build_many(cb, int(num_candidates), "Candidates")
+            # Reuse the built candidates across Runs when the exact construction
+            # inputs are unchanged (signing the pool + params + seed + knobs, so
+            # any change that would alter the build forces a rebuild). Skips the
+            # slow, GIL-bound builder on repeat/tweak-a-downstream-knob Runs.
+            cand_key = run_cache.sig(cdf, cand_params, int(seed_cand),
+                                     int(num_candidates), team_weights,
+                                     float(cand_jitter), float(bringback),
+                                     float(game_stack), float(order_tilt),
+                                     float(ace_pitcher))
+
+            def _build_cands():
+                cb = Builder(Pool(cdf), cand_params, seed=int(seed_cand), uniform=True,
+                             team_weights=team_weights, jitter=float(cand_jitter),
+                             upside_attr="Upside", bringback_prob=float(bringback),
+                             game_stack_prob=float(game_stack),
+                             order_weight=float(order_tilt),
+                             ace_pitcher_prob=float(ace_pitcher))
+                return build_many(cb, int(num_candidates), "Candidates")
+
+            (cands, c_att), cand_hit = run_cache.reuse(
+                st.session_state, "_cache_cands", cand_key, _build_cands)
+            if cand_hit:
+                st.write(f"♻️ Reused {len(cands):,} cached candidate lineups "
+                         "(same construction inputs).")
             if not cands:
                 status.update(label="Could not build candidate lineups", state="error")
                 st.error("Failed to construct any valid candidate lineup from this pool.")
@@ -2715,8 +2733,6 @@ with tabs[0]:
             _extra = min(int(round((FIELD_OVERBUILD - 1.0) * contest_size)),
                          FIELD_OVERBUILD_CAP)
             n_build = int(contest_size) + max(0, _extra)
-            st.write(f"Building a {contest_size:,}-entry field "
-                     f"({FIELD_SHARP_FRAC:.0%} sharp, top-projection of {n_build:,})…")
             beta = beta_for_size(contest_size, int(medium), float(chalk))
             fdf = adjust_ownership(normalize_to_slots(pool, 0.15), beta=beta)
             tilted = tilt_structures(
@@ -2734,19 +2750,40 @@ with tabs[0]:
                              (_zcp if r.Pos == "P" else _zc).get(r.Name, 0.0)))
                 for r in sfdf.itertuples()]
             n_sharp = int(round(FIELD_SHARP_FRAC * n_build))
-            sfb = Builder(Pool(sfdf), fp, seed=int(seed_field) + 7, uniform=False,
-                          upside_attr="Upside", bringback_prob=FIELD_SHARP_BRINGBACK,
-                          game_stack_prob=FIELD_SHARP_GAMESTACK,
-                          ace_pitcher_prob=FIELD_SHARP_ACE)
-            fb = Builder(Pool(fdf), fp, seed=int(seed_field), uniform=False)
-            field_sharp, _fa1 = build_many(sfb, n_sharp, "Field (sharp)")
-            field_chalk, _fa2 = build_many(fb, n_build - n_sharp, "Field (chalk)")
-            built = field_sharp + field_chalk
-            # keep the top `contest_size` by projected points (talent blend) — the
-            # "submitted" field: entrants play their higher-projection lineups.
-            built.sort(key=lambda lu: sum(tal.get(pl.Name, base)
-                                          for pl in lu["players"]), reverse=True)
-            field = built[:int(contest_size)]
+
+            # Reuse the built field across Runs when its construction inputs are
+            # unchanged (field pools + tilted params + seed + sizes + the trim
+            # ordering). Changing contest size / chalk / tilt / seed rebuilds it;
+            # changing only a candidate or downstream knob reuses it.
+            field_key = run_cache.sig(
+                fdf, sfdf, fp, int(seed_field), int(n_build), int(n_sharp),
+                int(contest_size), tal, float(base),
+                float(FIELD_SHARP_FRAC), float(FIELD_SHARP_BRINGBACK),
+                float(FIELD_SHARP_GAMESTACK), float(FIELD_SHARP_ACE),
+                float(FIELD_SHARP_CEIL_TILT))
+
+            def _build_field():
+                st.write(f"Building a {contest_size:,}-entry field "
+                         f"({FIELD_SHARP_FRAC:.0%} sharp, top-projection of {n_build:,})…")
+                sfb = Builder(Pool(sfdf), fp, seed=int(seed_field) + 7, uniform=False,
+                              upside_attr="Upside", bringback_prob=FIELD_SHARP_BRINGBACK,
+                              game_stack_prob=FIELD_SHARP_GAMESTACK,
+                              ace_pitcher_prob=FIELD_SHARP_ACE)
+                fb = Builder(Pool(fdf), fp, seed=int(seed_field), uniform=False)
+                field_sharp, _fa1 = build_many(sfb, n_sharp, "Field (sharp)")
+                field_chalk, _fa2 = build_many(fb, n_build - n_sharp, "Field (chalk)")
+                built = field_sharp + field_chalk
+                # keep the top `contest_size` by projected points (talent blend) —
+                # the "submitted" field: entrants play their higher-projection lineups.
+                built.sort(key=lambda lu: sum(tal.get(pl.Name, base)
+                                              for pl in lu["players"]), reverse=True)
+                return built[:int(contest_size)]
+
+            field, field_hit = run_cache.reuse(
+                st.session_state, "_cache_field", field_key, _build_field)
+            if field_hit:
+                st.write(f"♻️ Reused a cached {len(field):,}-entry field "
+                         "(same construction inputs).")
             if len(field) < contest_size:
                 st.warning(f"Built {len(field):,} of {contest_size:,} requested field "
                            "lineups (pool constrained); simulating against the field "
