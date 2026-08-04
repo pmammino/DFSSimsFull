@@ -129,6 +129,86 @@ def enabled():
     return _cfg() is not None
 
 
+def diagnose(check_remote=True):
+    """Non-secret status of the shared store, for surfacing in the UI / logs so
+    it's obvious *why* a build is (or isn't) being pulled. Never returns secret
+    values — only whether each is present — and never raises.
+
+    Keys: enabled, boto3_installed, source ('secrets'|'env'|None), bucket,
+    prefix, endpoint_url, region, has_credentials, and (when check_remote)
+    remote_build: {present, ts, iso, slate_date} or {present: False, error}.
+    """
+    info = {
+        "enabled": False,
+        "boto3_installed": False,
+        "source": None,
+        "bucket": None,
+        "prefix": None,
+        "endpoint_url": None,
+        "region": None,
+        "has_credentials": False,
+        "remote_build": None,
+    }
+    try:
+        import boto3  # noqa: F401
+        info["boto3_installed"] = True
+    except Exception:
+        pass
+
+    # Where did config come from (if anywhere)?
+    try:
+        import streamlit as st
+        if "shared_store" in st.secrets and dict(st.secrets["shared_store"]).get("bucket"):
+            info["source"] = "secrets"
+    except Exception:
+        pass
+    cfg = _cfg()
+    if not cfg:
+        return info
+    if info["source"] is None:
+        info["source"] = "env"
+    info["enabled"] = True
+    info["bucket"] = cfg.get("bucket")
+    info["prefix"] = (cfg.get("prefix") or "") or None
+    info["endpoint_url"] = cfg.get("endpoint_url")
+    info["region"] = cfg.get("region")
+    info["has_credentials"] = bool(cfg.get("access_key_id") and cfg.get("secret_access_key"))
+
+    if not check_remote:
+        return info
+
+    # Probe the remote build stamp with a short timeout so a misconfigured
+    # endpoint can't hang the page. This is the same object pull() gates on.
+    try:
+        import boto3
+        from botocore.config import Config as _BotoConfig
+        kw = {"config": _BotoConfig(connect_timeout=5, read_timeout=5,
+                                    retries={"max_attempts": 1})}
+        if cfg.get("region"):
+            kw["region_name"] = cfg["region"]
+        if cfg.get("endpoint_url"):
+            kw["endpoint_url"] = cfg["endpoint_url"]
+        if cfg.get("access_key_id") and cfg.get("secret_access_key"):
+            kw["aws_access_key_id"] = cfg["access_key_id"]
+            kw["aws_secret_access_key"] = cfg["secret_access_key"]
+        s3 = boto3.client("s3", **kw)
+        obj = s3.get_object(Bucket=cfg["bucket"], Key=_key(cfg, STAMP))
+        body = json.loads(obj["Body"].read())
+        ts = float(body.get("ts", 0) or 0)
+        iso = ""
+        if ts:
+            try:
+                import datetime as _dt
+                iso = _dt.datetime.fromtimestamp(ts).isoformat(timespec="seconds")
+            except Exception:
+                iso = ""
+        info["remote_build"] = {"present": True, "ts": ts, "iso": iso,
+                                "slate_date": body.get("slate_date")}
+    except Exception as e:
+        info["remote_build"] = {"present": False, "error": f"{type(e).__name__}: {e}"}
+    return info
+
+
 def _client_and_cfg():
     cfg = _cfg()
     if not cfg:

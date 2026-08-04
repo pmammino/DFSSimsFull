@@ -59,9 +59,47 @@ unhealthy.
   to open a browser on the server. CORS/XSRF are disabled in the run command so
   the WebSocket connects cleanly through DO's proxy.
 
+#### The shared store is REQUIRED on DigitalOcean (not optional)
+
+On your own always-on box the object store in Step 2 is optional — the app can
+build its own projections. **On DigitalOcean it is required**, because the
+projection rebuild (Stage B) calls `statsapi.mlb.com`, and MLB blocks datacenter
+IP ranges (App Platform included). A build there dies with:
+
+```
+RuntimeError: statsapi returned no rate data ... (statsapi.mlb.com is likely
+blocked / returning 403, or this machine is offline). Stage B cannot build
+projections without it.
+```
+
+So the DO app must **consume** the artifacts the morning-refresh GitHub Action
+(Step 4) publishes, never build them. Configure the store as **app-level
+environment variables** (App → Settings → *App-Level Environment Variables*, or
+the `envs` block in `.do/app.yaml`) — Streamlit `secrets.toml` is not used on DO:
+
+| Variable | Example | Secret? |
+|---|---|---|
+| `SHARED_STORE_BUCKET` | `dfs-sims` | no |
+| `SHARED_STORE_ENDPOINT` | `https://<acct>.r2.cloudflarestorage.com` | no |
+| `SHARED_STORE_PREFIX` | `dfs` (optional) | no |
+| `AWS_REGION` | `auto` (R2) / your S3 region | no |
+| `AWS_ACCESS_KEY_ID` | `…` | **yes** |
+| `AWS_SECRET_ACCESS_KEY` | `…` | **yes** |
+
+Use the **same values** as the GitHub Action's repo secrets (Step 4) so the app
+reads exactly what the Action writes. After setting them, redeploy.
+
+**Verify it's working:** the app has a collapsible **🔌 Shared store** panel on
+the main screen. It should read *connected ✅* and show the latest published
+build. If it says *not configured* the env vars aren't set; if *configured, but
+no build reachable*, the panel prints the underlying error (wrong bucket/
+endpoint, bad credentials, empty bucket, or endpoint unreachable). Live slate /
+Vegas feeds hit RotoWire and can also be blocked from a datacenter IP — that's
+independent of the store.
+
 ---
 
-## Step 2 — (Optional) Shared object store for multi-user / persistence
+## Step 2 — Shared object store (required on DO; optional on a single box)
 
 On an ephemeral or multi-replica host the local filesystem doesn't persist, so
 configure an **S3-compatible bucket** to share one build across all users and

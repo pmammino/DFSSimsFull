@@ -1867,14 +1867,63 @@ if shared_store.enabled() and st.session_state.get("_shared_pulled") != _today_i
         st.caption(f"(shared-store sync skipped: {type(e).__name__})")
     st.session_state["_shared_pulled"] = _today_iso
 
+
+def _render_store_status(expanded=False):
+    """Collapsible shared-store diagnostics — makes it obvious whether this
+    deployment is pulling prebuilt artifacts or (mis)configured. Secret values
+    are never shown, only whether they're present."""
+    d = shared_store.diagnose()
+    if not d["enabled"]:
+        label = "🔌 Shared store: not configured"
+    else:
+        rb = d.get("remote_build") or {}
+        if rb.get("present"):
+            label = "🔌 Shared store: connected ✅"
+        else:
+            label = "🔌 Shared store: configured, but no build reachable ⚠️"
+    with st.expander(label, expanded=expanded):
+        if not d["enabled"]:
+            st.markdown(
+                "This deployment has **no shared store configured**, so it can only "
+                "use artifacts already on disk. On a hosted box (e.g. DigitalOcean) "
+                "the projection rebuild (Stage B) can't run — it needs "
+                "`statsapi.mlb.com`, which blocks datacenter IPs — so projections "
+                "must come from the store. Set these env vars on the app and redeploy:\n\n"
+                "`SHARED_STORE_BUCKET`, `SHARED_STORE_ENDPOINT` (for R2/B2), "
+                "`SHARED_STORE_PREFIX` (optional), `AWS_ACCESS_KEY_ID`, "
+                "`AWS_SECRET_ACCESS_KEY`, `AWS_REGION` (optional) — the same values "
+                "the morning-refresh GitHub Action publishes with.")
+            if not d["boto3_installed"]:
+                st.warning("`boto3` isn't importable in this environment.")
+            return
+        st.write({k: d[k] for k in ("source", "bucket", "prefix", "endpoint_url",
+                                    "region", "has_credentials", "boto3_installed")})
+        rb = d.get("remote_build") or {}
+        if rb.get("present"):
+            when = f" (built {rb['iso']})" if rb.get("iso") else ""
+            sd = f", slate {rb['slate_date']}" if rb.get("slate_date") else ""
+            st.success(f"Latest published build found in the store{when}{sd}.")
+        else:
+            st.error(
+                "The store is configured but its build stamp couldn't be read — "
+                "so nothing gets pulled. Common causes: wrong bucket/endpoint, "
+                "bad credentials, the bucket is empty (the morning-refresh Action "
+                "hasn't published yet), or the endpoint is unreachable from here.\n\n"
+                f"Details: `{rb.get('error', 'unknown error')}`")
+
+
 # ---- sim universe (from deliverables/) ----
 hpath, ppath = find_sims()
 if not hpath or not ppath:
     st.error(
         "No player sims found in `deliverables/`. Expected "
-        "`hitter_dk_sims.npy` and `pitcher_dk_sims.npy`. Run Stage C "
-        "(`python3 run_slate.py ...`) first."
+        "`hitter_dk_sims.npy` and `pitcher_dk_sims.npy`.\n\n"
+        "This hosted deployment loads prebuilt sims/projections from the **shared "
+        "store** — it can't build them itself (Stage B needs `statsapi.mlb.com`, "
+        "which is blocked from datacenter IPs). Check the store status below, then "
+        "confirm the morning-refresh Action has published a build."
     )
+    _render_store_status(expanded=True)
     st.stop()
 
 with st.spinner("Loading player sims…"):
@@ -1938,6 +1987,10 @@ if _bi["proj_date"]:
 else:
     st.caption("🧬 Baselines (Stage B projections) have no recorded build date — "
                "the next Run will build them (the slow step).")
+
+# Shared-store diagnostics (collapsed) — expand to see whether this deployment is
+# pulling prebuilt artifacts, and why a build might be stale/absent.
+_render_store_status(expanded=not _bi["proj_date"])
 
 
 tabs = st.tabs(["⚙️  Setup", "📊  Players", "🏆  Results", "⬇️  Export"])
