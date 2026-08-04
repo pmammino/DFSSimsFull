@@ -36,6 +36,8 @@ from mlb_lineup_builder import Pool, Builder, candidate_stack_structures
 from portfolio import (select_portfolio, select_portfolio_ev, detect_value_groups,
                        value_group_member_caps, shrink_value_group_means)
 import portfolio_ev as pev
+from contest_sim import run_contest_dist
+import run_cache
 import dk_ids
 from field_simulator import (normalize_to_slots, adjust_ownership,
                              beta_for_size, tilt_structures)
@@ -332,6 +334,60 @@ def build_many(builder, target, label, hard_cap_mult=60):
                 bar.progress(len(out) / target, text=f"{label}: {len(out)} / {target}")
     bar.progress(1.0, text=f"{label}: {len(out)} / {target}")
     return out, attempts
+
+
+def _avail_memory_bytes():
+    """Best-effort available RAM in bytes (Linux /proc/meminfo). None if unknown
+    (e.g. non-Linux); callers then skip the guard rather than block."""
+    try:
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                info[key] = rest
+        for key in ("MemAvailable", "MemTotal"):   # prefer available, fall back
+            if key in info:
+                return int(info[key].split()[0]) * 1024
+    except Exception:
+        pass
+    return None
+
+
+def _estimate_run_memory_bytes(n_sim, num_candidates, contest_size):
+    """Rough peak RAM for the contest scoring matrices. The candidate and field
+    score matrices are float32 of shape (n_sim × N) and both coexist during
+    scoring; the held-out sim split also makes transient row-slice copies. The
+    1.7× factor covers those copies plus the overbuilt field list."""
+    entries = int(num_candidates) + int(contest_size)
+    return int(4 * int(n_sim) * entries * 1.7)
+
+
+def guard_run_memory(n_sim, num_candidates, contest_size):
+    """Stop a run that would almost certainly exhaust RAM *before* it silently
+    OOM-kills the process (which looks like a hang that dies right after the
+    candidates, before the field). No-op when available RAM can't be determined."""
+    avail = _avail_memory_bytes()
+    if not avail:
+        return
+    need = _estimate_run_memory_bytes(n_sim, num_candidates, contest_size)
+    gb = 1024 ** 3
+    if need > 0.85 * avail:
+        st.error(
+            f"This run needs roughly **{need/gb:.1f} GB** of memory for the "
+            f"candidate + field score matrices, but only **{avail/gb:.1f} GB** is "
+            "available on this instance — it would be killed mid-run (the process "
+            "gets OOM-killed right after building the candidates, before the "
+            "field).\n\n"
+            "Lower **sim runs**, **candidate lineups**, and/or **contest size** "
+            "— memory ≈ 4 bytes × sim_runs × (candidates + contest_size) — or "
+            "deploy on a larger instance (see DEPLOYMENT.md → *Sizing the DO "
+            "instance*).")
+        st.stop()
+    if need > 0.6 * avail:
+        st.warning(
+            f"This run needs ~{need/gb:.1f} GB of ~{avail/gb:.1f} GB available — "
+            "close to the limit. If it crashes, reduce sim runs / candidate "
+            "lineups / contest size, or use a larger instance.")
 
 
 def parse_dk_template(text):
@@ -1695,57 +1751,9 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
         _lock.release()
 
 
-# --------------------------------------------------------------------------- #
-# Contest scoring that also captures each candidate's finishing-place
-# distribution (compact per-candidate histogram + exact best/mean/worst)
-# --------------------------------------------------------------------------- #
-def run_contest_dist(field_mat, cand_mat, n_sim, n_field, nbins=24,
-                     cut_places=None):
-    """Score each candidate against the field per sim and capture its
-    finishing-place distribution as a compact ~`nbins`-bucket histogram (wider
-    buckets read more clearly than per-position). Returns (wins, t10, t100, avg,
-    dist) with exact best/mean/worst places.
-
-    If `cut_places` is given (ascending place indices), the field's score at each
-    of those places is also captured per sim into ``dist["field_cut_scores"]``
-    (shape ``(n_sim, len(cut_places))``). This piggybacks on the per-sim sort we
-    already do, giving the payout-aware export step the field placement ladder
-    without a second pass."""
-    N = cand_mat.shape[1]
-    wins = np.zeros(N, np.int64); t10 = np.zeros(N, np.int64)
-    t100 = np.zeros(N, np.int64); ps = np.zeros(N, np.int64)
-    best = np.full(N, n_field + 1, np.int64); worst = np.zeros(N, np.int64)
-
-    nb_target = max(6, min(int(nbins), int(n_field)))
-    edges = np.unique(np.linspace(1, n_field + 1, nb_target + 1).astype(np.int64))
-    nb = len(edges) - 1
-    counts = np.zeros((N, nb), np.int32)
-    idx = np.arange(N)
-
-    cut_scores = None
-    if cut_places is not None and len(cut_places):
-        cut_places = np.asarray(cut_places, np.int64)
-        cut_scores = np.empty((n_sim, len(cut_places)), np.float32)
-        # ascending-sorted field: the score for place p is the p-th highest total
-        take = n_field - cut_places                     # index into ascending fs
-
-    for s in range(n_sim):
-        fs = np.sort(field_mat[s]); cv = cand_mat[s]
-        pl = (n_field - np.searchsorted(fs, cv, side="right")) + 1
-        wins += (pl == 1); t10 += (pl <= 10); t100 += (pl <= 100); ps += pl
-        best = np.minimum(best, pl); worst = np.maximum(worst, pl)
-        b = np.clip(np.searchsorted(edges, pl, side="right") - 1, 0, nb - 1)
-        np.add.at(counts, (idx, b), 1)
-        if cut_scores is not None:
-            cut_scores[s] = fs[take]
-    dist = {"edges": edges, "counts": counts, "best": best, "worst": worst,
-            "mean": ps / n_sim}
-    if cut_scores is not None:
-        dist["field_cut_scores"] = cut_scores
-        dist["cut_places"] = cut_places
-    return wins, t10, t100, ps / n_sim, dist
-
-
+# Contest scoring (per-sim ranking + finishing-place distribution) lives in
+# contest_sim.py so it can be unit-tested and threaded across cores independently
+# of the Streamlit app. run_contest_dist is imported at the top of this file.
 def place_distribution_chart(dist, i, n_field, n_sim):
     """Histogram of candidate i's finishing place — solid, full-height bars
     spanning each [lo, hi) place range, filled from the baseline up to the
@@ -1987,10 +1995,6 @@ if _bi["proj_date"]:
 else:
     st.caption("🧬 Baselines (Stage B projections) have no recorded build date — "
                "the next Run will build them (the slow step).")
-
-# Shared-store diagnostics (collapsed) — expand to see whether this deployment is
-# pulling prebuilt artifacts, and why a build might be stale/absent.
-_render_store_status(expanded=not _bi["proj_date"])
 
 
 tabs = st.tabs(["⚙️  Setup", "📊  Players", "🏆  Results", "⬇️  Export"])
@@ -2456,6 +2460,11 @@ with tabs[0]:
                          "matched the sim universe. Check the slate file.")
                 st.stop()
 
+            # memory pre-flight: stop cleanly if the candidate/field score
+            # matrices wouldn't fit in RAM, instead of OOM-killing the process
+            # mid-run (covers both the showdown and classic paths below).
+            guard_run_memory(K, int(num_candidates), int(contest_size))
+
             # ---- Showdown slates take a dedicated path (1 CPT + 5 UTIL, single
             # game). Everything above (freshness, sim load, name-match guard) is
             # format-agnostic; everything below is the classic build, so we branch
@@ -2679,13 +2688,30 @@ with tabs[0]:
                 + (f", order tilt={order_tilt:g} on {n_order} posted bats"
                    if order_tilt > 0 and n_order else "")
                 + ".")
-            cb = Builder(Pool(cdf), cand_params, seed=int(seed_cand), uniform=True,
-                         team_weights=team_weights, jitter=float(cand_jitter),
-                         upside_attr="Upside", bringback_prob=float(bringback),
-                         game_stack_prob=float(game_stack),
-                         order_weight=float(order_tilt),
-                         ace_pitcher_prob=float(ace_pitcher))
-            cands, c_att = build_many(cb, int(num_candidates), "Candidates")
+            # Reuse the built candidates across Runs when the exact construction
+            # inputs are unchanged (signing the pool + params + seed + knobs, so
+            # any change that would alter the build forces a rebuild). Skips the
+            # slow, GIL-bound builder on repeat/tweak-a-downstream-knob Runs.
+            cand_key = run_cache.sig(cdf, cand_params, int(seed_cand),
+                                     int(num_candidates), team_weights,
+                                     float(cand_jitter), float(bringback),
+                                     float(game_stack), float(order_tilt),
+                                     float(ace_pitcher))
+
+            def _build_cands():
+                cb = Builder(Pool(cdf), cand_params, seed=int(seed_cand), uniform=True,
+                             team_weights=team_weights, jitter=float(cand_jitter),
+                             upside_attr="Upside", bringback_prob=float(bringback),
+                             game_stack_prob=float(game_stack),
+                             order_weight=float(order_tilt),
+                             ace_pitcher_prob=float(ace_pitcher))
+                return build_many(cb, int(num_candidates), "Candidates")
+
+            (cands, c_att), cand_hit = run_cache.reuse(
+                st.session_state, "_cache_cands", cand_key, _build_cands)
+            if cand_hit:
+                st.write(f"♻️ Reused {len(cands):,} cached candidate lineups "
+                         "(same construction inputs).")
             if not cands:
                 status.update(label="Could not build candidate lineups", state="error")
                 st.error("Failed to construct any valid candidate lineup from this pool.")
@@ -2703,8 +2729,6 @@ with tabs[0]:
             _extra = min(int(round((FIELD_OVERBUILD - 1.0) * contest_size)),
                          FIELD_OVERBUILD_CAP)
             n_build = int(contest_size) + max(0, _extra)
-            st.write(f"Building a {contest_size:,}-entry field "
-                     f"({FIELD_SHARP_FRAC:.0%} sharp, top-projection of {n_build:,})…")
             beta = beta_for_size(contest_size, int(medium), float(chalk))
             fdf = adjust_ownership(normalize_to_slots(pool, 0.15), beta=beta)
             tilted = tilt_structures(
@@ -2722,19 +2746,40 @@ with tabs[0]:
                              (_zcp if r.Pos == "P" else _zc).get(r.Name, 0.0)))
                 for r in sfdf.itertuples()]
             n_sharp = int(round(FIELD_SHARP_FRAC * n_build))
-            sfb = Builder(Pool(sfdf), fp, seed=int(seed_field) + 7, uniform=False,
-                          upside_attr="Upside", bringback_prob=FIELD_SHARP_BRINGBACK,
-                          game_stack_prob=FIELD_SHARP_GAMESTACK,
-                          ace_pitcher_prob=FIELD_SHARP_ACE)
-            fb = Builder(Pool(fdf), fp, seed=int(seed_field), uniform=False)
-            field_sharp, _fa1 = build_many(sfb, n_sharp, "Field (sharp)")
-            field_chalk, _fa2 = build_many(fb, n_build - n_sharp, "Field (chalk)")
-            built = field_sharp + field_chalk
-            # keep the top `contest_size` by projected points (talent blend) — the
-            # "submitted" field: entrants play their higher-projection lineups.
-            built.sort(key=lambda lu: sum(tal.get(pl.Name, base)
-                                          for pl in lu["players"]), reverse=True)
-            field = built[:int(contest_size)]
+
+            # Reuse the built field across Runs when its construction inputs are
+            # unchanged (field pools + tilted params + seed + sizes + the trim
+            # ordering). Changing contest size / chalk / tilt / seed rebuilds it;
+            # changing only a candidate or downstream knob reuses it.
+            field_key = run_cache.sig(
+                fdf, sfdf, fp, int(seed_field), int(n_build), int(n_sharp),
+                int(contest_size), tal, float(base),
+                float(FIELD_SHARP_FRAC), float(FIELD_SHARP_BRINGBACK),
+                float(FIELD_SHARP_GAMESTACK), float(FIELD_SHARP_ACE),
+                float(FIELD_SHARP_CEIL_TILT))
+
+            def _build_field():
+                st.write(f"Building a {contest_size:,}-entry field "
+                         f"({FIELD_SHARP_FRAC:.0%} sharp, top-projection of {n_build:,})…")
+                sfb = Builder(Pool(sfdf), fp, seed=int(seed_field) + 7, uniform=False,
+                              upside_attr="Upside", bringback_prob=FIELD_SHARP_BRINGBACK,
+                              game_stack_prob=FIELD_SHARP_GAMESTACK,
+                              ace_pitcher_prob=FIELD_SHARP_ACE)
+                fb = Builder(Pool(fdf), fp, seed=int(seed_field), uniform=False)
+                field_sharp, _fa1 = build_many(sfb, n_sharp, "Field (sharp)")
+                field_chalk, _fa2 = build_many(fb, n_build - n_sharp, "Field (chalk)")
+                built = field_sharp + field_chalk
+                # keep the top `contest_size` by projected points (talent blend) —
+                # the "submitted" field: entrants play their higher-projection lineups.
+                built.sort(key=lambda lu: sum(tal.get(pl.Name, base)
+                                              for pl in lu["players"]), reverse=True)
+                return built[:int(contest_size)]
+
+            field, field_hit = run_cache.reuse(
+                st.session_state, "_cache_field", field_key, _build_field)
+            if field_hit:
+                st.write(f"♻️ Reused a cached {len(field):,}-entry field "
+                         "(same construction inputs).")
             if len(field) < contest_size:
                 st.warning(f"Built {len(field):,} of {contest_size:,} requested field "
                            "lineups (pool constrained); simulating against the field "
