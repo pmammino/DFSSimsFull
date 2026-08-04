@@ -1,0 +1,40 @@
+# DigitalOcean App Platform spec for the Streamlit app.
+#
+# You can import this from the DO control panel (Create App → "Import from
+# App Spec") or via `doctl apps create --spec .do/app.yaml`. The key line is
+# `run_command`: it launches the app with `streamlit run` and binds it to the
+# platform port, instead of the buildpack's default `python app.py` (which
+# starts Streamlit in "bare mode" and never opens a web server, so the health
+# check on :8080 gets connection-refused).
+#
+# The repo's Procfile does the same thing, so a plain buildpack deploy without
+# this spec works too. Use this spec if you want the run command / health check
+# pinned in the app configuration.
+name: dfs-sims
+region: nyc
+services:
+  - name: web
+    github:
+      repo: pmammino/DFSSimsFull
+      branch: main
+      deploy_on_push: true
+    environment_slug: python
+    # $PORT is provided by App Platform (defaults to 8080, which the health
+    # check probes). Headless avoids the email prompt / browser auto-open.
+    run_command: |
+      streamlit run app.py \
+        --server.port=$PORT \
+        --server.address=0.0.0.0 \
+        --server.headless=true \
+        --server.enableCORS=false \
+        --server.enableXsrfProtection=false
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: basic-xs
+    health_check:
+      # Streamlit exposes a lightweight health endpoint; probe it instead of /.
+      http_path: /_stcore/health
+      initial_delay_seconds: 60
+      period_seconds: 10
+      timeout_seconds: 5
+      failure_threshold: 6

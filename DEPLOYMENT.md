@@ -30,6 +30,35 @@ serverless host is not suitable.
 Theme tokens live in `.streamlit/config.toml`; brand fonts are served from
 `static/fonts/`. The app is Windows-portable.
 
+### DigitalOcean App Platform
+
+The repo ships a **`Procfile`** and a **`.do/app.yaml`** so App Platform launches
+the app correctly. The important part is the run command — it must be
+
+```bash
+streamlit run app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true
+```
+
+not the buildpack's auto-detected `python app.py`. Running the module directly
+starts Streamlit in **bare mode**: you get a flood of `missing ScriptRunContext`
+warnings, a `to view this Streamlit app... run streamlit run app.py` notice, and
+**no web server ever binds to the port**, so the readiness probe fails with
+`dial tcp …:8080: connect: connection refused` and the deploy is marked
+unhealthy.
+
+- App Platform sets **`$PORT`** (defaults to `8080`, which the health check
+  probes). Binding to `0.0.0.0:$PORT` is what makes the probe succeed.
+- The `Procfile` is picked up automatically by the Python buildpack. If you'd
+  rather pin the config, import `.do/app.yaml` (Create App → *Import from App
+  Spec*, or `doctl apps create --spec .do/app.yaml`) — it also points the health
+  check at Streamlit's `/_stcore/health` endpoint.
+- If your DO app already has a **custom Run Command** set in the UI, it overrides
+  the `Procfile`. Change it there to the `streamlit run …` line above (bare
+  `python app.py` is the usual culprit behind the connection-refused probe).
+- `--server.headless=true` stops Streamlit from prompting for an email / trying
+  to open a browser on the server. CORS/XSRF are disabled in the run command so
+  the WebSocket connects cleanly through DO's proxy.
+
 ---
 
 ## Step 2 — (Optional) Shared object store for multi-user / persistence
