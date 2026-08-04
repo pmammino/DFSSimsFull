@@ -31,6 +31,33 @@ services:
     http_port: 8080
     instance_count: 1
     instance_size_slug: basic-xs
+    # Shared object store (R2/S3): REQUIRED on App Platform. This host can't build
+    # projections itself — Stage B needs statsapi.mlb.com, which blocks datacenter
+    # IPs — so the app loads prebuilt artifacts the morning-refresh Action
+    # publishes. Set these to the SAME values as the GitHub Action secrets. Mark
+    # the credentials SECRET in the DO UI (or via `doctl`), never commit real
+    # values here. Without them the app has nothing to load.
+    envs:
+      - key: SHARED_STORE_BUCKET
+        scope: RUN_AND_BUILD_TIME
+        value: dfs-sims
+      - key: SHARED_STORE_ENDPOINT
+        scope: RUN_AND_BUILD_TIME
+        value: https://<account-id>.r2.cloudflarestorage.com
+      - key: SHARED_STORE_PREFIX
+        scope: RUN_AND_BUILD_TIME
+        value: dfs
+      - key: AWS_REGION
+        scope: RUN_AND_BUILD_TIME
+        value: auto
+      - key: AWS_ACCESS_KEY_ID
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET
+        value: REPLACE_ME
+      - key: AWS_SECRET_ACCESS_KEY
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET
+        value: REPLACE_ME
     health_check:
       # Streamlit exposes a lightweight health endpoint; probe it instead of /.
       http_path: /_stcore/health
