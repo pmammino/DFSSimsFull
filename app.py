@@ -36,6 +36,7 @@ from mlb_lineup_builder import Pool, Builder, candidate_stack_structures
 from portfolio import (select_portfolio, select_portfolio_ev, detect_value_groups,
                        value_group_member_caps, shrink_value_group_means)
 import portfolio_ev as pev
+from contest_sim import run_contest_dist
 import dk_ids
 from field_simulator import (normalize_to_slots, adjust_ownership,
                              beta_for_size, tilt_structures)
@@ -1749,57 +1750,9 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
         _lock.release()
 
 
-# --------------------------------------------------------------------------- #
-# Contest scoring that also captures each candidate's finishing-place
-# distribution (compact per-candidate histogram + exact best/mean/worst)
-# --------------------------------------------------------------------------- #
-def run_contest_dist(field_mat, cand_mat, n_sim, n_field, nbins=24,
-                     cut_places=None):
-    """Score each candidate against the field per sim and capture its
-    finishing-place distribution as a compact ~`nbins`-bucket histogram (wider
-    buckets read more clearly than per-position). Returns (wins, t10, t100, avg,
-    dist) with exact best/mean/worst places.
-
-    If `cut_places` is given (ascending place indices), the field's score at each
-    of those places is also captured per sim into ``dist["field_cut_scores"]``
-    (shape ``(n_sim, len(cut_places))``). This piggybacks on the per-sim sort we
-    already do, giving the payout-aware export step the field placement ladder
-    without a second pass."""
-    N = cand_mat.shape[1]
-    wins = np.zeros(N, np.int64); t10 = np.zeros(N, np.int64)
-    t100 = np.zeros(N, np.int64); ps = np.zeros(N, np.int64)
-    best = np.full(N, n_field + 1, np.int64); worst = np.zeros(N, np.int64)
-
-    nb_target = max(6, min(int(nbins), int(n_field)))
-    edges = np.unique(np.linspace(1, n_field + 1, nb_target + 1).astype(np.int64))
-    nb = len(edges) - 1
-    counts = np.zeros((N, nb), np.int32)
-    idx = np.arange(N)
-
-    cut_scores = None
-    if cut_places is not None and len(cut_places):
-        cut_places = np.asarray(cut_places, np.int64)
-        cut_scores = np.empty((n_sim, len(cut_places)), np.float32)
-        # ascending-sorted field: the score for place p is the p-th highest total
-        take = n_field - cut_places                     # index into ascending fs
-
-    for s in range(n_sim):
-        fs = np.sort(field_mat[s]); cv = cand_mat[s]
-        pl = (n_field - np.searchsorted(fs, cv, side="right")) + 1
-        wins += (pl == 1); t10 += (pl <= 10); t100 += (pl <= 100); ps += pl
-        best = np.minimum(best, pl); worst = np.maximum(worst, pl)
-        b = np.clip(np.searchsorted(edges, pl, side="right") - 1, 0, nb - 1)
-        np.add.at(counts, (idx, b), 1)
-        if cut_scores is not None:
-            cut_scores[s] = fs[take]
-    dist = {"edges": edges, "counts": counts, "best": best, "worst": worst,
-            "mean": ps / n_sim}
-    if cut_scores is not None:
-        dist["field_cut_scores"] = cut_scores
-        dist["cut_places"] = cut_places
-    return wins, t10, t100, ps / n_sim, dist
-
-
+# Contest scoring (per-sim ranking + finishing-place distribution) lives in
+# contest_sim.py so it can be unit-tested and threaded across cores independently
+# of the Streamlit app. run_contest_dist is imported at the top of this file.
 def place_distribution_chart(dist, i, n_field, n_sim):
     """Histogram of candidate i's finishing place — solid, full-height bars
     spanning each [lo, hi) place range, filled from the baseline up to the
