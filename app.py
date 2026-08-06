@@ -1580,6 +1580,20 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
                 if nm:
                     order_map[normname(nm)] = i + 1
         st.session_state["batting_order_map"] = order_map
+        # stash a RotoID -> full-name map from the live lineup feed. The DK
+        # salaries feed sometimes mangles a name (a "De La Cruz" surname
+        # truncated to "De", an accent garbled by a mis-encode), which then
+        # fails to match the sim universe and silently drops the player from the
+        # pool. RotoID is stable across feeds, so this lets the pool build repair
+        # those names before matching (see the build-pool step below).
+        pid_name = {}
+        for g in live.get("games", {}).values():
+            for side in ("away", "home"):
+                for pl in g.get("lineups", {}).get(side, []):
+                    pid, nm = str(pl.get("pid") or ""), pl.get("name")
+                    if pid and nm:
+                        pid_name[pid] = nm
+        st.session_state["live_pid_name"] = pid_name
         status.write(f"Live feed: slate {live_sig.get('date')}, "
                      f"{len(live_sig['teams'])} teams, {n_lu} lineups posted, "
                      f"{len(live_starters)} starting pitchers, "
@@ -2490,6 +2504,28 @@ with tabs[0]:
                 status.update(label=f"Done in {time.time()-t0:.1f}s", state="complete")
                 st.rerun()
 
+            # ---- repair mangled DK salary-feed names before the pool build ----
+            # The salaries feed can ship a truncated ("Elly De La Cruz" -> "Elly
+            # De") or mis-encoded ("Jose Ramírez" -> "Jose RamÃ­rez") name, which
+            # won't match the sim universe and would silently drop the player.
+            # Re-derive dk_df/id_map with the live lineup feed's RotoID -> full
+            # name map so the name matches the sims; RotoID is stable across
+            # feeds and unknown ids fall back to the feed name (never a
+            # regression). Keeps dk_df, the DK-upload id_map and ownership row in
+            # sync since they're all built from the same corrected name.
+            pid_name = st.session_state.get("live_pid_name") or {}
+            if pid_name:
+                repaired = {r.RotoID: r.FullName for r in dk_df.itertuples()
+                            if getattr(r, "RotoID", "")
+                            and normname(r.FullName) not in simnames
+                            and normname(pid_name.get(r.RotoID, "")) in simnames}
+                if repaired:
+                    dk_df, id_map = dk_slate_feed.to_dk_df(slate,
+                                                           name_overrides=pid_name)
+                    fixed = ", ".join(sorted(pid_name[k] for k in repaired))
+                    st.write(f"🔧 Matched **{len(repaired)}** player(s) whose DK "
+                             f"salary-feed name was truncated/garbled: {fixed}.")
+
             # ---- build the pool (write CSV to a temp path for build_pool) ----
             st.write("Building player pool from your slate + sims…")
             with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False,
@@ -2540,6 +2576,29 @@ with tabs[0]:
             if dropped:
                 st.caption(f"{dropped} of {len(dk_df)} slate players had no sim and "
                            "were excluded (they can't be scored).")
+
+            # ---- reverse guard: a simmed, well-projected HITTER that never made
+            # the pool almost always means the DK feed carried no salary/slot we
+            # could match to him (a mangled name the repair above couldn't fix,
+            # or a player the salaries feed omitted). Surface him by name +
+            # projection instead of letting him vanish without a trace. ----
+            pool_norm = {normname(n) for n in pool["Name"]}
+            missing = []
+            for k, v in (H_ or {}).items():
+                nn = normname(k)
+                if nn in simnames and nn not in pool_norm:
+                    m = float(np.mean(score_k[nn])) if nn in score_k else 0.0
+                    if m >= 6.0:                       # a startable bat, not noise
+                        missing.append((k, m))
+            if missing:
+                missing.sort(key=lambda x: -x[1])
+                names = ", ".join(f"{n} ({m:.1f})" for n, m in missing[:8])
+                st.warning(
+                    f"⚠️ **{len(missing)} simmed hitter(s)** aren't in the pool "
+                    "despite a real projection — DraftKings' salary feed didn't "
+                    "match a salary/slot for them (usually a truncated or garbled "
+                    f"name), so they can't be rostered: {names}. Verify the DK "
+                    "salary feed lists them for this slate.")
             if npi < 2 or nh < 8:
                 status.update(label="Pool too small to build lineups", state="error")
                 st.error(
