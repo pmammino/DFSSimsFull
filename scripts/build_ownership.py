@@ -98,22 +98,30 @@ def _load_pool(date: str) -> pd.DataFrame:
 
 
 def _salary_map(fetch: bool = True):
-    """(by_name, by_name_team) DK salary lookups from the salaries feed.
+    """(by_name, by_name_team, by_pid) DK salary lookups from the salaries feed.
 
-    Keyed by ``norm(name)`` and by ``(norm(name), team)`` so a same-named player
-    on two teams resolves to the right salary. Returns empty maps (salary-blind)
-    if the feed can't be reached — the projection still runs on the sim features.
+    Keyed by ``norm(name)``, by ``(norm(name), team)`` so a same-named player on
+    two teams resolves to the right salary, and by RotoID. Returns empty maps
+    (salary-blind) if the feed can't be reached — the projection still runs on
+    the sim features.
+
+    The RotoID map matters because the salaries feed occasionally ships a mangled
+    name — a "De La Cruz" surname truncated to "De", or an accent garbled by a
+    mis-encode ("Jose Ramírez" -> "Jose RamÃ­rez"). Those names never match the
+    projection pool (which is keyed by the full lineup-feed name), so a
+    name-only join silently loses the player's salary. RotoID is stable across
+    feeds, so :func:`_attach_salary` can bridge through it (see ``_pid_bridge``).
     """
     if not fetch:
-        return {}, {}
+        return {}, {}, {}
     try:
         import dk_slate_feed as feed
         _date, slates = feed.parse_salaries(feed._http_get(feed.FEED_SALARIES))
     except Exception as e:                       # offline / feed hiccup
         print(f"build_ownership: DK salary feed unavailable "
               f"({type(e).__name__}: {e}) — projecting without the value term.")
-        return {}, {}
-    by_n, by_nt = {}, {}
+        return {}, {}, {}
+    by_n, by_nt, by_pid = {}, {}, {}
     for s in slates.values():
         for pl in s.get("players", []):
             sal = int(pl.get("salary") or 0)
@@ -122,13 +130,48 @@ def _salary_map(fetch: bool = True):
             nm = norm(pl["name"])
             by_n[nm] = sal
             by_nt[(nm, pl.get("team"))] = sal
-    return by_n, by_nt
+            pid = str(pl.get("roto_id") or "")
+            if pid:
+                by_pid[pid] = sal
+    return by_n, by_nt, by_pid
 
 
-def _attach_salary(pool: pd.DataFrame, by_n: dict, by_nt: dict) -> pd.DataFrame:
-    """Add a ``Salary`` column, matching (name, team) first then name."""
+def _pid_bridge(fetch: bool = True) -> dict:
+    """``norm(full name) -> RotoID`` from the live lineup feed, which carries the
+    canonical full name AND the pid for every player in a posted lineup. This is
+    what lets us recover a salary the salaries feed filed under a mangled name.
+    Empty (a no-op) if the feed is unreachable."""
+    if not fetch:
+        return {}
+    try:
+        import slate_ingest
+        live = slate_ingest.build_slate(write=False)
+    except Exception as e:
+        print(f"build_ownership: lineup feed unavailable for RotoID bridge "
+              f"({type(e).__name__}: {e}) — name-only salary match.")
+        return {}
+    bridge = {}
+    for g in (live.get("games", {}) or {}).values():
+        for side in ("away", "home"):
+            for pl in g.get("lineups", {}).get(side, []) or []:
+                pid, nm = str(pl.get("pid") or ""), pl.get("name")
+                if pid and nm:
+                    bridge[norm(nm)] = pid
+    return bridge
+
+
+def _attach_salary(pool: pd.DataFrame, by_n: dict, by_nt: dict,
+                   by_pid: dict = None, name_pid: dict = None) -> pd.DataFrame:
+    """Add a ``Salary`` column: (name, team) exact, then a RotoID bridge (which
+    recovers salaries the feed filed under a mangled name), then name-only."""
+    by_pid, name_pid = by_pid or {}, name_pid or {}
+
     def look(r):
-        return by_nt.get((norm(r.Name), r.Team)) or by_n.get(norm(r.Name)) or np.nan
+        nn = norm(r.Name)
+        return (by_nt.get((nn, r.Team))
+                or by_pid.get(name_pid.get(nn))
+                or by_n.get(nn)
+                or np.nan)
     pool = pool.copy()
     pool["Salary"] = [look(r) for r in pool.itertuples()]
     return pool
@@ -177,8 +220,9 @@ def main() -> int:
         return 0
 
     pool, hd = _load_pool(date)
-    by_n, by_nt = _salary_map(fetch=not args.no_fetch)
-    pool = _attach_salary(pool, by_n, by_nt)
+    by_n, by_nt, by_pid = _salary_map(fetch=not args.no_fetch)
+    name_pid = _pid_bridge(fetch=not args.no_fetch) if by_pid else {}
+    pool = _attach_salary(pool, by_n, by_nt, by_pid, name_pid)
     n_sal = int(pool["Salary"].notna().sum())
     sig = _pool_signature(pool, args.contest_size)
 

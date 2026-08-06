@@ -221,19 +221,36 @@ def build_catalog(salaries_xml=None, ownership_xml=None):
     return {'date': date, 'slates': out}
 
 
-def to_dk_df(slate):
+def to_dk_df(slate, name_overrides=None):
     """Turn a catalog slate into (dk_df, id_map), matching the CSV upload path.
-    dk_df: FullName, Team, Position, Salary, Ownership, PlayerContestID."""
+    dk_df: FullName, Team, Position, Salary, Ownership, PlayerContestID, RotoID.
+
+    ``name_overrides`` maps a player's RotoID (as a string) to the canonical full
+    name to use instead of the salaries feed's own name. The salaries-dk feed
+    occasionally ships a mangled name — a multi-word surname truncated to its
+    first token (``Elly De La Cruz`` -> ``Elly De``) or an accent garbled by a
+    mis-encode (``Jose Ramírez`` -> ``Jose RamÃ­rez``). Those names don't match
+    the sim/projection universe (which is keyed by the full lineup-feed name), so
+    the player silently drops out of every buildable pool. RotoID is stable and
+    shared across all feeds, so callers can pass the lineup feed's RotoID -> full
+    name map to repair the name at this single assembly point — keeping dk_df,
+    the DK-upload id_map and the ownership row all consistent. Unknown RotoIDs
+    (and an empty/None map) fall back to the feed name, so this can only fix a
+    broken match, never break a working one."""
+    overrides = name_overrides or {}
     recs, id_map = [], {}
     for pl in slate['players']:
+        rid = str(pl.get('roto_id') or '')
+        name = overrides.get(rid) or pl['name']
         recs.append({
-            'FullName': pl['name'], 'Team': pl['team'],
+            'FullName': name, 'Team': pl['team'],
             'Position': pl['position'], 'Salary': pl['salary'],
-            'Ownership': pl['ownership'], 'PlayerContestID': pl['draftable_id']})
+            'Ownership': pl['ownership'], 'PlayerContestID': pl['draftable_id'],
+            'RotoID': rid})
         if pl['draftable_id']:
             # key by team/pos/salary so two same-named players (e.g. Max Muncy on
             # two teams) keep distinct upload ids
-            dk_ids.add_id(id_map, pl['name'], pl['team'], pl['draftable_id'],
+            dk_ids.add_id(id_map, name, pl['team'], pl['draftable_id'],
                           pos=pl['position'], salary=pl['salary'])
     return pd.DataFrame(recs), id_map
 
