@@ -44,6 +44,13 @@ def slate_format(game_type):
     'showdown' (case-insensitive) is treated as showdown, else classic."""
     return 'showdown' if 'showdown' in str(game_type or '').lower() else 'classic'
 
+
+def is_tiers(game_type):
+    """True for DraftKings 'Tiers' contests. Tiers slates aren't a salary-cap
+    format (players are grouped into pick-one tiers), so the salary/ownership
+    pipeline can't build lineups for them — they're excluded from the catalog."""
+    return 'tier' in str(game_type or '').lower()
+
 FEED_SALARIES  = ("https://rotowire-secrets-ebgmaeh8ecc4huhf.canadaeast-01."
                   "azurewebsites.net/api/proxy?feed=salaries-dk")
 FEED_OWNERSHIP = ("https://rotowire-secrets-ebgmaeh8ecc4huhf.canadaeast-01."
@@ -184,6 +191,10 @@ def build_catalog(salaries_xml=None, ownership_xml=None):
 
     out = []
     for sid, s in sal_slates.items():
+        # Tiers slates aren't salary-cap lineups, so the pipeline can't build
+        # for them — keep them out of the pickable catalog entirely.
+        if is_tiers(s.get('game_type')):
+            continue
         own = own_slates.get(sid)
         if not own:                       # this flow needs ownership
             continue
