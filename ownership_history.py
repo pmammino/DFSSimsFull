@@ -10,11 +10,15 @@ handful of summary numbers per player. So this module keeps a separate,
 the ownership model uses plus DK salary and Vegas context — that can grow for a
 whole season without meaningfully touching storage (~a few dozen KB per slate).
 
-    date, name, team, opp, pos, role, salary,
+    date, slate, name, team, opp, pos, role, salary,
     proj, ceiling, floor, std,           # from the sims / projection engine
     team_total,                          # Vegas implied runs (hitter's team)
     value,                               # proj / (salary/1000)
     own                                  # actual %Drafted — filled in later
+
+`slate` is "" for the slate-independent feature rows and a DK slate id on a
+labeled row, so two contests on the SAME date (a main vs an early slate) each
+get their own label instead of the second overwriting the first's.
 
 Sources it can build a slate's rows from (whichever is at hand):
   * a stage_d-style pool (Name/Pos/Team/Salary) + the merged sim dict, or
@@ -50,9 +54,15 @@ DEFAULT_LOG = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "ownership_history", "features.csv"
 )
 
-COLUMNS = ["date", "name", "team", "opp", "pos", "role", "salary",
+COLUMNS = ["date", "slate", "name", "team", "opp", "pos", "role", "salary",
            "proj", "ceiling", "floor", "std", "team_total", "order", "value", "own"]
-_KEY = ["date", "name", "pos"]
+# The dedup / identity key. ``slate`` distinguishes multiple DK slates on the
+# SAME date (a main slate vs an early/afternoon slate cover different games, so
+# a player can carry a different %Drafted on each). Feature rows are logged with
+# slate="" because a player's projection is slate-independent; a per-slate label
+# is attached into its own (date, slate) row so same-day slates never collide.
+# Empty slate keeps the historical date+name+pos behaviour for single-slate days.
+_KEY = ["date", "slate", "name", "pos"]
 
 # projection-engine baseball position -> DK roster slot. Multi-eligibility isn't
 # recoverable from a projection CSV; the authoritative DK slot for a *labeled*
@@ -101,7 +111,7 @@ def context_from_dff(dff_csv: str) -> dict:
 # build a slate's feature rows
 # --------------------------------------------------------------------------- #
 def slate_rows_from_pool(date, pool, sims, *, salary=None, team_total=None,
-                         order=None, ceil_pct=90.0) -> pd.DataFrame:
+                         order=None, ceil_pct=90.0, slate="") -> pd.DataFrame:
     """Compact feature rows from a pool + sim dict.
 
     pool        DataFrame with Name, Pos [, Team, Opp, Role, Salary, Order].
@@ -109,6 +119,7 @@ def slate_rows_from_pool(date, pool, sims, *, salary=None, team_total=None,
     salary      optional {norm(name) -> salary}; falls back to pool.Salary.
     team_total  optional {TeamCode -> implied runs} or {norm(name) -> runs}.
     order       optional {norm(name) -> batting order 1-9}; falls back to pool.Order.
+    slate       optional DK slate id; "" (default) = slate-independent features.
     """
     salary = salary or {}
     team_total = team_total or {}
@@ -135,7 +146,7 @@ def slate_rows_from_pool(date, pool, sims, *, salary=None, team_total=None,
         value = (f["proj"] / (sal / 1000.0)
                  if sal and not pd.isna(sal) and sal > 0 else np.nan)
         rows.append({
-            "date": date, "name": nn, "team": team,
+            "date": date, "slate": slate, "name": nn, "team": team,
             "opp": getattr(r, "Opp", ""), "pos": getattr(r, "Pos", ""),
             "role": getattr(r, "Role", ""), "salary": sal,
             "proj": f["proj"], "ceiling": f["ceiling"], "floor": floor,
@@ -149,7 +160,13 @@ def slate_rows_from_pool(date, pool, sims, *, salary=None, team_total=None,
 # --------------------------------------------------------------------------- #
 def _read(log_path) -> pd.DataFrame:
     if os.path.exists(log_path):
-        return pd.read_csv(log_path)
+        df = pd.read_csv(log_path)
+        # forward-compat: logs written before the `slate` column gain it as "".
+        if "slate" not in df.columns:
+            df["slate"] = ""
+        df = df.reindex(columns=COLUMNS)
+        df["slate"] = df["slate"].fillna("").astype(str)
+        return df
     return pd.DataFrame(columns=COLUMNS)
 
 
@@ -180,15 +197,45 @@ def append_rows(rows: pd.DataFrame, log_path=DEFAULT_LOG,
 
 
 def append_slate_from_pool(date, pool, sims, *, salary=None, team_total=None,
-                           log_path=DEFAULT_LOG) -> pd.DataFrame:
+                           slate="", log_path=DEFAULT_LOG) -> pd.DataFrame:
     """Convenience: build a slate's rows from a pool+sims and append them."""
     rows = slate_rows_from_pool(date, pool, sims, salary=salary,
-                                team_total=team_total)
+                                team_total=team_total, slate=slate)
     return append_rows(rows, log_path=log_path)
 
 
+# --------------------------------------------------------------------------- #
+# live salary source (so a snapshot carries salary without a CSV on hand)
+# --------------------------------------------------------------------------- #
+def salary_map_from_feed() -> dict:
+    """``{norm(name): salary}`` from the live DK salaries feed, best-effort.
+
+    Returns ``{}`` if the feed can't be reached (offline / feed hiccup) so a
+    snapshot degrades to sim-only features rather than failing. The feed is the
+    same one ``scripts/build_ownership.py`` and the app already use; this is the
+    name-keyed subset the training log needs (build_ownership keeps a richer
+    RotoID bridge for the served pool). The feed's salaries are for the CURRENT
+    slate, so this is meant for a same-day snapshot, not historical backfill.
+    """
+    try:
+        import dk_slate_feed as feed
+        _date, slates = feed.parse_salaries(feed._http_get(feed.FEED_SALARIES))
+    except Exception:
+        return {}
+    out = {}
+    for s in slates.values():
+        for pl in s.get("players", []):
+            try:
+                sal = int(pl.get("salary") or 0)
+            except (TypeError, ValueError):
+                sal = 0
+            if sal > 0:
+                out[norm(pl["name"])] = sal
+    return out
+
+
 def slate_rows_from_projection_csvs(date, deliv_dir="deliverables",
-                                    salary=None) -> pd.DataFrame:
+                                    salary=None, slate="") -> pd.DataFrame:
     """Compact feature rows from the pipeline's own projection CSVs.
 
     Reads `deliverables/{hitter,pitcher}_projections_{date}.csv` — which already
@@ -209,7 +256,7 @@ def slate_rows_from_projection_csvs(date, deliv_dir="deliverables",
         tt = pd.to_numeric(x["team_total"], errors="coerce") if "team_total" in x \
             else pd.Series(np.nan, index=x.index)
         frames.append(pd.DataFrame({
-            "date": date, "name": nn, "team": x.get("team", ""),
+            "date": date, "slate": slate, "name": nn, "team": x.get("team", ""),
             "opp": x.get("opp", ""),
             "pos": x["pos"].map(_dk_slot) if "pos" in x else "",
             "role": x.get("role", ""), "salary": sal,
@@ -229,17 +276,24 @@ def slate_rows_from_projection_csvs(date, deliv_dir="deliverables",
 
 
 def snapshot_slate_features(date, deliv_dir="deliverables", *, dk=None,
-                            dff_csv=None, log_path=DEFAULT_LOG) -> pd.DataFrame:
+                            dff_csv=None, slate="", fetch_salary=True,
+                            log_path=DEFAULT_LOG) -> pd.DataFrame:
     """Build a slate's rows from the archived projection CSVs (+ a salary source)
-    and append them to the log. Salary comes from `dk` (a DK pool DataFrame or
-    CSV path) or `dff_csv` if given; otherwise rows log with salary NaN. Safe to
-    call every build — features re-log, an attached `own` label is preserved."""
+    and append them to the log. Salary is taken from, in order: an explicit `dk`
+    (a DK pool DataFrame or CSV path), a `dff_csv` cheatsheet, else — when
+    `fetch_salary` (default) — the live DK salaries feed, so `value` is populated
+    even with no salary file at hand. Only if all of those are empty do rows log
+    with salary NaN. Safe to call every build — features re-log, an attached
+    `own` label is preserved."""
     salary = {}
     if dk is not None:
         salary = salary_lookup_from_dk(dk)
     elif dff_csv:
         salary = {k: v[0] for k, v in context_from_dff(dff_csv).items()}
-    rows = slate_rows_from_projection_csvs(date, deliv_dir, salary=salary)
+    if not salary and fetch_salary:
+        salary = salary_map_from_feed()
+    rows = slate_rows_from_projection_csvs(date, deliv_dir, salary=salary,
+                                           slate=slate)
     if rows.empty:
         return _read(log_path)
     return append_rows(rows, log_path=log_path)
@@ -259,19 +313,50 @@ def parse_contest_ownership(contest_csv: str) -> pd.DataFrame:
     })
 
 
-def attach_ownership(date, contest_csv, log_path=DEFAULT_LOG) -> pd.DataFrame:
+def attach_ownership(date, contest_csv, slate=None,
+                     log_path=DEFAULT_LOG) -> pd.DataFrame:
     """Fill `own` (and correct `pos` to the DK Roster Position) for `date`'s rows
-    from a contest CSV, matched by name. This makes labeled rows carry the exact
-    slot the field drafted at, regardless of what position was logged at build."""
+    from a contest CSV, matched by name. Labeled rows then carry the exact slot
+    the field drafted at, regardless of what position was logged at build.
+
+    ``slate`` handles multiple DK slates on the same date:
+      * ``None``/"" (default) — the historical behaviour: update the date's base
+        (slate="") rows in place. Correct for a single-slate day.
+      * a slate id — copy each drafted player's features into a NEW
+        ``(date, slate)`` row carrying that contest's label, so two contests on
+        the same date populate two disjoint (date, slate) groups instead of the
+        second overwriting the first's labels.
+    """
     con = parse_contest_ownership(contest_csv)
     own_by = dict(zip(con["name"], con["own"]))
     pos_by = dict(zip(con["name"], con["pos"]))
     df = _read(log_path)
-    m = df["date"] == date
-    matched = df.loc[m, "name"].isin(own_by)
-    idx = df.loc[m][matched].index
-    df.loc[idx, "own"] = df.loc[idx, "name"].map(own_by)
-    df.loc[idx, "pos"] = df.loc[idx, "name"].map(pos_by)
+
+    if not slate:                      # in-place update of the base rows
+        m = (df["date"] == date) & (df["slate"] == "")
+        matched = df.loc[m, "name"].isin(own_by)
+        idx = df.loc[m][matched].index
+        df.loc[idx, "own"] = df.loc[idx, "name"].map(own_by)
+        df.loc[idx, "pos"] = df.loc[idx, "name"].map(pos_by)
+    else:                              # slate-scoped labeled rows
+        base = df[df["date"] == date]
+        pref = base[base["slate"] == ""]
+        src = ((pref if not pref.empty else base)
+               .drop_duplicates("name", keep="first").set_index("name"))
+        new_rows = []
+        for nm, ov in own_by.items():
+            if nm in src.index:
+                row = src.loc[nm].to_dict()   # name is the index → restore below
+            else:                      # drafted but never logged — label-only row
+                row = {c: np.nan for c in COLUMNS}
+                row["date"] = date
+            row["name"] = nm
+            row["slate"], row["pos"], row["own"] = str(slate), pos_by[nm], ov
+            new_rows.append(row)
+        if new_rows:
+            df = pd.concat([df, pd.DataFrame(new_rows, columns=COLUMNS)],
+                           ignore_index=True)
+
     df = df.drop_duplicates(_KEY, keep="last")
     _write(df, log_path)
     return df
@@ -298,13 +383,18 @@ def _sims_for_date(sims_dir, date) -> dict:
 
 
 def ingest_slate(date, *, sims_dir=None, deliv_dir="deliverables", dff=None,
-                 contest=None, log_path=DEFAULT_LOG) -> pd.DataFrame:
+                 contest=None, slate=None, log_path=DEFAULT_LOG) -> pd.DataFrame:
     """Add one slate to the log from the files you already download.
 
     Feature source: the sims in `sims_dir` (history_<date>_*_dk_sims.npy) if
     given, else the pipeline projection CSVs in `deliv_dir`. Salary + Vegas come
     from the DFF cheatsheet(s) in `dff` (one or more paths). If `contest` is
     given, the actual %Drafted label (and DK slot) is attached from it.
+
+    `slate` scopes the attached label to a named DK slate so two contests on the
+    same date don't collide (see `attach_ownership`). Pass a distinct id per
+    same-day slate (the contest id is a safe choice); None keeps the single-slate
+    in-place behaviour. Features are always logged slate-independent (slate="").
     """
     ctx = {}
     for f in (dff or []):
@@ -335,7 +425,7 @@ def ingest_slate(date, *, sims_dir=None, deliv_dir="deliverables", dff=None,
 
     append_rows(rows, log_path=log_path)
     if contest:
-        attach_ownership(date, contest, log_path=log_path)
+        attach_ownership(date, contest, slate=slate, log_path=log_path)
     return load_log(log_path)
 
 
@@ -353,6 +443,10 @@ if __name__ == "__main__":
     sp.add_argument("--dff", action="append", default=[],
                     help="DFF cheatsheet CSV (repeat for main + early)")
     sp.add_argument("--contest", default="", help="DK contest-standings CSV for the label")
+    sp.add_argument("--slate", default="",
+                    help="DK slate id to scope the label to (pass a distinct id "
+                         "per same-day slate so two contests don't collide; "
+                         "default = single-slate in-place update)")
     sp.add_argument("--log", default=DEFAULT_LOG)
 
     sh = sub.add_parser("show", help="summarise the log")
@@ -362,7 +456,8 @@ if __name__ == "__main__":
     if args.cmd == "ingest":
         df = ingest_slate(args.date, sims_dir=args.sims_dir or None,
                           deliv_dir=args.deliv_dir, dff=args.dff,
-                          contest=args.contest or None, log_path=args.log)
+                          contest=args.contest or None,
+                          slate=args.slate or None, log_path=args.log)
         d = df[df.date == args.date]
         print(f"ingested {args.date}: {len(d)} rows, "
               f"salary {d.salary.notna().mean():.0%}, labeled {d.own.notna().mean():.0%}"
@@ -373,7 +468,10 @@ if __name__ == "__main__":
             print("empty log")
         else:
             lab = df["own"].notna().sum()
-            print(f"{len(df)} rows, {df['date'].nunique()} slates, "
+            n_slates = df.loc[df["slate"].astype(str) != "", ["date", "slate"]] \
+                .drop_duplicates().shape[0]
+            print(f"{len(df)} rows, {df['date'].nunique()} dates "
+                  f"({n_slates} named same-day slates), "
                   f"{lab} labeled ({lab/len(df):.0%}); salary on "
                   f"{df['salary'].notna().mean():.0%} of rows")
             print(df.groupby("date").size().to_string())

@@ -170,12 +170,18 @@ is a retraining concern, not a serving bug.
    model's `projected_ownership.csv` had no reader.
 2. ✅ **Per-market temperature (done).** `tau_hit = 0.85`, `tau_pit = 1.0` — see
    *Implemented* above.
-3. **Fix multi-slate keying** so a day with >1 slate doesn't cross-contaminate
-   features/sims (key by `(slate_id, name)`). Highest remaining correctness item.
-4. **Capture salary in the ownership snapshot** (`app.py` calls
-   `snapshot_slate_features(date, "deliverables")` with no salary source, so
-   every logged row is `salary=NaN`). Passing the DK pool/feed there unlocks a
-   `value`-aware refit of the betas on the fuller Jul–Aug window via
-   `fit_ownership.py --write`.
+3. ✅ **Multi-slate keying (done).** The training log now carries a `slate`
+   column (`ownership_history`). Feature rows stay slate-independent (`slate=""`,
+   since a player's projection doesn't change by contest); a per-slate label is
+   attached into its own `(date, slate)` row, so two contests on the same date
+   populate two disjoint softmax groups instead of the second overwriting the
+   first. `fit_ownership --history-csv` groups by `(date, slate)`;
+   `ownership_history ingest --slate <id>` scopes a label. Single-slate days are
+   unchanged (empty slate keeps the old in-place behaviour).
+4. ✅ **Salary in the snapshot (done).** `snapshot_slate_features` now falls back
+   to the live DK salaries feed (`salary_map_from_feed`) when no DK/DFF file is
+   passed, so the app's every-build snapshot logs `salary`/`value` instead of
+   `NaN`. This unlocks a `value`-aware refit of the betas on the fuller Jul–Aug
+   window via `fit_ownership.py --write` once enough labeled slates accumulate.
 5. **Keep monitoring.** `scripts/eval_ownership_calibration.py` reproduces this
    whole review on any new batch of contest CSVs + feature log.
