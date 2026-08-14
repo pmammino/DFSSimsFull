@@ -362,7 +362,11 @@ def build_dataset_from_log(path: str) -> pd.DataFrame:
     df = load_log(path, labeled_only=True).copy()
     if df.empty:
         sys.exit(f"no labeled rows in history log {path}")
-    df["contest"] = df["date"]
+    # softmax group = (date, slate). Same-day DK slates carry distinct `slate`
+    # ids (see ownership_history.attach_ownership), so they form separate groups
+    # instead of one merged, cross-contaminated day. Absent slate → date only.
+    slate = df["slate"].fillna("").astype(str) if "slate" in df else ""
+    df["contest"] = df["date"].astype(str) + np.where(slate != "", "|" + slate, "")
     df["is_pitcher"] = df["pos"] == "P"
     df["ceil_shape"] = (df["ceiling"] / df["proj"]).clip(1.0, 6.0)
     df["order_score"] = df["order"].map(_order_score) if "order" in df else 0.0

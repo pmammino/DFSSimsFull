@@ -191,7 +191,22 @@ pool = add_ownership_column(pool, {**H, **P},
 The output is a drop-in replacement for the `Ownership` column that
 `mlb_lineup_builder`, `field_simulator`, and `stage_d` already consume, so the
 field simulator can be seeded from our own projections instead of an external
-feed. (App wiring into the Setup tab is a follow-up.)
+feed. **The app now does exactly this**: the classic-sim path computes
+`project_ownership` over the live pool + sims and replaces the pool's
+`Ownership` before the field build, with a Setup → *Advanced field model* →
+**Field ownership source** toggle (`Projected model` default, `RotoWire feed`
+fallback). It runs at the medium baseline; the existing chalk/size reshape
+(`adjust_ownership`) still applies on top, exactly as it did for feed ownership.
+
+### Per-market temperature (`tau_hit` / `tau_pit`)
+
+The softmax temperature is per-market, each falling back to the global `tau`.
+Calibration on Aug-2026 contests (`deliverables/ownership_model/
+calibration_review_2026-08.md`) set **`tau_hit = 0.85`** (the real hitter field
+is slightly chalkier than a `tau=1` softmax; sharpening matches its
+concentration at no accuracy cost) and left **`tau_pit = 1.0`** (sharpening
+pitchers *raises* chalk-weighted error, because their single-feature softmax
+amplifies any ace mis-rank — a features problem, not a temperature one).
 
 ---
 
