@@ -133,7 +133,8 @@ def build(features_csv, contest_dir, drop=()):
             o = fmap.loc[g["nname"], "order"].to_numpy(dtype=float)
             g["order_score"] = np.where((o >= 1) & (o <= 9), 10.0 - o, 0.0)
             is_p = pos == "P"
-            pred, _ = project_slot(g, P.pit if is_p else P.hit, P.tau, n_entries, P)
+            pred, _ = project_slot(g, P.pit if is_p else P.hit,
+                                   P.tau_for(is_p), n_entries, P)
             g["own_pred"] = pred
             g["contest"] = cid
             g["date"] = date

@@ -92,13 +92,26 @@ A temperature sweep (sharpen the softmax by lowering `tau`) shows the trade-off:
 | 0.8 | 2.20 | 0.93 | 5.59 | 1.04 |
 | 0.7 | 2.29 | 1.07 | 5.84 | 1.21 |
 
-`tau ≈ 0.8` **matches the field's concentration almost exactly** at a negligible
-MAE cost (2.18 → 2.20% hitters). MAE alone is already near-optimal at the shipped
-`tau=1.0` because MAE is dominated by the many low-owned players; but for field
-simulation, **matching chalk concentration matters more than shaving MAE on
-punts** — the top plays' ownership is what drives lineup duplication and
-leverage. A modest global sharpen to `tau ≈ 0.85`, or a pitcher-specific
-sharpen, is the single highest-value tweak.
+For **hitters**, `tau ≈ 0.85` matches the field's concentration far better
+(HHI ratio 0.77 → 0.88) at zero accuracy cost (MAE flat at 2.18%, top-10% hit
+0.56 → 0.59) — the top plays' ownership drives lineup duplication and leverage,
+so matching concentration matters for field realism even when MAE is already
+near-optimal.
+
+For **pitchers, sharpening is contraindicated.** A chalk-weighted objective
+(weighting error by actual ownership, so the aces dominate) is *minimised at
+`tau ≈ 1.0`, not below it*: the pitcher softmax rides a single feature (`proj`),
+and when the model mis-ranks the ace (it under-called Merrill Kelly on Aug 7),
+sharpening the softmax only amplifies the miss. The pitcher under-concentration
+is a **feature/ranking** problem, not a temperature one — better addressed by
+the missing `value` term and stronger pitcher features than by `tau`.
+
+### Implemented
+
+The model now carries a **per-market temperature** (`tau_hit`, `tau_pit`, each
+falling back to the global `tau`). Shipped: **`tau_hit = 0.85`, `tau_pit = 1.0`**.
+Re-scoring the Aug set confirms the intended effect — hitter HHI ratio 0.77 →
+0.88, MAE unchanged, top-10% hit 0.56 → 0.59; pitchers untouched.
 
 ---
 
@@ -129,17 +142,40 @@ sharpen, is the single highest-value tweak.
 
 ---
 
+## Where salary/value actually lives (serving vs the training log)
+
+The 0% salary above is a property of the **training log**, not of serving. Two
+independent paths carry salary into `project_ownership`, neither of which reads
+the log:
+
+- **Precompute (`scripts/build_ownership.py`, wired into `.github/workflows/
+  refresh.yml`)** fetches the DK salaries feed, joins `Salary` onto the pool, and
+  `project_ownership` then computes `value = proj/(salary·1e-3)`. It prints
+  `salary on N/total`; if the feed is down it degrades to sim-only and says so.
+- **The app**, as of this change, computes ownership at run time from the live
+  pool — which already carries DK `Salary` from the slate feed — so `value` is
+  active there too, independent of what the training log contains.
+
+So "does the model leverage salary even though the tracking file has none?" —
+**yes.** The log's empty salary only limits *retraining* (a refit from the log
+can't fit `value`), not serving. Fixing the snapshot to capture salary (below)
+is a retraining concern, not a serving bug.
+
 ## Recommendations (in priority order)
 
-1. **Fix multi-slate keying** so a day with >1 slate doesn't cross-contaminate
-   features/sims. Highest correctness impact.
-2. **Ensure salary is captured in the ownership snapshot** so the `value` term is
-   actually live in production; verify the served pool isn't silently dropping
-   it.
-3. **Sharpen the softmax** — set `tau ≈ 0.85` globally, or add a pitcher-specific
-   temperature (~0.8), to close the concentration gap and stop under-owning the
-   ace pitchers and mid-chalk bats. Re-run `fit_ownership.py --write` on the
-   fuller Jul–Aug window once (1) and (2) are in place to re-estimate betas,
-   `chalk_k`, and `sigma` on more slates.
-4. **Keep monitoring.** `scripts/eval_ownership_calibration.py` reproduces this
+1. ✅ **Wire the model into the app (done).** The app's field ownership now comes
+   from `project_ownership` at run time (salary/value, batting order, Vegas team
+   totals, ceiling shape), with a Setup → *Advanced field model* toggle to fall
+   back to the RotoWire feed. Previously the app used feed ownership and the
+   model's `projected_ownership.csv` had no reader.
+2. ✅ **Per-market temperature (done).** `tau_hit = 0.85`, `tau_pit = 1.0` — see
+   *Implemented* above.
+3. **Fix multi-slate keying** so a day with >1 slate doesn't cross-contaminate
+   features/sims (key by `(slate_id, name)`). Highest remaining correctness item.
+4. **Capture salary in the ownership snapshot** (`app.py` calls
+   `snapshot_slate_features(date, "deliverables")` with no salary source, so
+   every logged row is `salary=NaN`). Passing the DK pool/feed there unlocks a
+   `value`-aware refit of the betas on the fuller Jul–Aug window via
+   `fit_ownership.py --write`.
+5. **Keep monitoring.** `scripts/eval_ownership_calibration.py` reproduces this
    whole review on any new batch of contest CSVs + feature log.

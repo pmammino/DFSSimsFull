@@ -130,8 +130,17 @@ class OwnershipParams:
         "proj": 1.35, "ceil_shape": 0.25, "value": 0.60, "team_total": 0.0,
         "order_score": 0.0,
     })
-    # softmax temperature at the medium field (1.0 = betas as-is)
+    # softmax temperature at the medium field (1.0 = betas as-is). Lower = a
+    # peakier field (chalk concentrates), higher = flatter. ``tau_hit`` /
+    # ``tau_pit`` allow a per-market temperature; either falling back to ``tau``
+    # when unset. Calibration on Aug-2026 contests showed the hitter field is
+    # slightly *chalkier* than a tau=1 softmax (so tau_hit<1 matches its
+    # concentration at no accuracy cost), while sharpening pitchers *hurts* —
+    # the pitcher softmax rides a single feature (proj) and sharpening a
+    # sometimes-mis-ranked ace only amplifies the miss — so tau_pit stays 1.
     tau: float = 1.0
+    tau_hit: Optional[float] = None
+    tau_pit: Optional[float] = None
     # ownership UNCERTAINTY: σ (in %-owned points) around each point projection,
     # for treating ownership as a distribution rather than a fact in grading.
     # Calibrated heteroskedastic model σ(own) = sigma_a + sigma_b·own — residual
@@ -154,6 +163,11 @@ class OwnershipParams:
 
     def betas(self, is_pitcher: bool) -> dict:
         return self.pit if is_pitcher else self.hit
+
+    def tau_for(self, is_pitcher: bool) -> float:
+        """Per-market softmax temperature, falling back to the global ``tau``."""
+        t = self.tau_pit if is_pitcher else self.tau_hit
+        return float(t) if t is not None else float(self.tau)
 
     def to_json(self, path: str) -> None:
         with open(path, "w") as f:
@@ -371,7 +385,7 @@ def project_ownership(
                 continue
             u = u + b * _z(np.where(np.isfinite(col), col, np.nanmean(col)))
 
-        u = u / max(P.tau, 1e-6)
+        u = u / max(P.tau_for(is_pitcher), 1e-6)
         # players with no sim get pushed to the floor, not the softmax mass
         u = np.where(have, u, -1e9)
         u = u - np.nanmax(u[np.isfinite(u)]) if np.isfinite(u).any() else u

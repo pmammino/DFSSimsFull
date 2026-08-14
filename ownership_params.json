@@ -14,6 +14,8 @@
     "order_score": 0.0
   },
   "tau": 1.0,
+  "tau_hit": 0.85,
+  "tau_pit": 1.0,
   "sigma_a": 1.748,
   "sigma_b": 0.38,
   "sigma_unconfirmed_mult": 1.4,

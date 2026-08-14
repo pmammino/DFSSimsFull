@@ -241,6 +241,40 @@ def test_sim_features_shape():
     assert 1.0 <= f["ceil_shape"] <= 6.0
 
 
+def test_tau_for_per_market_fallback():
+    # unset per-market taus fall back to the global tau
+    P = OwnershipParams(tau=0.9)
+    assert P.tau_for(False) == 0.9 and P.tau_for(True) == 0.9
+    # explicit per-market taus win
+    P2 = OwnershipParams(tau=1.0, tau_hit=0.85, tau_pit=1.1)
+    assert P2.tau_for(False) == 0.85 and P2.tau_for(True) == 1.1
+
+
+def _hhi(own):
+    v = np.asarray(own, float)
+    t = v.sum()
+    return float(((v / t) ** 2).sum()) if t > 0 else float("nan")
+
+
+def test_lower_tau_concentrates_the_slot():
+    # a graded, unsaturated OF slot (no player pinned at the 100% cap) so the
+    # temperature effect is visible in the distribution's concentration.
+    projs = np.linspace(8.0, 5.5, 24)          # 24-deep OF slot, gentle gradient
+    names = [f"h{i}" for i in range(len(projs))]
+    sims = {norm(nm): np.full(3000, p) for nm, p in zip(names, projs)}
+    pool = pd.DataFrame({"Name": names, "Pos": "OF", "Salary": 5000})
+    sharp = project_ownership(pool, sims, params=OwnershipParams(tau_hit=0.8))
+    flat = project_ownership(pool, sims, params=OwnershipParams(tau_hit=1.2))
+    assert sharp.max() < 100.0                 # nothing saturated at the cap
+    assert _hhi(sharp) > _hhi(flat)            # lower tau => chalkier field
+    assert abs(sharp.sum() - 300.0) < _TOL     # per-slot invariant preserved
+
+    # tau_pit must NOT affect a hitter-only slot
+    base = project_ownership(pool, sims, params=OwnershipParams())
+    diff = project_ownership(pool, sims, params=OwnershipParams(tau_pit=0.5))
+    assert np.allclose(base.to_numpy(), diff.to_numpy())
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

@@ -2296,6 +2296,17 @@ with tabs[0]:
                                    value=0.15, step=0.05,
                                    help="How much large fields consolidate onto "
                                         "5-man primary stacks.")
+            own_source = st.radio(
+                "Field ownership source", ["Projected model", "RotoWire feed"],
+                index=0, horizontal=True, key="own_source",
+                help="Where the field's expected %-drafted comes from. "
+                     "**Projected model** (default) derives ownership from the "
+                     "same correlated sims that drive the build — salary/value, "
+                     "batting order, Vegas team totals and ceiling shape — so the "
+                     "field the portfolio is optimised against is internally "
+                     "consistent with our projections (see ownership_model.py). "
+                     "**RotoWire feed** uses the imported %-drafted column instead. "
+                     "Either way the chalk/size controls above still reshape it.")
             s1, s2 = st.columns(2)
             seed_field = s1.number_input("Field seed", value=101, step=1)
             seed_cand = s2.number_input("Candidate seed", value=2025, step=1)
@@ -2576,6 +2587,48 @@ with tabs[0]:
             if dropped:
                 st.caption(f"{dropped} of {len(dk_df)} slate players had no sim and "
                            "were excluded (they can't be scored).")
+
+            # ---- field ownership source ------------------------------------
+            # Default: our sim-derived projected-ownership model. It derives
+            # %-drafted from the SAME correlated sims that drive this build —
+            # DK salary/value, batting order, Vegas team totals and ceiling
+            # shape — so the field the portfolio is optimised against is
+            # internally consistent with our projections (see ownership_model).
+            # Computed at the medium baseline; the chalk/size reshape below
+            # (beta_for_size -> adjust_ownership) still applies, exactly as it
+            # does for imported feed ownership. Falls back to the feed on any
+            # error so a build never dies on the ownership step.
+            if st.session_state.get("own_source", "Projected model") == "Projected model":
+                try:
+                    from ownership_model import project_ownership
+                    # per-team Vegas totals: the fetched feed overlaid with any
+                    # user edits (both may be absent → sim-only features).
+                    _tt_map = {r["Team"]: r["Vegas total"]
+                               for r in (st.session_state.get("_tt_fetched") or [])}
+                    _tt_map.update(tt_override or {})
+                    _bo = st.session_state.get("batting_order_map", {}) or {}
+                    _mp = pool.copy()
+                    _mp["Order"] = [float(_bo.get(normname(n), 0)) for n in _mp["Name"]]
+                    _proj_own = project_ownership(
+                        _mp, score_k, contest_size=None,
+                        team_total=_tt_map or None)
+                    pool = pool.copy()
+                    pool["Ownership"] = _proj_own.to_numpy()
+                    _n_tt = int(_mp["Team"].isin(_tt_map).sum()) if _tt_map else 0
+                    _n_ord = int(sum(1 for n in _mp["Name"]
+                                     if _bo.get(normname(n), 0)))
+                    st.write(
+                        f"Field ownership from the **projected model** "
+                        f"(sim-derived) for {len(pool)} players — "
+                        f"salary on {int(pool['Salary'].notna().sum())}, "
+                        f"Vegas total on {_n_tt}, batting order on {_n_ord}.")
+                except Exception as e:
+                    st.warning(
+                        f"Projected-ownership model failed "
+                        f"({type(e).__name__}: {e}); using imported feed "
+                        "ownership for the field instead.")
+            else:
+                st.caption("Field ownership from the imported RotoWire feed.")
 
             # ---- reverse guard: a simmed, well-projected HITTER that never made
             # the pool almost always means the DK feed carried no salary/slot we
