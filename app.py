@@ -2628,6 +2628,24 @@ with tabs[0]:
                            "their own sim this slate, so they were excluded rather "
                            f"than scored with another player's projection): "
                            + ", ".join(_dropped_dupes) + ".")
+            # STALE SIMS guard: two same-name players are on the slate but the sims
+            # still carry a single un-disambiguated key for that name — i.e. the
+            # sims predate the name-collision fix. Both DK rows then share ONE
+            # projection (the old bug). Tell the user to rebuild rather than fail
+            # silently, since sims are cached and only rebuild on a slate change.
+            _disamb_bases = {s.split(" (")[0] for s in simnames if " (" in s}
+            _stale_pairs = sorted({r.FullName for r in dk_df.itertuples()
+                                   if normname(r.FullName) in _dupe_names
+                                   and normname(r.FullName) in simnames
+                                   and normname(r.FullName) not in _disamb_bases})
+            if _stale_pairs:
+                st.warning(
+                    "⚠️ Same-name players on this slate are still sharing ONE sim "
+                    f"({', '.join(_stale_pairs)}) — these sims were built before the "
+                    "name-collision fix, so the wrong player (e.g. the cheaper one) "
+                    "can still be rostered wearing the other's projection. Tick "
+                    "**Force full refresh** to rebuild the sims; each player then "
+                    "gets its own projection and a distinct '(TEAM)' row.")
 
             # ---- field ownership source ------------------------------------
             # Default: our sim-derived projected-ownership model. It derives
