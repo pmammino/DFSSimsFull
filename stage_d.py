@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 from collections import Counter
 
+from slate_config import canonical_team
 from mlb_lineup_builder import Pool, Builder
 from field_simulator import (normalize_to_slots, adjust_ownership,
                              beta_for_size, tilt_structures)
@@ -71,20 +72,45 @@ def derive_opponents(dk_df, H, P):
         if cs: opp[pt] = min(cs, key=cs.get)
     return opp
 
+def _sim_key_for(full_name, team, simset):
+    """The score-dict key for a DK player, honouring same-name collisions.
+
+    A colliding player is keyed by ``"<name> (<CANON_TEAM>)"`` on BOTH the sim
+    side (from the slate team) and here (from the DK team), canonicalised so the
+    two reconcile. Try the team-qualified key first; fall back to the plain name.
+    Returns (display_name, key) or (None, None) when neither is simmed — which
+    fail-safe-drops a collision whose team didn't match any sim, so a player is
+    never scored with a different player's array. `display_name` is what the pool
+    row is keyed by so it stays unique per real player; dk_ids strips the suffix
+    back off for upload."""
+    disamb_disp = f"{full_name} ({canonical_team(team) or str(team or '').upper()})"
+    if norm(disamb_disp) in simset:
+        return disamb_disp, norm(disamb_disp)
+    if norm(full_name) in simset:
+        return full_name, norm(full_name)
+    return None, None
+
+
 def build_pool(dk_path, H, P, score):
     """DK file + sims -> pool restricted to simmed players. Multi-pos expanded,
-    SP/RP->P, sim-confirmed pitchers flagged starters, opponents from sims."""
+    SP/RP->P, sim-confirmed pitchers flagged starters, opponents from sims.
+
+    Same-name collisions (two real players, e.g. the Dodgers' vs the Athletics'
+    Max Muncy) are matched to their OWN sim by a team-qualified key, so each pool
+    row carries a distinct name and the field can no longer roster one wearing
+    the other's projection. A duplicate whose team matches no sim is dropped."""
     dk = pd.read_csv(dk_path, encoding='latin-1'); dk['FullName'] = dk['FullName'].str.strip()
     opp = derive_opponents(dk, H, P)
     simset = set(score)
     rows = []
     for r in dk.itertuples():
-        if norm(r.FullName) not in simset:
+        disp, _key = _sim_key_for(r.FullName, r.Team, simset)
+        if disp is None:
             continue
         for p in str(r.Position).split('/'):
             p = p.strip(); pos = 'P' if p in ('SP','RP') else p
             role = 'SP' if pos == 'P' else pos      # sim pitchers are starters
-            rows.append({'Name': r.FullName, 'Pos': pos, 'Role': role,
+            rows.append({'Name': disp, 'Pos': pos, 'Role': role,
                          'Team': r.Team, 'Opp': opp.get(r.Team, ''),
                          'Salary': int(r.Salary), 'Ownership': float(r.Ownership)})
     pool = pd.DataFrame(rows).drop_duplicates(['Name','Pos'])

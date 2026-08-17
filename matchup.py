@@ -20,6 +20,8 @@ import json, os, unicodedata
 import numpy as np
 import pandas as pd
 
+from slate_config import canonical_team
+
 # Per-PA event columns produced by the projection pipeline
 HIT_EVENTS = ['P_1B', 'P_2B', 'P_3B', 'P_HR', 'P_BB', 'P_HBP', 'P_K']  # P_SF/P_BIPOut are residual
 PIT_EVENTS = ['P_1B', 'P_2B', 'P_3B', 'P_HR', 'P_BB', 'P_HBP', 'P_K']
@@ -144,10 +146,22 @@ def load_projections(out_dir, target_year):
     return h, p
 
 
-def _row_for(df, name):
-    """Best-effort match a slate name to a projection row by normalized name."""
+def _row_for(df, name, team=None):
+    """Best-effort match a slate name to a projection row by normalized name.
+
+    When several projection rows share the name (two real players — e.g. the
+    Dodgers' vs the Athletics' Max Muncy), ``team`` disambiguates by canonical
+    team code. If team can't pick a single row it falls back to the first, which
+    is only reached for a *single* slate occurrence of the name (a true two-on-
+    the-slate collision is resolved up front by :func:`resolve_collisions`, which
+    also uses assignment-by-elimination and can fail safe)."""
     k = _norm(name)
     hit = df[df['name_key'] == k]
+    if len(hit) > 1 and team is not None:
+        ct = canonical_team(team)
+        tmatch = hit[hit['Team'].map(canonical_team) == ct]
+        if len(tmatch) == 1:
+            return tmatch.iloc[0]
     if len(hit):
         return hit.iloc[0]
     # last-name + first-initial fallback
@@ -158,6 +172,65 @@ def _row_for(df, name):
         if len(cand) == 1:
             return cand.iloc[0]
     return None
+
+
+def sim_name(name, team):
+    """The identity a colliding player is keyed by through the sim/pool chain:
+    ``"<name> (<CANON_TEAM>)"``. Applied ONLY to names that collide on a slate,
+    so non-colliding players keep their plain name everywhere (zero blast radius
+    for the 99% case). ``dk_ids`` strips the suffix back off for upload id
+    resolution, and the canonical team makes the key reconcile between the sim
+    side (slate team) and the pool side (DK team)."""
+    ct = canonical_team(team) or str(team or "").upper()
+    return f"{name} ({ct})"
+
+
+def resolve_collisions(slate, hproj):
+    """Resolve same-name hitter collisions on a slate to distinct projection rows.
+
+    A collision = the same normalized name rostered on 2+ teams on this slate;
+    only then do the players later share one sim array, so only then must we
+    separate them. Each colliding slate player is matched to its own projection
+    row by (1) canonical team, then (2) assignment-by-elimination (2 players / 2
+    rows, one resolvable → the other falls out). Anything still ambiguous is
+    flagged UNRESOLVED so the caller can fail safe (drop, never mis-score).
+
+    Returns
+    -------
+    assign      {(name_key, canon_team): projection_row_index}
+    unresolved  {(name_key, canon_team)} — colliding players we couldn't place
+    collided    {name_key} — names that collide on the slate (need a sim_name)
+    """
+    from collections import defaultdict
+    occ = defaultdict(set)                       # name_key -> canonical teams on slate
+    for g in slate.get('games', {}).values():
+        for side in ('away', 'home'):
+            ct = canonical_team(g[side])
+            for p in g['lineups'][side]:
+                occ[_norm(p['name'])].add(ct)
+
+    assign, unresolved, collided = {}, set(), set()
+    for nk, teams in occ.items():
+        if len(teams) < 2:
+            continue                              # not a slate collision
+        collided.add(nk)
+        rows = hproj[hproj['name_key'] == nk]
+        if len(rows) < 2:                         # can't separate → fail safe
+            unresolved.update((nk, t) for t in teams)
+            continue
+        row_team = {idx: canonical_team(r['Team']) for idx, r in rows.iterrows()}
+        remaining = set(row_team)
+        for t in teams:                           # pass 1: confident team match
+            m = [i for i in remaining if row_team[i] == t]
+            if len(m) == 1:
+                assign[(nk, t)] = m[0]
+                remaining.discard(m[0])
+        left = [t for t in teams if (nk, t) not in assign]
+        if len(left) == 1 and len(remaining) == 1:   # pass 2: elimination
+            assign[(nk, left[0])] = remaining.pop()
+        else:
+            unresolved.update((nk, t) for t in left)
+    return assign, unresolved, collided
 
 
 def _hitter_vector(row, opp_hand, venue_pf):
@@ -270,6 +343,29 @@ def build_matchup_inputs(slate, hproj, pproj):
     out = {'date': slate['date'], 'games': {}}
     missing = {'hitters': [], 'pitchers': []}
 
+    # Same-name collisions (two real players sharing a name on the slate — e.g.
+    # the Dodgers' vs the Athletics' Max Muncy). Resolve each to its own
+    # projection row up front so they no longer collapse onto one sim array
+    # downstream; unresolved ones are dropped (never mis-scored). Colliding
+    # players are keyed by sim_name() through the sim/pool chain.
+    assign, unresolved, collided = resolve_collisions(slate, hproj)
+    collisions = {'resolved': [], 'dropped': []}
+
+    def _hitter_row_and_key(name, team):
+        """(projection row or None, sim_name) for a slate hitter, honouring the
+        collision resolution. A dropped collision returns (None, None)."""
+        nk = _norm(name)
+        if nk not in collided:
+            return _row_for(hproj, name, team=team), name
+        ct = canonical_team(team)
+        if (nk, ct) in assign:
+            row = hproj.loc[assign[(nk, ct)]]
+            snm = sim_name(name, team)
+            collisions['resolved'].append((snm, str(row.get('Team', ''))))
+            return row, snm
+        collisions['dropped'].append(sim_name(name, team))   # unresolved → fail safe
+        return None, None
+
     for gid, g in slate['games'].items():
         rec = {'away': g['away'], 'home': g['home'], 'datetime': g['datetime'],
                'implied': g['implied'],
@@ -301,13 +397,18 @@ def build_matchup_inputs(slate, hproj, pproj):
             hands = []
             lineup_vecs = []
             for p in g['lineups'][side]:
-                r = _row_for(hproj, p['name'])
+                r, snm = _hitter_row_and_key(p['name'], g[side])
                 hand = (r['BatSide'] if r is not None and pd.notna(r['BatSide']) else 'R')
                 hands.append(hand)
                 vec = _hitter_vector(r, opp_hand[side], venue_pf) if r is not None else dict(LG_HIT_VEC)
                 if r is None:
                     missing['hitters'].append(p['name'])
-                lineup_vecs.append({'name': p['name'], 'slot': p['slot'], 'pos': p['pos'],
+                # snm is the sim identity (plain name, or "<name> (<TEAM>)" for a
+                # resolved collision); None means a dropped/unresolved collision.
+                lineup_vecs.append({'name': p['name'],
+                                    'sim_name': snm if snm is not None else p['name'],
+                                    'dropped': snm is None,
+                                    'slot': p['slot'], 'pos': p['pos'],
                                     'hand': hand, 'vec': vec})
             rec['lineups'][side] = lineup_vecs
             # switch hitters (S) count as opposite of the pitcher → treat as the platoon-favorable side;
@@ -339,4 +440,8 @@ def build_matchup_inputs(slate, hproj, pproj):
         out['games'][gid] = rec
 
     out['missing'] = {k: sorted(set(v)) for k, v in missing.items()}
+    out['collisions'] = {
+        'resolved': sorted(set(collisions['resolved'])),
+        'dropped': sorted(set(collisions['dropped'])),
+    }
     return out

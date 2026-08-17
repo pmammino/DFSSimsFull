@@ -173,6 +173,13 @@ def main():
     miss = matchup.get('missing', {})
     if miss.get('hitters'): print(f"   hitters w/o projection ({len(miss['hitters'])}): {miss['hitters'][:8]}{'...' if len(miss['hitters'])>8 else ''}")
     if miss.get('pitchers'): print(f"   pitchers w/o projection ({len(miss['pitchers'])}): {miss['pitchers'][:8]}{'...' if len(miss['pitchers'])>8 else ''}")
+    coll = matchup.get('collisions', {})
+    if coll.get('resolved'):
+        print(f"   same-name collisions resolved to distinct players "
+              f"({len(coll['resolved'])}): {[c[0] for c in coll['resolved']]}")
+    if coll.get('dropped'):
+        print(f"   ⚠️ same-name collisions DROPPED (couldn't disambiguate — no "
+              f"projection this slate): {coll['dropped']}")
 
     # 4) simulate
     print(f"[4/6] Simulating {args.n_sims} correlated sims/player...")
@@ -203,6 +210,7 @@ def main():
                 'opener_primary': opener_games,
                 'realized_correlations': rep, 'stack_check': sb, 'validation_pass': bool(ok),
                 'missing_from_projection': miss,
+                'name_collisions': matchup.get('collisions', {}),
                 'hitters': sorted(hitter_dk), 'pitchers': sorted(pitcher_dk)}
     json.dump(manifest, open(os.path.join(DELIV_DIR, f"sim_manifest_{stamp}.json"), 'w'), indent=2)
     print(f"\nDone. Deliverables in {DELIV_DIR}/:")
