@@ -1313,6 +1313,26 @@ def sims_present():
     return bool(h and p)
 
 
+def sims_collision_aware():
+    """True if the on-disk sims were built by the name-collision-aware pipeline.
+
+    Such a build stamps its manifest with a ``name_collisions`` key; sims made
+    before that fix lack it. Pre-fix sims key the two real players sharing a name
+    (e.g. the Dodgers' vs the Athletics' Max Muncy) onto ONE array, so the wrong
+    player can be rostered wearing the other's projection. A False result forces a
+    one-time rebuild (see ``need_sims``) even without a manual refresh, so the fix
+    self-heals stale cached sims. Returns True when there's no manifest (nothing to
+    judge — ``sims_present`` governs that) or it can't be read, to avoid a loop."""
+    manifests = glob.glob(os.path.join(DELIV, "sim_manifest_*.json"))
+    if not manifests:
+        return True
+    try:
+        newest = max(manifests, key=os.path.getmtime)
+        return "name_collisions" in json.load(open(newest))
+    except Exception:
+        return True
+
+
 def _fmt_ts(ts):
     """Human timestamp for a stored epoch seconds value ("" if missing/bad).
     Zero-padded format — portable across Linux and Windows."""
@@ -1705,8 +1725,14 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
                             and slate_day != stamp.get("slate_date"))
         lineups_changed = live_sig is not None and (stored_sig is None
                                                     or live_sig != stored_sig)
+        # one-time auto-rebuild when the cached sims predate the name-collision
+        # fix (their manifest lacks the name_collisions marker). This self-heals
+        # stale sims that would otherwise share ONE array between two same-name
+        # players, with no dependency on a manual "force refresh" control.
+        stale_sim_format = sims_present() and not sims_collision_aware()
         need_sims = (force or not sims_present() or projections_rebuilt
-                     or new_game_day or lineups_changed or totals_path is not None)
+                     or new_game_day or lineups_changed or totals_path is not None
+                     or stale_sim_format)
         if need_sims:
             if not sims_present() and live_sig is None and totals_path is None:
                 st.error("No sims on disk and the live feed is unreachable — can't "
@@ -1716,6 +1742,8 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
                 why = "edited team totals"
             elif not sims_present():
                 why = "no sims on disk"
+            elif stale_sim_format:
+                why = "sims predate the same-name-collision fix — rebuilding once"
             elif new_game_day:
                 why = f"new game day ({stamp.get('slate_date')}→{slate_day})"
             elif lineups_changed and stored_sig is not None:
