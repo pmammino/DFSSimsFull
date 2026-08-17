@@ -1314,21 +1314,24 @@ def sims_present():
 
 
 def sims_collision_aware():
-    """True if the on-disk sims were built by the name-collision-aware pipeline.
+    """True if the on-disk sims were built by the CURRENT name-collision pipeline.
 
-    Such a build stamps its manifest with a ``name_collisions`` key; sims made
-    before that fix lack it. Pre-fix sims key the two real players sharing a name
-    (e.g. the Dodgers' vs the Athletics' Max Muncy) onto ONE array, so the wrong
-    player can be rostered wearing the other's projection. A False result forces a
-    one-time rebuild (see ``need_sims``) even without a manual refresh, so the fix
-    self-heals stale cached sims. Returns True when there's no manifest (nothing to
-    judge — ``sims_present`` governs that) or it can't be read, to avoid a loop."""
+    Each build stamps its manifest with ``sim_collision_version`` (see
+    slate_config.SIM_COLLISION_VERSION). Sims built before the fix — or by an
+    older version of it — key two real players sharing a name (e.g. the Dodgers'
+    vs the Athletics' Max Muncy) onto ONE array, so the wrong player can be
+    rostered wearing the other's projection. A False result forces a one-time
+    rebuild (see ``need_sims``), so improvements to collision handling self-heal
+    cached sims with no manual refresh. Returns True when there's no manifest
+    (nothing to judge — ``sims_present`` governs that) or it can't be read."""
+    from slate_config import SIM_COLLISION_VERSION
     manifests = glob.glob(os.path.join(DELIV, "sim_manifest_*.json"))
     if not manifests:
         return True
     try:
         newest = max(manifests, key=os.path.getmtime)
-        return "name_collisions" in json.load(open(newest))
+        m = json.load(open(newest))
+        return int(m.get("sim_collision_version", 0)) >= SIM_COLLISION_VERSION
     except Exception:
         return True
 
@@ -2644,36 +2647,41 @@ with tabs[0]:
             if _disambig:
                 st.caption("🔀 Resolved same-name players to their own projection: "
                            + ", ".join(f"**{n}**" for n in _disambig) + ".")
-            _dupe_names = dk_df["FullName"].map(normname).value_counts()
-            _dupe_names = set(_dupe_names[_dupe_names > 1].index)
-            _pool_bases = {normname(n.split(" (")[0]) for n in pool["Name"]}
-            _dropped_dupes = sorted(
-                {r.FullName for r in dk_df.itertuples()
-                 if normname(r.FullName) in _dupe_names
-                 and normname(r.FullName) not in _pool_bases})
-            if _dropped_dupes:
-                st.warning("⚠️ Same-name player(s) dropped (couldn't be matched to "
-                           "their own sim this slate, so they were excluded rather "
-                           f"than scored with another player's projection): "
-                           + ", ".join(_dropped_dupes) + ".")
-            # STALE SIMS guard: two same-name players are on the slate but the sims
-            # still carry a single un-disambiguated key for that name — i.e. the
-            # sims predate the name-collision fix. Both DK rows then share ONE
-            # projection (the old bug). Tell the user to rebuild rather than fail
-            # silently, since sims are cached and only rebuild on a slate change.
+            # Per-PLAYER audit of same-name DK rows (two real players sharing a
+            # name). Each either matched its own sim (kept), or has none of its own
+            # — split into "stale sims" (a plain shared key still exists, so the
+            # sims predate the current collision fix and are rebuilding) vs
+            # "unresolvable" (ambiguous team codes). build_pool never lets them
+            # share the plain key, so neither is scored with the other's numbers.
+            from stage_d import _sim_key_for as _skf
+            _nk = dk_df["FullName"].map(normname)
+            _collide = {k for k, n in dk_df.groupby(_nk)["Team"].nunique().items() if n >= 2}
             _disamb_bases = {s.split(" (")[0] for s in simnames if " (" in s}
-            _stale_pairs = sorted({r.FullName for r in dk_df.itertuples()
-                                   if normname(r.FullName) in _dupe_names
-                                   and normname(r.FullName) in simnames
-                                   and normname(r.FullName) not in _disamb_bases})
-            if _stale_pairs:
+            _stale, _unresolved = [], []
+            for r in dk_df.itertuples():
+                nn = normname(r.FullName)
+                if nn not in _collide:
+                    continue
+                disp, _k = _skf(r.FullName, getattr(r, "Team", ""), simnames, _collide)
+                if disp is not None:
+                    continue                       # kept on its own sim
+                label = f"{r.FullName} ({getattr(r, 'Team', '')})"
+                (_stale if (nn in simnames and nn not in _disamb_bases)
+                 else _unresolved).append(label)
+            if _stale:
                 st.warning(
-                    "⚠️ Same-name players on this slate are still sharing ONE sim "
-                    f"({', '.join(_stale_pairs)}) — these sims were built before the "
-                    "name-collision fix, so the wrong player (e.g. the cheaper one) "
-                    "can still be rostered wearing the other's projection. Tick "
-                    "**Force full refresh** to rebuild the sims; each player then "
-                    "gets its own projection and a distinct '(TEAM)' row.")
+                    "⚠️ Same-name players (" + ", ".join(sorted(set(_stale))) + ") "
+                    "were **excluded for safety**: these sims predate the current "
+                    "name-collision fix, so each can't yet be matched to its own "
+                    "projection. The app rebuilds the sims automatically — re-run "
+                    "the build once (it needs the live feed) and each player returns "
+                    "as its own '(TEAM)' row.")
+            if _unresolved:
+                st.warning(
+                    "⚠️ Same-name player(s) dropped — couldn't be matched to their "
+                    "own sim this slate (ambiguous team codes), so they were excluded "
+                    "rather than scored with another player's projection: "
+                    + ", ".join(sorted(set(_unresolved))) + ".")
 
             # ---- field ownership source ------------------------------------
             # Default: our sim-derived projected-ownership model. It derives

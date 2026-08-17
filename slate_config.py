@@ -26,6 +26,15 @@ STATSAPI = "https://statsapi.mlb.com/api/v1"
 N_SIMS = 10_000
 SEED   = 20260610
 
+# Same-name-collision handling version stamped into each sim manifest. The app
+# forces a one-time sim rebuild when the on-disk sims carry an older version, so
+# improvements to collision resolution self-heal cached sims. Bump on any change
+# to how sims key colliding players (matchup.resolve_collisions / sim_proj).
+#   1 = initial fix (disambiguate names on 2+ slate teams)
+#   2 = also disambiguate names ambiguous in the projection set (twin not in the
+#       posted lineup) + build_pool never shares a plain key across a collision
+SIM_COLLISION_VERSION = 2
+
 # Correlation loadings (validated: teammate ~+0.24, hitter-vs-SP ~-0.37, unrelated ~0)
 SG          = 0.20   # game-environment loading (both teams + both pitchers)
 ST          = 0.50   # team-offense loading (teammates share; opposing SP inverse)

@@ -72,20 +72,27 @@ def derive_opponents(dk_df, H, P):
         if cs: opp[pt] = min(cs, key=cs.get)
     return opp
 
-def _sim_key_for(full_name, team, simset):
+def _sim_key_for(full_name, team, simset, collide_names=frozenset()):
     """The score-dict key for a DK player, honouring same-name collisions.
 
     A colliding player is keyed by ``"<name> (<CANON_TEAM>)"`` on BOTH the sim
     side (from the slate team) and here (from the DK team), canonicalised so the
-    two reconcile. Try the team-qualified key first; fall back to the plain name.
-    Returns (display_name, key) or (None, None) when neither is simmed — which
-    fail-safe-drops a collision whose team didn't match any sim, so a player is
-    never scored with a different player's array. `display_name` is what the pool
-    row is keyed by so it stays unique per real player; dk_ids strips the suffix
+    two reconcile. Try the team-qualified key first.
+
+    ``collide_names`` are the normalized names the DK file lists on 2+ different
+    teams — i.e. two REAL players sharing a name. For those the plain ``norm(name)``
+    key is ambiguous (it is exactly ONE of the two players' arrays), so we must
+    NOT fall back to it — that fallback is what let the wrong player be scored
+    with the other's sim when the sims weren't collision-aware. Drop instead; a
+    rebuilt (collision-aware) sim gives each player its own ``(TEAM)`` key. A
+    non-colliding name keeps the plain fallback. Returns (display_name, key) or
+    (None, None) when the player has no sim of its own. dk_ids strips the suffix
     back off for upload."""
     disamb_disp = f"{full_name} ({canonical_team(team) or str(team or '').upper()})"
     if norm(disamb_disp) in simset:
         return disamb_disp, norm(disamb_disp)
+    if norm(full_name) in collide_names:          # ambiguous plain key — never share
+        return None, None
     if norm(full_name) in simset:
         return full_name, norm(full_name)
     return None, None
@@ -102,9 +109,14 @@ def build_pool(dk_path, H, P, score):
     dk = pd.read_csv(dk_path, encoding='latin-1'); dk['FullName'] = dk['FullName'].str.strip()
     opp = derive_opponents(dk, H, P)
     simset = set(score)
+    # names the DK file lists on 2+ different teams = two real players sharing a
+    # name; their plain sim key is ambiguous, so each must match its own
+    # team-qualified key or be dropped (never share) — see _sim_key_for.
+    _nk = dk['FullName'].map(norm)
+    collide_names = {k for k, n in dk.groupby(_nk)['Team'].nunique().items() if n >= 2}
     rows = []
     for r in dk.itertuples():
-        disp, _key = _sim_key_for(r.FullName, r.Team, simset)
+        disp, _key = _sim_key_for(r.FullName, r.Team, simset, collide_names)
         if disp is None:
             continue
         for p in str(r.Position).split('/'):
