@@ -5,13 +5,17 @@ dk_ids.py
 DraftKings player-ID maps that disambiguate same-named players.
 
 Two DIFFERENT players can share a name on one slate — e.g. **Max Muncy** on the
-Dodgers (3B, $3548) and **Max Muncy** on the Athletics (SS, $3558). The
-projection/sim layer keys DK-point arrays by name, so both collapse onto one sim
-array — but they survive as separate pool rows (different position/salary/team),
-so a lineup can correctly roster either one. The bug is at UPLOAD: a plain
-``name -> id`` map collapses the two ids (last write wins), so the CSV can embed
-the wrong player's id even though the lineup itself is right — typically shipping
-the same (e.g. cheaper) Muncy every time.
+Dodgers (3B, $3548) and **Max Muncy** on the Athletics (SS, $3558). The sim layer
+now keeps them apart: a colliding player is keyed by ``"<name> (<CANON_TEAM>)"``
+end to end (see ``matchup.resolve_collisions`` / ``matchup.sim_name`` and
+``stage_d.build_pool``), so each real player carries its own projection and a
+distinct pool row — the field can no longer roster one wearing the other's
+numbers. This module handles the UPLOAD side of the same clash: the pool row
+arrives with that disambiguated name, so :func:`_records` strips the ``(TEAM)``
+suffix back to the plain name the id map is keyed by, and :func:`lookup` resolves
+the correct id from the suffix's team plus salary/position (a plain
+``name -> id`` map would collapse the two ids, last write wins, and ship the same
+— e.g. cheaper — Muncy every time).
 
 Keying by team alone is not enough: DraftKings' team codes don't always match the
 projection feed's (DK "OAK"/"LAD" vs a feed's "ATH"/"LA"), and if the id source
@@ -28,7 +32,24 @@ and DK salaries are the same integer in the salary file and the upload template.
 
 Map shape: ``{ norm(name): [ {"id","team","pos":set(),"salary":int|None}, ... ] }``.
 """
+import re
+
 from stage_d import norm
+
+# A colliding player is carried through the build as ``"<name> (<CANON_TEAM>)"``
+# (see matchup.sim_name / stage_d.build_pool). Strip that suffix before keying
+# into the id map — which is keyed by the plain name — and reuse the suffix's
+# team to disambiguate the two ids when the caller didn't pass one.
+_DISAMBIG_RE = re.compile(r"\s*\(([A-Z]{2,4})\)\s*$")
+
+
+def _base_name(name):
+    return _DISAMBIG_RE.sub("", str(name or ""))
+
+
+def _suffix_team(name):
+    m = _DISAMBIG_RE.search(str(name or ""))
+    return m.group(1) if m else ""
 
 
 def team_key(t):
@@ -67,7 +88,7 @@ def add_id(idmap, name, team, cid, pos="", salary=None):
 def _records(idmap, name):
     """Normalized list of id records for a name, tolerating legacy map shapes
     (flat ``name->id`` and the earlier ``name->{team:id}``)."""
-    v = idmap.get(norm(name))
+    v = idmap.get(norm(_base_name(name)))
     if not v:
         return []
     if isinstance(v, list):
@@ -108,7 +129,7 @@ def lookup(idmap, name, team="", pos="", salary=None):
         sal = int(float(salary)) if salary not in (None, "") else None
     except (TypeError, ValueError):
         sal = None
-    tk = team_key(team)
+    tk = team_key(team or _suffix_team(name))   # fall back to the "(TEAM)" suffix
     pk = team_key(pos)
 
     best, best_score = None, -1

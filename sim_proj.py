@@ -339,8 +339,16 @@ def simulate(matchup, n_sims=10000, seed=20260610):
                 r_s   = np.clip(d['R'],   0, 6)
                 rbi_s = np.clip(d['RBI'], 0, 8)
 
+                # An unresolved same-name collision is kept in the lineup for
+                # team run-conservation but never emitted as its own sim (it would
+                # otherwise inherit — or be inherited by — the other player's
+                # array). It simply has no projection this slate; see matchup.
+                if p.get('dropped'):
+                    continue
                 dk = dk_hitter(sgl, dbl, trp, hr, rbi_s, r_s, bb, hbp, sb_s)
-                nm = p['name']
+                # Colliding players carry a team-qualified sim_name so the two
+                # real players keep DISTINCT arrays through the pool/build chain.
+                nm = p.get('sim_name') or p['name']
                 hitter_dk[nm] = dk
                 hitter_stat[nm] = {'1B':sgl,'2B':dbl,'3B':trp,'HR':hr,'R':r_s,'RBI':rbi_s,
                                    'BB':bb,'HBP':hbp,'K':ks,'SB':sb_s,'PA':pa}

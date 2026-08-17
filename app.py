@@ -51,6 +51,19 @@ import showdown_contest as sc
 import showdown_portfolio as sp
 import showdown_upload as su
 
+import re as _re
+_DISAMBIG_SUFFIX = _re.compile(r"\s*\([A-Z]{2,4}\)\s*$")
+
+
+def base_name(name):
+    """Strip a same-name-collision suffix ("Max Muncy (LAD)" -> "Max Muncy").
+
+    Colliding players are carried through the sim/pool as "<name> (TEAM)" so the
+    two real players stay distinct; this recovers the plain name for matching
+    against the live feed / DK feed, which key by plain name."""
+    return _DISAMBIG_SUFFIX.sub("", str(name or ""))
+
+
 # per-position place charts can exceed Altair's default 5000-row cap
 try:
     alt.data_transformers.disable_max_rows()
@@ -2481,7 +2494,10 @@ with tabs[0]:
             # correlation structure
             score_k = {k: v[:K] for k, v in score_.items()}
             simnames = set(score_k)
-            if int(dk_df["FullName"].map(lambda n: normname(n) in simnames).sum()) == 0:
+            # colliding players are simmed under a "<name> (team)" key; match a DK
+            # plain name against the base part so the sim/name-match count is right.
+            sim_bases = {s.split(" (")[0] for s in simnames}
+            if int(dk_df["FullName"].map(lambda n: normname(n) in sim_bases).sum()) == 0:
                 status.update(label="No players match the sims", state="error")
                 st.error("After the freshness check, none of your slate players "
                          "matched the sim universe. Check the slate file.")
@@ -2553,10 +2569,13 @@ with tabs[0]:
             # An incomplete/mismatched live feed (lineups not posted yet, name/
             # team differences) must NOT strip out valid simmed players. ----
             matched = int(dk_df["FullName"].map(
-                lambda n: normname(n) in simnames).sum())
+                lambda n: normname(n) in sim_bases).sum())
             applied_live = False
             if live_playable:
-                keep = pool["Name"].map(lambda n: normname(n) in live_playable)
+                # pool Names may be disambiguated ("Max Muncy (LAD)"); compare the
+                # base name so a resolved collision isn't wrongly filtered out.
+                keep = pool["Name"].map(
+                    lambda n: normname(base_name(n)) in live_playable)
                 kept = pool[keep]
                 kh = kept[kept.Pos != "P"].Name.nunique()
                 kp = kept[kept.Pos == "P"].Name.nunique()
@@ -2587,6 +2606,28 @@ with tabs[0]:
             if dropped:
                 st.caption(f"{dropped} of {len(dk_df)} slate players had no sim and "
                            "were excluded (they can't be scored).")
+
+            # ---- same-name collisions: two real players sharing a name (e.g.
+            # the Dodgers' vs the Athletics' Max Muncy) are now carried as
+            # distinct "<name> (TEAM)" rows, each on its OWN projection — so the
+            # field can't roster one wearing the other's numbers. Surface both
+            # the resolved pairs and any DK duplicate we couldn't disambiguate.
+            _disambig = sorted(n for n in pool["Name"].unique() if " (" in n and n.endswith(")"))
+            if _disambig:
+                st.caption("🔀 Resolved same-name players to their own projection: "
+                           + ", ".join(f"**{n}**" for n in _disambig) + ".")
+            _dupe_names = dk_df["FullName"].map(normname).value_counts()
+            _dupe_names = set(_dupe_names[_dupe_names > 1].index)
+            _pool_bases = {normname(n.split(" (")[0]) for n in pool["Name"]}
+            _dropped_dupes = sorted(
+                {r.FullName for r in dk_df.itertuples()
+                 if normname(r.FullName) in _dupe_names
+                 and normname(r.FullName) not in _pool_bases})
+            if _dropped_dupes:
+                st.warning("⚠️ Same-name player(s) dropped (couldn't be matched to "
+                           "their own sim this slate, so they were excluded rather "
+                           f"than scored with another player's projection): "
+                           + ", ".join(_dropped_dupes) + ".")
 
             # ---- field ownership source ------------------------------------
             # Default: our sim-derived projected-ownership model. It derives
