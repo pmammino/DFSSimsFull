@@ -74,16 +74,32 @@ def test_unresolvable_collision_fails_safe():
     assert len(unresolved) == 2 and not assign
 
 
-def test_single_occurrence_is_not_a_collision():
-    # only one Muncy on the slate -> no collision handling, _row_for picks the
-    # team-matching row (not just iloc[0]).
+def test_single_occurrence_with_twin_is_still_disambiguated():
+    # Only the A's Muncy is in a posted lineup, but a Dodgers Muncy exists in the
+    # projection set (and the DK feed lists both). The single occurrence must
+    # STILL be disambiguated to its own team's row, so its plain-named twin can't
+    # later share its sim in build_pool.
     hproj = _hproj([{"Name": "Max Muncy", "Team": "Los", "BatSide": "L"},
                     {"Name": "Max Muncy", "Team": "Ath", "BatSide": "R"}])
     slate = _slate({"g2": {"away": ("ATH", ["Max Muncy"]), "home": ("SF", ["X"])}})
-    _, _, collided = M.resolve_collisions(slate, hproj)
-    assert M._norm("Max Muncy") not in collided          # single occurrence
-    row = M._row_for(hproj, "Max Muncy", team="ATH")
-    assert row["Team"] == "Ath"                            # team picked the right row
+    assign, unresolved, collided = M.resolve_collisions(slate, hproj)
+    assert M._norm("Max Muncy") in collided               # ambiguous in projections
+    assert not unresolved
+    # the on-slate A's Muncy -> the "Ath" (OAK) row, keyed "Max Muncy (OAK)"
+    row = hproj.loc[assign[(M._norm("Max Muncy"), "OAK")]]
+    assert row["Team"] == "Ath"
+
+
+def test_lineup_muncy_resolved_when_only_it_is_on_slate():
+    # symmetric: only the Dodgers Muncy is posted. Its team ("LA"->LAD) can't be
+    # canonicalised from the projection's "Los", but the A's row is confidently
+    # OAK (not on this slate) and is excluded, leaving "Los" by elimination.
+    hproj = _hproj([{"Name": "Max Muncy", "Team": "Los"},
+                    {"Name": "Max Muncy", "Team": "Ath"}])
+    slate = _slate({"g1": {"away": ("LA", ["Max Muncy"]), "home": ("SEA", ["Z"])}})
+    assign, unresolved, _ = M.resolve_collisions(slate, hproj)
+    assert not unresolved
+    assert hproj.loc[assign[(M._norm("Max Muncy"), "LAD")]]["Team"] == "Los"
 
 
 # --------------------------------------------------------------------------- #
@@ -128,6 +144,35 @@ def test_build_pool_drops_collision_with_no_matching_sim(tmp_path):
     ])
     pool = build_pool(dk, {}, {}, score)
     assert list(pool["Name"]) == ["Max Muncy (LAD)"]      # A's Muncy dropped
+
+
+def test_stale_plain_sim_never_shared_across_collision(tmp_path):
+    # sims predate the fix: a single plain "max muncy" key. Two DK Muncys must
+    # NOT both map onto it (the original bug) — with no team-qualified key for
+    # either, both are dropped (fail safe) rather than one wearing the other's
+    # projection.
+    score = {norm("Max Muncy"): np.full(10, 12.0), norm("Mike Trout"): np.full(10, 11.0)}
+    dk = _write_dk(tmp_path, [
+        {"FullName": "Max Muncy", "Team": "LAD", "Position": "3B",
+         "Salary": 5000, "Ownership": 10},
+        {"FullName": "Max Muncy", "Team": "OAK", "Position": "SS",
+         "Salary": 3500, "Ownership": 8},
+        {"FullName": "Mike Trout", "Team": "LAA", "Position": "OF",
+         "Salary": 6000, "Ownership": 20},
+    ])
+    pool = build_pool(dk, {}, {}, score)
+    assert "Max Muncy" not in set(pool["Name"])        # the shared plain key is refused
+    assert not any(n.startswith("Max Muncy") for n in pool["Name"])
+    assert "Mike Trout" in set(pool["Name"])           # non-collision unaffected
+
+
+def test_non_colliding_same_name_single_player_keeps_plain(tmp_path):
+    # a name that is NOT a collision (one DK team) still uses the plain sim key.
+    score = {norm("Max Muncy"): np.full(10, 12.0)}
+    dk = _write_dk(tmp_path, [{"FullName": "Max Muncy", "Team": "LAD",
+                               "Position": "3B", "Salary": 5000, "Ownership": 10}])
+    pool = build_pool(dk, {}, {}, score)
+    assert list(pool["Name"]) == ["Max Muncy"]
 
 
 def test_non_colliding_player_keeps_plain_name(tmp_path):

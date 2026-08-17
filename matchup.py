@@ -20,7 +20,12 @@ import json, os, unicodedata
 import numpy as np
 import pandas as pd
 
-from slate_config import canonical_team
+from slate_config import canonical_team, TEAM_CODE_MAP
+
+# the 30 canonical MLB codes — used to tell a resolved team ("OAK") from an
+# unresolvable projection-feed truncation ("LOS" from "Los", which could be
+# either LA club), so collision resolution only excludes rows it's sure about.
+_VALID_TEAMS = set(TEAM_CODE_MAP.values())
 
 # Per-PA event columns produced by the projection pipeline
 HIT_EVENTS = ['P_1B', 'P_2B', 'P_3B', 'P_HR', 'P_BB', 'P_HBP', 'P_K']  # P_SF/P_BIPOut are residual
@@ -202,21 +207,34 @@ def resolve_collisions(slate, hproj):
     collided    {name_key} — names that collide on the slate (need a sim_name)
     """
     from collections import defaultdict
-    occ = defaultdict(set)                       # name_key -> canonical teams on slate
+    occ = defaultdict(list)                       # name_key -> ordered canon teams on slate
     for g in slate.get('games', {}).values():
         for side in ('away', 'home'):
             ct = canonical_team(g[side])
             for p in g['lineups'][side]:
-                occ[_norm(p['name'])].add(ct)
+                nk = _norm(p['name'])
+                if ct not in occ[nk]:
+                    occ[nk].append(ct)
+
+    # A name needs disambiguation if a same-name TWIN could exist: either 2+ teams
+    # roster it on this slate, OR the projection set holds 2+ rows for it (its twin
+    # simply isn't in a posted lineup right now). The latter matters because the DK
+    # salary feed still lists BOTH players, so a single lineup occurrence keyed by
+    # a plain name would later be shared with its twin in build_pool.
+    proj_counts = hproj['name_key'].value_counts()
+    ambiguous = set(proj_counts[proj_counts >= 2].index)
 
     assign, unresolved, collided = {}, set(), set()
     for nk, teams in occ.items():
-        if len(teams) < 2:
-            continue                              # not a slate collision
+        if len(teams) < 2 and nk not in ambiguous:
+            continue                              # unique name — nothing to separate
         collided.add(nk)
         rows = hproj[hproj['name_key'] == nk]
-        if len(rows) < 2:                         # can't separate → fail safe
-            unresolved.update((nk, t) for t in teams)
+        if len(rows) < 2:
+            if len(rows) == 1 and len(teams) == 1:   # 1 row, 1 slate team → it's them
+                assign[(nk, teams[0])] = rows.index[0]
+            else:                                 # can't separate → fail safe
+                unresolved.update((nk, t) for t in teams)
             continue
         row_team = {idx: canonical_team(r['Team']) for idx, r in rows.iterrows()}
         remaining = set(row_team)
@@ -226,7 +244,13 @@ def resolve_collisions(slate, hproj):
                 assign[(nk, t)] = m[0]
                 remaining.discard(m[0])
         left = [t for t in teams if (nk, t) not in assign]
-        if len(left) == 1 and len(remaining) == 1:   # pass 2: elimination
+        # pass 2: drop rows that confidently belong to a team NOT on this slate
+        # (the twin who isn't playing) so they don't absorb a real occurrence.
+        for i in list(remaining):
+            rt = row_team[i]
+            if rt in _VALID_TEAMS and rt not in teams:
+                remaining.discard(i)
+        if len(left) == 1 and len(remaining) == 1:   # pass 3: elimination
             assign[(nk, left[0])] = remaining.pop()
         else:
             unresolved.update((nk, t) for t in left)
