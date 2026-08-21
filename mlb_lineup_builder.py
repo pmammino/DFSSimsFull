@@ -205,7 +205,7 @@ def fill_team_stack(rng, pool, team, k, open_slots, used_names, jitter=0.0,
 # ----------------------------------------------------------------------------- 
 class Builder:
     def __init__(self, pool, params, seed=None, uniform=False, team_weights=None,
-                 jitter=0.0, upside_attr=None, bringback_prob=0.0,
+                 jitter=0.0, upside_attr=None, ace_attr=None, bringback_prob=0.0,
                  game_stack_prob=None, order_weight=0.0,
                  ace_pitcher_prob=0.0, ace_pool_frac=0.35):
         self.pool = pool
@@ -242,6 +242,10 @@ class Builder:
         # ace_pool_frac: size of that top-ceiling "ace" tier as a fraction of the
         #   eligible arm pool (e.g. 0.35 => the top ~third of arms by ceiling).
         self.upside_attr = upside_attr
+        # ace_attr weights the PITCHER tier (defaults to upside_attr = pure
+        # ceiling). A floor-aware column here favors the reliable/true ace among
+        # arms of similar ceiling without changing hitter selection.
+        self.ace_attr = ace_attr or upside_attr
         self.bringback_prob = float(bringback_prob)
         self.game_stack_prob = (None if game_stack_prob is None
                                 else float(min(max(game_stack_prob, 1e-6),
@@ -360,17 +364,20 @@ class Builder:
         # ceiling (upside) column instead of ownership — the field pairs two
         # middling arms far more often than winners, who carry a true ceiling arm.
         def pw(ps):
-            w = np.array([_hit_weight(p, self.upside_attr) for p in ps], float)
+            w = np.array([_hit_weight(p, self.ace_attr) for p in ps], float)
             if self.jitter:
                 w = w * np.exp(self.jitter * rng.standard_normal(len(w)))
             return w
         p1_pool = cand
-        # ace bias: force the first pitcher from the top-ceiling tier of the arm
-        # pool so the lineup carries >=1 real ceiling/K arm. Only meaningful with an
-        # upside column (candidates); default prob 0 => prior behaviour for the field.
-        if (self.upside_attr is not None and self.ace_pitcher_prob
+        # ace bias: force the first pitcher from the top tier of the arm pool so
+        # the lineup carries >=1 real ceiling/K arm. Ranked by ace_attr — a
+        # ceiling-dominated, floor-aware weight — so among similar-ceiling arms the
+        # more reliable (true, usually pricier) ace is favored over a volatile mid
+        # arm. Only meaningful with an ace column (candidates); default prob 0 =>
+        # prior behaviour for the field.
+        if (self.ace_attr is not None and self.ace_pitcher_prob
                 and len(cand) > 2 and rng.random() < self.ace_pitcher_prob):
-            up = np.array([_hit_weight(p, self.upside_attr) for p in cand], float)
+            up = np.array([_hit_weight(p, self.ace_attr) for p in cand], float)
             k = max(1, int(round(self.ace_pool_frac * len(cand))))
             p1_pool = [cand[i] for i in np.argsort(-up)[:k]]
         w1 = pw(p1_pool)
