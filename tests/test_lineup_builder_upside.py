@@ -222,6 +222,53 @@ def test_ace_pitcher_prob_forces_a_ceiling_arm():
         (both_middling(off), both_middling(on))
 
 
+def test_ace_attr_favours_reliable_arm_at_equal_ceiling():
+    """Two arms with the SAME ceiling (Upside) but different reliability: the ace
+    tier keyed on a floor-aware `ace_attr` rosters the reliable arm much more,
+    while pure-ceiling weighting treats the two equal-ceiling arms about the same."""
+    opp = {'HOT': 'CLD', 'CLD': 'HOT', 'MID': 'FAR', 'FAR': 'MID'}
+    rows = []
+    for team in ['HOT', 'CLD', 'MID', 'FAR']:
+        for i, pos in enumerate(HIT_POS):
+            up = 12.0 if team == 'HOT' else 5.0
+            rows.append({'Name': f'{team}_{pos}{i}', 'Pos': pos, 'Team': team,
+                         'Opp': opp[team], 'Salary': 3000, 'Ownership': 5.0,
+                         'Upside': up, 'AceScore': up, 'Order': 0})
+    # P_REL and P_VOL share the top ceiling (Upside 20); AceScore separates them
+    # (P_REL reliable/high-floor). P_MID/P_LOW are clearly lesser arms.
+    arms = [('P_REL', 20.0, 30.0), ('P_VOL', 20.0, 10.0),
+            ('P_MID', 8.0, 8.0), ('P_LOW', 6.0, 6.0)]
+    for nm, up, ace in arms:
+        rows.append({'Name': nm, 'Pos': 'P', 'Team': nm, 'Opp': 'NON',
+                     'Salary': 6000, 'Ownership': 10.0, 'Upside': up,
+                     'AceScore': ace, 'Order': 0})
+    pool = Pool(pd.DataFrame(rows))
+
+    def rate(ls, nm):
+        return np.mean([any(p.Name == nm for p in lu['players']) for lu in ls])
+
+    ceil = build_n(pool, 300, upside_attr='Upside',
+                   ace_pitcher_prob=1.0, ace_pool_frac=0.5)
+    floor = build_n(pool, 300, upside_attr='Upside', ace_attr='AceScore',
+                    ace_pitcher_prob=1.0, ace_pool_frac=0.5)
+    r_ceil, v_ceil = rate(ceil, 'P_REL'), rate(ceil, 'P_VOL')
+    r_fl, v_fl = rate(floor, 'P_REL'), rate(floor, 'P_VOL')
+    # pure ceiling: the two equal-ceiling arms are rostered about equally
+    assert abs(r_ceil - v_ceil) < 0.15, (r_ceil, v_ceil)
+    # floor-aware ace tier: strongly favors the reliable arm over its volatile twin
+    assert r_fl > v_fl + 0.20, (r_fl, v_fl)
+    assert r_fl > r_ceil, (r_ceil, r_fl)
+
+
+def test_ace_attr_defaults_to_upside():
+    # not passing ace_attr keeps the old pure-ceiling ace tier (backward compat)
+    pool = make_pool()
+    b = Builder(pool, DEFAULT_PARAMS, seed=1, upside_attr='Upside')
+    assert b.ace_attr == 'Upside'
+    b2 = Builder(pool, DEFAULT_PARAMS, seed=1)
+    assert b2.ace_attr is None
+
+
 def test_field_builder_unaffected_by_defaults():
     """A Builder with no new kwargs must behave exactly as before: same lineups
     for the same seed, using ownership weighting and the field's game-stack rate."""

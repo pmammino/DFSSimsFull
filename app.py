@@ -115,6 +115,13 @@ FIELD_SHARP_CEIL_TILT = 1.0    # exp() tilt on p90 ceiling for the sharp portion
 FIELD_SHARP_BRINGBACK = 0.25   # sharp lineups' primary-opponent bring-back rate
 FIELD_SHARP_GAMESTACK = 0.35   # sharp lineups' game-stack (secondary = opponent) rate
 FIELD_SHARP_ACE = 0.50         # sharp lineups' chance of a top-tier ceiling ace
+# Pitcher ace-tier reliability nudge: weight on the z-scored sim FLOOR (p10) added
+# to the z-scored ceiling when ranking the ace tier, so among similar-ceiling arms
+# the higher-floor (true, usually pricier) ace is favored over a volatile mid arm.
+# Mild by design — ceiling stays the dominant signal. 0 reproduces pure-ceiling
+# behavior. Calibrated on Aug-2026 pitchers (same-ceiling higher-floor arm won
+# 57% / +3.0 DK pts); a tie-breaker, not a re-ranking.
+ACE_FLOOR_WEIGHT = 0.35
 
 # Brand palette — navy / red
 BRAND = "#F22E45"   # red accent
@@ -2801,10 +2808,12 @@ with tabs[0]:
             # (one-off) and intra-stack bat selection toward real UPSIDE rather
             # than the mean/floor blend, so those spots are elite-upside bats.
             cel = {}
+            flr = {}                       # p10 floor — the reliability signal
             for nm in cdf["Name"].unique():
                 a = score_k.get(normname(nm))
                 if a is not None and len(a):
                     cel[nm] = float(np.percentile(a, 90))
+                    flr[nm] = float(np.percentile(a, 10))
 
             # ---- near-twin projection shrink (uncertainty-aware scoring) ----
             # Players who are statistically tied on projection shouldn't be split
@@ -2862,9 +2871,25 @@ with tabs[0]:
                     float(np.exp(float(talent_tilt) *
                                  (zcp if r.Pos == "P" else zc).get(r.Name, 0.0)))
                     for r in cdf.itertuples()]
+                # AceScore: the PITCHER ace-tier weight. Ceiling-dominated, nudged
+                # by the sim floor (p10) so that among arms with a SIMILAR ceiling
+                # the more reliable one — higher floor, i.e. the true ace — ranks
+                # above a volatile mid-priced arm with the same ceiling, without
+                # overriding ceiling (which would cost the upside the tier exists
+                # for). Calibrated mild: on Aug-2026 pitchers, among same-ceiling
+                # pairs (±1.5) the higher-floor arm outscored 57% of the time,
+                # +3.0 DK pts on average — a tie-breaker, not a new ranking.
+                # Hitters keep the pure-ceiling Upside.
+                zfp = zmap(set(cdf[cdf["Pos"] == "P"]["Name"]), flr)
+                cdf["AceScore"] = [
+                    float(np.exp(float(talent_tilt) *
+                                 (zcp.get(r.Name, 0.0) + ACE_FLOOR_WEIGHT * zfp.get(r.Name, 0.0)
+                                  if r.Pos == "P" else zc.get(r.Name, 0.0))))
+                    for r in cdf.itertuples()]
             else:
                 cdf["Ownership"] = 1.0   # projection-blind uniform players
                 cdf["Upside"] = 1.0
+                cdf["AceScore"] = 1.0
 
             # batting-order slots (1-9) from posted lineups, when available; 0/absent
             # -> order-blind. Drives the Builder's order tilt for stacks/one-offs.
@@ -2910,7 +2935,8 @@ with tabs[0]:
             def _build_cands():
                 cb = Builder(Pool(cdf), cand_params, seed=int(seed_cand), uniform=True,
                              team_weights=team_weights, jitter=float(cand_jitter),
-                             upside_attr="Upside", bringback_prob=float(bringback),
+                             upside_attr="Upside", ace_attr="AceScore",
+                             bringback_prob=float(bringback),
                              game_stack_prob=float(game_stack),
                              order_weight=float(order_tilt),
                              ace_pitcher_prob=float(ace_pitcher))
