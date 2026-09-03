@@ -52,6 +52,15 @@ ARTIFACTS = [
 STAMP = "out/.build_stamp.json"
 LOCK_KEY = "_refresh.lock"
 
+# The Underdog Battle Royale export for the browser extension's Cloudflare
+# Worker (see ud_json_export.py). Uploaded to the LITERAL bucket-root key
+# below — never namespaced under the configured `prefix` like ARTIFACTS above
+# — because the Worker is hardcoded to look under a top-level `sims/` folder.
+# Day-scoped only: each push overwrites this one key, and it is deliberately
+# excluded from the dated history/ snapshot (no historic UD sims are kept).
+UD_JSON_LOCAL = "deliverables/slate_UD.json"
+UD_JSON_KEY = "sims/slate_UD.json"
+
 # --------------------------------------------------------------------------- #
 # Dated history retention — keep the last N days of each build's slate-specific
 # prediction set so simulation accuracy can be reviewed after the fact (compare
@@ -309,6 +318,14 @@ def push():
             continue
         try:
             s3.upload_file(src, cfg["bucket"], _key(cfg, rel))
+        except Exception:
+            ok = False
+    # Underdog Battle Royale JSON: always the literal bucket-root sims/ key,
+    # ignoring `prefix` — see UD_JSON_KEY.
+    ud_src = os.path.join(HERE, UD_JSON_LOCAL)
+    if os.path.exists(ud_src):
+        try:
+            s3.upload_file(ud_src, cfg["bucket"], UD_JSON_KEY)
         except Exception:
             ok = False
     return ok
