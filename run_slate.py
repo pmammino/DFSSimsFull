@@ -21,7 +21,9 @@ Chain:
                   both DraftKings and Underdog scoring
   5. VALIDATE     correlation + stacking checks
   6. WRITE        projection CSVs (floor/median/ceiling), per-sim .npy (DK +
-                  Underdog), manifest
+                  Underdog), manifest, and the Underdog Battle Royale JSON
+                  export (deliverables/slate_UD.json -> R2 sims/slate_UD.json,
+                  see ud_json_export.py / shared_store.py)
 
 Usage:
   python run_slate.py --confirmed data/confirmed.xml --expected data/expected.xml \
@@ -35,6 +37,7 @@ import numpy as np
 import slate_ingest
 import matchup as M
 import sim_proj
+import ud_json_export
 import validate
 
 TARGET_YEAR = 2027
@@ -202,6 +205,12 @@ def main():
     np.save(os.path.join(DELIV_DIR, 'hitter_ud_sims.npy'), hitter_ud, allow_pickle=True)
     np.save(os.path.join(DELIV_DIR, 'pitcher_ud_sims.npy'), pitcher_ud, allow_pickle=True)
     np.save(os.path.join(DELIV_DIR, 'hitter_stat_sims.npy'), hitter_stat, allow_pickle=True)
+    # Underdog Battle Royale export for the browser extension's Worker (synced
+    # to R2 at the literal bucket-root key sims/slate_UD.json — see
+    # shared_store.UD_JSON_KEY). Day-scoped only: this file is overwritten on
+    # every build, no dated history is kept for it.
+    ud_json_export.write_ud_json(hitter_ud, pitcher_ud,
+                                 os.path.join(DELIV_DIR, 'slate_UD.json'))
     opener_games = [f"{gid}:{s}" for gid, g in slate['games'].items()
                     for s in ('away','home') if g['pitchers'][s].get('opener')]
     manifest = {'date': slate['date'], 'n_sims': args.n_sims, 'seed': args.seed,

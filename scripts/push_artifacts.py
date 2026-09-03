@@ -74,12 +74,13 @@ def main():
     print("Shared artifact set:")
     total = 0
     missing = []
-    for rel in shared_store.ARTIFACTS:
+    for rel in shared_store.ARTIFACTS + [shared_store.UD_JSON_LOCAL]:
         path = os.path.join(HERE, rel)
         if os.path.exists(path):
             size = os.path.getsize(path)
             total += size
-            print(f"  ✓ {rel:<48} {size/1e6:7.2f} MB")
+            key = shared_store.UD_JSON_KEY if rel == shared_store.UD_JSON_LOCAL else rel
+            print(f"  ✓ {rel:<48} {size/1e6:7.2f} MB  -> {key}")
         else:
             missing.append(rel)
             print(f"  ✗ {rel:<48} (missing)")
