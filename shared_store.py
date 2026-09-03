@@ -17,8 +17,8 @@ Streamlit secrets schema (.streamlit/secrets.toml):
     secret_access_key = "..."      # optional
 
 The shared state is the minimal set the app needs to be current and scorable:
-the two DK-point sim arrays, the per-PA projections, the build stamp (freshness
-source of truth), and the slate the sims were built from.
+the DK- and Underdog-scored sim arrays, the per-PA projections, the build stamp
+(freshness source of truth), and the slate the sims were built from.
 """
 import glob
 import json
@@ -33,6 +33,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ARTIFACTS = [
     "deliverables/hitter_dk_sims.npy",
     "deliverables/pitcher_dk_sims.npy",
+    "deliverables/hitter_ud_sims.npy",
+    "deliverables/pitcher_ud_sims.npy",
     "out/hitter_pa_projections_2027.csv",
     "out/pitcher_pa_projections_2027.csv",
     "out/.build_stamp.json",
@@ -65,15 +67,18 @@ HISTORY_PREFIX = "history"
 HISTORY_KEEP_DAYS = 4
 HISTORY_MAX_MB = 2048
 
-# The per-date review set: the DK sim arrays (the predicted distributions), the
-# slate they were built from, the build stamp, and the human-readable projection
-# summaries + manifest. Each entry is (local_source, history_basename); dated
+# The per-date review set: the DK- and Underdog-scored sim arrays (the
+# predicted distributions), the slate they were built from, the build stamp,
+# and the human-readable projection summaries + manifest. Each entry is
+# (local_source, history_basename); dated
 # deliverable names are resolved from the slate date at snapshot time so every
 # date's folder is self-contained with stable names.
 def _history_specs(date):
     pairs = [
         ("deliverables/hitter_dk_sims.npy", "hitter_dk_sims.npy"),
         ("deliverables/pitcher_dk_sims.npy", "pitcher_dk_sims.npy"),
+        ("deliverables/hitter_ud_sims.npy", "hitter_ud_sims.npy"),
+        ("deliverables/pitcher_ud_sims.npy", "pitcher_ud_sims.npy"),
         ("data/slate.json", "slate.json"),
         (STAMP, "build_stamp.json"),
         (f"deliverables/hitter_projections_{date}.csv", "hitter_projections.csv"),

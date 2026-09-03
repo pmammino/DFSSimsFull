@@ -1,19 +1,27 @@
 """
 run_slate.py — full daily pipeline, projection-driven.
 
+Builds sims for EVERY game on the day (not just one DK slate's game window),
+so one build serves every slate posted that date; a specific slate's player
+pool is filtered out of this full-day universe later, at lineup-build time
+(see stage_d.build_pool).
+
 Chain:
   1. PROJECTIONS  run_pipeline.py (handedness-split per-PA from BIP/XGBoost)
                   -> out/{hitter,pitcher}_pa_projections_<year>.csv
      (skipped automatically if today's projection CSVs already exist; use
       --refresh-proj to force a rebuild from fresh Statcast/statsapi data)
   2. SLATE        slate_ingest.build_slate(): confirmed + expected lineups,
-                  opener/primary, FantasyLabs Vegas implied totals
+                  opener/primary, FantasyLabs Vegas implied totals, for every
+                  game on the day
   3. MATCHUP      matchup.build_matchup_inputs(): pick each hitter's vL/vR split
                   by opposing pitcher hand, park-adjust; blend pitcher splits by
                   the lineup's L/R share
-  4. SIMULATE     sim_proj.simulate(): 10k correlated DK sims/player
+  4. SIMULATE     sim_proj.simulate(): 10k correlated sims/player, scored under
+                  both DraftKings and Underdog scoring
   5. VALIDATE     correlation + stacking checks
-  6. WRITE        projection CSVs (floor/median/ceiling), per-sim .npy, manifest
+  6. WRITE        projection CSVs (floor/median/ceiling), per-sim .npy (DK +
+                  Underdog), manifest
 
 Usage:
   python run_slate.py --confirmed data/confirmed.xml --expected data/expected.xml \
@@ -118,15 +126,6 @@ def main():
     ap.add_argument('--team-totals', help='JSON {team_code: implied_runs} to '
                     'override the slate Vegas team totals (replaces that team\'s '
                     'implied total before the Vegas-vs-slate-average scaling).')
-    ap.add_argument('--slate-players', help='JSON list of player names that are '
-                    'on the DFS slate. Used to drop the off-slate game of a '
-                    'double-header so its pitcher/matchup does not leak into the '
-                    'sims (see slate_ingest.filter_slate_doubleheaders).')
-    ap.add_argument('--slate-window', help='JSON {"start":...,"end":...} with the '
-                    'DK slate SlateStart/SlateEnd timestamps. Games starting '
-                    'outside this window are dropped — the precise way to pick '
-                    'the on-slate game of a double-header (see '
-                    'slate_ingest.filter_slate_by_window).')
     ap.add_argument('--total-baseline', type=float, default=LEAGUE_AVG_RUNS,
                     help=f'Implied-total that maps to a neutral 1.0 offense scale '
                          f'(default {LEAGUE_AVG_RUNS}, the league average). Each '
@@ -146,14 +145,14 @@ def main():
         print(f"[2/6] Ingesting HISTORICAL slate for {args.date} "
               "(confirmed + expected + Vegas)...")
     else:
-        print("[2/6] Ingesting slate (confirmed + expected + Vegas)...")
+        print("[2/6] Ingesting the full day's games (confirmed + expected + Vegas)...")
     cx = open(args.confirmed).read() if args.confirmed else None
     ex = open(args.expected).read() if args.expected else None
     vj = open(args.vegas).read() if args.vegas else None
-    sp = json.load(open(args.slate_players)) if args.slate_players else None
-    sw = json.load(open(args.slate_window)) if args.slate_window else None
-    slate = slate_ingest.build_slate(cx, ex, vegas_json=vj, date=args.date,
-                                     slate_players=sp, slate_window=sw)
+    # No slate_players/slate_window scoping: every game on the day is built, so
+    # one build serves every DK slate for that date. Filtering down to a
+    # specific slate's players happens later, at lineup-build time (stage_d.py).
+    slate = slate_ingest.build_slate(cx, ex, vegas_json=vj, date=args.date)
     print(f"   date={slate['date']} games={len(slate['games'])}")
     if args.date and not slate['games']:
         print(f"   WARNING: no games returned for {args.date} — the feed may not "
@@ -182,8 +181,8 @@ def main():
               f"projection this slate): {coll['dropped']}")
 
     # 4) simulate
-    print(f"[4/6] Simulating {args.n_sims} correlated sims/player...")
-    hitter_dk, pitcher_dk, hitter_stat, hrows, prows, _ = sim_proj.simulate(
+    print(f"[4/6] Simulating {args.n_sims} correlated sims/player (DK + Underdog scoring)...")
+    hitter_dk, pitcher_dk, hitter_ud, pitcher_ud, hitter_stat, hrows, prows, _ = sim_proj.simulate(
         matchup, n_sims=args.n_sims, seed=args.seed)
     print(f"   hitters={len(hitter_dk)} pitchers={len(pitcher_dk)}")
 
@@ -200,11 +199,14 @@ def main():
     write_csv(os.path.join(DELIV_DIR, f"pitcher_projections_{stamp}.csv"), prows, PFIELDS)
     np.save(os.path.join(DELIV_DIR, 'hitter_dk_sims.npy'), hitter_dk, allow_pickle=True)
     np.save(os.path.join(DELIV_DIR, 'pitcher_dk_sims.npy'), pitcher_dk, allow_pickle=True)
+    np.save(os.path.join(DELIV_DIR, 'hitter_ud_sims.npy'), hitter_ud, allow_pickle=True)
+    np.save(os.path.join(DELIV_DIR, 'pitcher_ud_sims.npy'), pitcher_ud, allow_pickle=True)
     np.save(os.path.join(DELIV_DIR, 'hitter_stat_sims.npy'), hitter_stat, allow_pickle=True)
     opener_games = [f"{gid}:{s}" for gid, g in slate['games'].items()
                     for s in ('away','home') if g['pitchers'][s].get('opener')]
     manifest = {'date': slate['date'], 'n_sims': args.n_sims, 'seed': args.seed,
                 'version': 'projection_driven_v1', 'target_year': TARGET_YEAR,
+                'scoring_formats': ['dk', 'ud'],
                 'projection_source': 'handedness per-PA (BIP/XGBoost) + park + vL/vR splits',
                 'n_games': len(slate['games']),
                 'opener_primary': opener_games,
