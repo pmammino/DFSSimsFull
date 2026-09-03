@@ -1478,8 +1478,6 @@ def parse_team_totals_csv(raw_text, valid_teams=None):
 
 
 TOTALS_OVERRIDE_PATH = os.path.join(HERE, "data", "team_totals_override.json")
-SLATE_PLAYERS_PATH = os.path.join(HERE, "data", "slate_players.json")
-SLATE_WINDOW_PATH = os.path.join(HERE, "data", "slate_window.json")
 
 
 def _tail(text, n=15):
@@ -1531,8 +1529,7 @@ def _stamp_after_sims(today, live_sig):
                       slate_date=(fresh or {}).get("date") or (live_sig or {}).get("date"))
 
 
-def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
-                 slate_window=None):
+def ensure_fresh(status, force=False, totals_path=None):
     """Refresh only what's stale, with the daily SIM rebuild decoupled from the
     heavier projection rebuild. When `force` is set, rebuild both projections
     (bypassing the once-a-day attempt guard) and sims regardless of staleness.
@@ -1540,48 +1537,21 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
       * Projections are rebuilt best-effort when stale — if that fails, the run
         continues on the existing projections (they change little day to day),
         and the attempt is not repeated again the same day.
-      * The correlated SIMS are rebuilt from TODAY'S live slate (lineups,
-        starting pitchers, Vegas game totals) whenever the slate moved, a new
-        game day started, projections were rebuilt, or no sims exist — this is
-        what actually pulls the new lineups/matchups/totals into the sims.
-
-    `slate_players` (optional): the FullNames on the chosen DK slate. Passed to
-    the slate ingest so the off-slate game of a double-header is dropped (its
-    pitcher/matchup would otherwise leak into today's rosterable set and the
-    sims — see slate_ingest.filter_slate_doubleheaders).
-
-    `slate_window` (optional): {"start","end"} with the chosen slate's
-    SlateStart/SlateEnd. Passed through so games starting outside the slate
-    window are dropped — the precise fix for a double-header, whose two games
-    both appear in the slate's player list (see
-    slate_ingest.filter_slate_by_window).
+      * The correlated SIMS are rebuilt from TODAY'S live feed for the WHOLE
+        day (every game, not just one DK slate's window) whenever any team's
+        lineup/starter/Vegas total moved, a new game day started, projections
+        were rebuilt, or no sims exist — this is what actually pulls a late
+        lineup swap or pitcher scratch into the sims. Because the live feed is
+        no longer scoped to one slate's game window, switching between DK
+        slates on the same date never triggers a rebuild by itself — a
+        specific slate's player pool is filtered out of these full-day sims
+        later, at lineup-build time.
 
     Returns (notes, sims_changed, live_playable) where live_playable is the
     set of normnames eligible to be rostered today (lineup hitters + starting/
     opener/primary pitchers), or None if the live feed couldn't be read."""
     notes, sims_changed = [], False
     today = datetime.date.today().isoformat()
-    # persist the slate's player list so the sim rebuild (a subprocess) can drop
-    # the off-slate half of a double-header the same way the live read below does
-    slate_players = list(slate_players) if slate_players is not None else None
-    slate_players_path = None
-    if slate_players:
-        try:
-            os.makedirs(os.path.dirname(SLATE_PLAYERS_PATH), exist_ok=True)
-            json.dump(slate_players, open(SLATE_PLAYERS_PATH, "w"))
-            slate_players_path = SLATE_PLAYERS_PATH
-        except Exception:
-            slate_players_path = None
-    # persist the slate time window so the sim rebuild (a subprocess) drops the
-    # same off-window (e.g. earlier double-header) games the live read below does
-    slate_window_path = None
-    if slate_window:
-        try:
-            os.makedirs(os.path.dirname(SLATE_WINDOW_PATH), exist_ok=True)
-            json.dump(slate_window, open(SLATE_WINDOW_PATH, "w"))
-            slate_window_path = SLATE_WINDOW_PATH
-        except Exception:
-            slate_window_path = None
     # sync down the latest shared build before deciding anything
     if shared_store.enabled():
         try:
@@ -1596,9 +1566,8 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
     st.session_state["batting_order_map"] = {}
     live = live_sig = live_starters = live_playable = None
     try:
-        status.write("Reading the live lineup/matchup feed…")
-        live = slate_ingest.build_slate(write=False, slate_players=slate_players,
-                                        slate_window=slate_window)
+        status.write("Reading the live lineup/matchup feed for the full day…")
+        live = slate_ingest.build_slate(write=False)
         live_sig = slate_change_signature(live)
         live_starters = {normname(tg["sp"]) for tg in live_sig["teams"].values()
                          if tg.get("sp")}
@@ -1764,15 +1733,11 @@ def ensure_fresh(status, force=False, totals_path=None, slate_players=None,
                 why = "forced refresh"
             else:
                 why = "first run"
-            status.write("Rebuilding correlated sims from today's live slate "
+            status.write("Rebuilding correlated sims for today's full slate of games "
                          f"(lineups + matchups + Vegas totals) — {why}…")
             cmd = ["run_slate.py"]
             if totals_path is not None:
                 cmd += ["--team-totals", totals_path]
-            if slate_players_path is not None:
-                cmd += ["--slate-players", slate_players_path]
-            if slate_window_path is not None:
-                cmd += ["--slate-window", slate_window_path]
             ok, out = run_script(cmd, "Correlated sims (Stage C)", status)
             if ok:
                 _stamp_after_sims(today, live_sig)
@@ -2103,12 +2068,6 @@ with tabs[0]:
         slate = next(s for s in slates if s["slate_id"] == sid)
         dk_df, id_map = dk_slate_feed.to_dk_df(slate)
         st.session_state["_slate_fmt"] = slate.get("format", "classic")
-        # the slate's time window pins which games are actually on the slate —
-        # essential on a double-header day, where the player list carries both
-        # games (see slate_ingest.filter_slate_by_window)
-        st.session_state["_slate_window"] = (
-            {"start": slate.get("start"), "end": slate.get("end")}
-            if slate.get("start") and slate.get("end") else None)
         unowned = slate["n_players"] - slate["n_owned"]
         games_lbl = ("1 game (Showdown)" if slate.get("format") == "showdown"
                      else f"{slate['n_games']} games")
@@ -2510,14 +2469,10 @@ with tabs[0]:
                 st.write(f"Applying {len(tt_override)} team-total override(s): "
                          + ", ".join(f"{t} {v:g}" for t, v in tt_override.items()))
             # ---- 0) freshness: rebuild projections / sims when stale ----
-            # the chosen slate's players tell the ingest which half of a
-            # double-header is actually on the slate (only the pitchers differ)
-            slate_players = (dk_df["FullName"].tolist()
-                             if dk_df is not None and "FullName" in dk_df else None)
-            slate_window = st.session_state.get("_slate_window")
+            # sims cover the whole day's games; this slate's players are only
+            # used later to filter the pool (see stage_d.build_pool)
             notes, sims_changed, live_playable = ensure_fresh(
-                status, force=False, totals_path=tt_path,
-                slate_players=slate_players, slate_window=slate_window)
+                status, force=False, totals_path=tt_path)
             for n in notes:
                 st.write("• " + n)
             H_, P_, score_, n_sim_ = H, P, score, n_sim

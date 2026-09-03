@@ -32,6 +32,13 @@ def dk_hitter(s, d, t, hr, rbi, r, bb, hbp, sb):
 def dk_pitcher(outs, k, win, er, h, bb, hbp, cg, cgs, nh):
     return outs*0.75 + k*2 + win*4 - er*2 - h*0.6 - bb*0.6 - hbp*0.6 + cg*2.5 + cgs*2.5 + nh*5
 
+# ── Underdog (UD) scoring ────────────────────────────────────────────────────
+def ud_hitter(s, d, t, hr, bb, hbp, rbi, r, sb):
+    return s*3 + d*6 + t*8 + hr*10 + bb*3 + hbp*3 + rbi*2 + r*2 + sb*4
+
+def ud_pitcher(ip, k, win, qs, er):
+    return ip*1 + k*1 + win*2 + qs*3 - er*1
+
 # correlation loadings (validated: teammate H-H ~+0.24, hitter vs opposing SP
 # ~-0.37). Left at the validated values on purpose. Recalibration testing against
 # 5 real DK GPP contest-standings (target winner/median ~2.06x, p99/median
@@ -189,14 +196,16 @@ def _sim_pitcher(vec, bf_sim, m_opp, z, can_win, win_base, outs_cap, rng, n):
     else:
         win = np.zeros(n, int)
     cg = (ip >= 9.0).astype(int); cgs = (cg & (er == 0)).astype(int); nh = (cgs & (h == 0)).astype(int)
+    qs = ((ip >= 6.0) & (er <= 3)).astype(int)
     dk = dk_pitcher(outs, k, win, er, h, bb, hbp, cg, cgs, nh)
-    return dict(dk=dk, ip=ip, k=k, bb=bb, h=h, hr=hr, er=er, win=win, bf=bf)
+    ud = ud_pitcher(ip, k, win, qs, er)
+    return dict(dk=dk, ud=ud, ip=ip, k=k, bb=bb, h=h, hr=hr, er=er, win=win, bf=bf, qs=qs)
 
 
 def simulate(matchup, n_sims=10000, seed=20260610):
     rng = np.random.default_rng(seed)
     n = n_sims
-    hitter_dk, pitcher_dk, hitter_stat = {}, {}, {}
+    hitter_dk, pitcher_dk, hitter_ud, pitcher_ud, hitter_stat = {}, {}, {}, {}, {}
     hrows, prows = [], []
 
     for gid, g in matchup['games'].items():
@@ -346,10 +355,12 @@ def simulate(matchup, n_sims=10000, seed=20260610):
                 if p.get('dropped'):
                     continue
                 dk = dk_hitter(sgl, dbl, trp, hr, rbi_s, r_s, bb, hbp, sb_s)
+                ud = ud_hitter(sgl, dbl, trp, hr, bb, hbp, rbi_s, r_s, sb_s)
                 # Colliding players carry a team-qualified sim_name so the two
                 # real players keep DISTINCT arrays through the pool/build chain.
                 nm = p.get('sim_name') or p['name']
                 hitter_dk[nm] = dk
+                hitter_ud[nm] = ud
                 hitter_stat[nm] = {'1B':sgl,'2B':dbl,'3B':trp,'HR':hr,'R':r_s,'RBI':rbi_s,
                                    'BB':bb,'HBP':hbp,'K':ks,'SB':sb_s,'PA':pa}
                 opp_sp = (g['pitchers']['home' if side=='away' else 'away'].get('opener')
@@ -393,6 +404,7 @@ def simulate(matchup, n_sims=10000, seed=20260610):
                     seg_p = _sim_pitcher(vp, bf_p, m_opp, z, False, 0.0, outs_cap_p, rng, n)
                 for role, info, seg in [('OPENER', ps['opener'], seg_o), ('PRIMARY', ps['primary'], seg_p)]:
                     pitcher_dk[info['name']] = seg['dk']
+                    pitcher_ud[info['name']] = seg['ud']
                     prows.append(_prow(info['name'], role, side, label, g, opp_side, opp_implied, seg))
             else:
                 role_key = 'starter' if 'starter' in ps else next(iter(ps), None)
@@ -433,9 +445,11 @@ def simulate(matchup, n_sims=10000, seed=20260610):
                     outs_cap_s = int(np.clip(round(ip_plan*3) + 3, 3, 12))
                     seg = _sim_pitcher(v, bf, m_opp, z, False, 0.0, outs_cap_s, rng, n)
                 pitcher_dk[info['name']] = seg['dk']
+                pitcher_ud[info['name']] = seg['ud']
                 prows.append(_prow(info['name'], 'STARTER', side, label, g, opp_side, opp_implied, seg))
 
-    return hitter_dk, pitcher_dk, hitter_stat, hrows, prows, matchup.get('missing', {})
+    return (hitter_dk, pitcher_dk, hitter_ud, pitcher_ud, hitter_stat, hrows, prows,
+            matchup.get('missing', {}))
 
 
 def _pct(a,q): return round(float(np.percentile(a,q)),2)

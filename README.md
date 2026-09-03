@@ -57,7 +57,7 @@ are listed in the manifest's `missing_from_projection`.
 - `refresh_and_run.py` -- one-command orchestrator (STAGE A->B->C)
 - `prefetch_bip.py`    -- STAGE A: pull Statcast BIP seasons -> bip_inputs/
 - `run_pipeline.py`    -- STAGE B: 12-step handedness per-PA projection engine
-- `run_slate.py`       -- STAGE C: slate ingest -> matchup -> correlated sims
+- `run_slate.py`       -- STAGE C: slate ingest -> matchup -> correlated sims, for EVERY game on the day (not one DK slate's window); a specific slate's players are filtered out of this full-day pool at lineup-build time (stage_d.build_pool)
 
 ### Projection engine (STAGE B)
 pipeline_config.py, data_acquisition.py, rate_models.py, bip_imputation.py,
@@ -70,7 +70,7 @@ convert_rds_to_csv.R / convert_historical_lean.R (optional, only if you feed
 - `slate_ingest.py` -- confirmed + expected lineup feeds, opener/primary, Vegas totals
 - `slate_config.py` -- park factors, team-code map, DK scoring (slate side)
 - `matchup.py`      -- pick hitter vL/vR split by opposing-pitcher hand + park; blend pitcher splits by lineup L/R share; league-avg fallback
-- `sim_proj.py`     -- 10k correlated DK sims from projection per-PA vectors; opener/primary; TBF innings
+- `sim_proj.py`     -- 10k correlated sims from projection per-PA vectors, scored under both DraftKings and Underdog scoring; opener/primary; TBF innings
 - `validate.py`     -- correlation + stacking checks (PASS/CHECK)
 
 ## Outputs
@@ -81,7 +81,8 @@ convert_rds_to_csv.R / convert_historical_lean.R (optional, only if you feed
 `deliverables/`:
 - hitter_projections_<date>.csv   -- proj, floor_p25, median_p50, ceil_p75, p10/p90/p99, per-stat means, handedness, opp SP, lineup source
 - pitcher_projections_<date>.csv  -- same percentiles + role, IP/BF/K/BB/ER/H/HR, win%, QS%
-- hitter_dk_sims.npy / pitcher_dk_sims.npy  -- {name: array[N_SIMS]} DK points
+- hitter_dk_sims.npy / pitcher_dk_sims.npy  -- {name: array[N_SIMS]} DraftKings points, for every player on the day (not just one slate)
+- hitter_ud_sims.npy / pitcher_ud_sims.npy  -- {name: array[N_SIMS]} Underdog points, same player universe
 - hitter_stat_sims.npy            -- {name: {1B,2B,3B,HR,R,RBI,BB,HBP,K,SB,PA: array}}
 - sim_manifest_<date>.json        -- provenance, loadings, realized correlations, stack check, validation, missing list
 
@@ -90,6 +91,8 @@ Reload:
 import numpy as np
 hdk = np.load('deliverables/hitter_dk_sims.npy', allow_pickle=True).item()
 pdk = np.load('deliverables/pitcher_dk_sims.npy', allow_pickle=True).item()
+hud = np.load('deliverables/hitter_ud_sims.npy', allow_pickle=True).item()
+pud = np.load('deliverables/pitcher_ud_sims.npy', allow_pickle=True).item()
 ```
 
 ## Correlation design

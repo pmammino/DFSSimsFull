@@ -57,7 +57,7 @@ def _matchup():
 def test_every_home_run_books_its_own_run_and_rbi():
     """In every sim where a hitter has HR>0, he must be credited at least one
     run and at least one RBI per homer (the core P2 guarantee)."""
-    _, _, hitter_stat, _, _, _ = sim_proj.simulate(_matchup(), n_sims=4000, seed=1)
+    _, _, _, _, hitter_stat, _, _, _ = sim_proj.simulate(_matchup(), n_sims=4000, seed=1)
     assert hitter_stat
     for nm, st in hitter_stat.items():
         hr = np.asarray(st["HR"]); R = np.asarray(st["R"]); RBI = np.asarray(st["RBI"])
@@ -71,7 +71,7 @@ def test_team_run_rbi_conservation():
     """Per sim, a team's Sum R must equal its Sum RBI (both equal team runs).
     Clips at R<=6 / RBI<=8 can nick a handful of extreme sims, so require the
     identity to hold in the overwhelming majority."""
-    _, _, hitter_stat, _, _, _ = sim_proj.simulate(_matchup(), n_sims=4000, seed=2)
+    _, _, _, _, hitter_stat, _, _, _ = sim_proj.simulate(_matchup(), n_sims=4000, seed=2)
     for team in ("A", "H"):
         names = [nm for nm in hitter_stat if nm.startswith(team)]
         sumR = sum(np.asarray(hitter_stat[nm]["R"]) for nm in names)
@@ -82,7 +82,7 @@ def test_team_run_rbi_conservation():
 def test_solo_home_run_scores_at_least_14_dk():
     """A sim with exactly 1 HR, no other hits/walks/steals must score >= 14 DK
     (10 HR + 2 R + 2 RBI) — proof the run/RBI points attach to the homer."""
-    _, _, hitter_stat, _, _, _ = sim_proj.simulate(_matchup(), n_sims=6000, seed=3)
+    _, _, _, _, hitter_stat, _, _, _ = sim_proj.simulate(_matchup(), n_sims=6000, seed=3)
     seen = False
     for nm, st in hitter_stat.items():
         hr = np.asarray(st["HR"]); tb = (np.asarray(st["1B"]) + np.asarray(st["2B"])
