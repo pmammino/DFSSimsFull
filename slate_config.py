@@ -145,3 +145,26 @@ def canonical_team(code_or_name):
         return full
     up = s.upper()
     return _CANON_ALIASES.get(up, std_code(up))
+
+
+def team_alias_fingerprint():
+    """Stable hash of every table ``canonical_team`` consults.
+
+    A same-name collision (e.g. the Dodgers' vs. the Athletics' Max Muncy) is
+    keyed through the sim/pool chain by ``"<name> (<CANON_TEAM>)"`` (see
+    matchup.sim_name / stage_d._sim_key_for) — the canonical code baked into a
+    cached sim's key. If a team relocates/renames and a NEW raw code shows up
+    in a feed (DK, Rotowire, StatsAPI) that gets added to one of these alias
+    tables, ``canonical_team`` starts returning a DIFFERENT code for that raw
+    string than the code baked into sims built before the table changed — so a
+    same-name pair that resolved fine yesterday goes "ambiguous" today, with no
+    other signal that the cache is now stale (``SIM_COLLISION_VERSION`` only
+    tracks the collision *mechanism*, not this data). Folding this fingerprint
+    into the sim manifest and comparing it at freshness-check time (see
+    app.sims_collision_aware) makes ANY edit to these tables force the one-time
+    rebuild that re-keys every colliding player under the current code."""
+    import hashlib
+    parts = [repr(sorted(TEAM_CODE_MAP.items())),
+              repr(sorted(_CANON_ALIASES.items())),
+              repr(sorted(_FULLNAME_CANON.items()))]
+    return hashlib.sha1("|".join(parts).encode()).hexdigest()[:12]

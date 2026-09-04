@@ -223,6 +223,7 @@ def main():
                 'missing_from_projection': miss,
                 'name_collisions': matchup.get('collisions', {}),
                 'sim_collision_version': __import__('slate_config').SIM_COLLISION_VERSION,
+                'team_alias_fingerprint': __import__('slate_config').team_alias_fingerprint(),
                 'hitters': sorted(hitter_dk), 'pitchers': sorted(pitcher_dk)}
     json.dump(manifest, open(os.path.join(DELIV_DIR, f"sim_manifest_{stamp}.json"), 'w'), indent=2)
     print(f"\nDone. Deliverables in {DELIV_DIR}/:")
