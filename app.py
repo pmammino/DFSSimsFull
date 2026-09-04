@@ -1321,24 +1321,42 @@ def sims_present():
 
 
 def sims_collision_aware():
-    """True if the on-disk sims were built by the CURRENT name-collision pipeline.
+    """True if the on-disk sims were built by the CURRENT name-collision pipeline
+    AND with the CURRENT team-code alias tables.
 
     Each build stamps its manifest with ``sim_collision_version`` (see
-    slate_config.SIM_COLLISION_VERSION). Sims built before the fix — or by an
-    older version of it — key two real players sharing a name (e.g. the Dodgers'
-    vs the Athletics' Max Muncy) onto ONE array, so the wrong player can be
-    rostered wearing the other's projection. A False result forces a one-time
-    rebuild (see ``need_sims``), so improvements to collision handling self-heal
-    cached sims with no manual refresh. Returns True when there's no manifest
-    (nothing to judge — ``sims_present`` governs that) or it can't be read."""
-    from slate_config import SIM_COLLISION_VERSION
+    slate_config.SIM_COLLISION_VERSION) and a ``team_alias_fingerprint`` (see
+    slate_config.team_alias_fingerprint). Sims built before the collision fix —
+    or by an older version of it — key two real players sharing a name (e.g.
+    the Dodgers' vs the Athletics' Max Muncy) onto ONE array, so the wrong
+    player can be rostered wearing the other's projection.
+
+    The fingerprint catches a second, easier-to-miss way the same failure
+    recurs: a colliding player is keyed by ``"<name> (<CANON_TEAM>)"``, using
+    whatever slate_config.canonical_team() maps the raw team code to AT BUILD
+    TIME. If a franchise relocates/renames and a new raw code shows up in a
+    feed that then gets added to TEAM_CODE_MAP/_CANON_ALIASES/_FULLNAME_CANON,
+    canonical_team() starts returning a different code than the one baked into
+    already-cached sims — so a pair that resolved fine yesterday goes
+    "ambiguous team codes" today even though sim_collision_version hasn't
+    changed. A fingerprint mismatch (including a manifest written before this
+    field existed) is treated the same as a stale collision version.
+
+    A False result forces a one-time rebuild (see ``need_sims``), so
+    improvements to collision handling — and edits to the alias tables —
+    self-heal cached sims with no manual refresh. Returns True when there's no
+    manifest (nothing to judge — ``sims_present`` governs that) or it can't be
+    read."""
+    from slate_config import SIM_COLLISION_VERSION, team_alias_fingerprint
     manifests = glob.glob(os.path.join(DELIV, "sim_manifest_*.json"))
     if not manifests:
         return True
     try:
         newest = max(manifests, key=os.path.getmtime)
         m = json.load(open(newest))
-        return int(m.get("sim_collision_version", 0)) >= SIM_COLLISION_VERSION
+        if int(m.get("sim_collision_version", 0)) < SIM_COLLISION_VERSION:
+            return False
+        return m.get("team_alias_fingerprint") == team_alias_fingerprint()
     except Exception:
         return True
 
@@ -1722,7 +1740,8 @@ def ensure_fresh(status, force=False, totals_path=None):
             elif not sims_present():
                 why = "no sims on disk"
             elif stale_sim_format:
-                why = "sims predate the same-name-collision fix — rebuilding once"
+                why = ("sims predate the same-name-collision fix, or a team-code "
+                       "alias table changed since they were built — rebuilding once")
             elif new_game_day:
                 why = f"new game day ({stamp.get('slate_date')}→{slate_day})"
             elif lineups_changed and stored_sig is not None:

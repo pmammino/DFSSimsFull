@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import matchup as M
 import dk_ids
+import slate_config
 from stage_d import build_pool, norm, _sim_key_for
 
 
@@ -189,6 +190,35 @@ def test_sim_key_for_prefers_team_qualified():
     assert disp == "Max Muncy (LAD)" and key == norm("Max Muncy (LAD)")
     disp, key = _sim_key_for("Nobody Here", "LAD", simset)
     assert disp is None and key is None
+
+
+# --------------------------------------------------------------------------- #
+# team_alias_fingerprint: catches the OTHER way this recurs — a franchise
+# relocates/renames, a new raw team code shows up in a feed, and once it's
+# added to a canonical_team() alias table, cached sims keyed under the OLD
+# canonical code silently stop reconciling with the DK file (surfaces as
+# "ambiguous team codes" even though sim_collision_version never changed).
+# --------------------------------------------------------------------------- #
+def test_fingerprint_changes_when_an_alias_table_gains_an_entry():
+    before = slate_config.team_alias_fingerprint()
+    slate_config._CANON_ALIASES["ZZZ"] = "OAK"
+    try:
+        after = slate_config.team_alias_fingerprint()
+    finally:
+        del slate_config._CANON_ALIASES["ZZZ"]
+    assert before != after
+
+
+def test_fingerprint_stable_without_a_table_change():
+    assert slate_config.team_alias_fingerprint() == slate_config.team_alias_fingerprint()
+
+
+def test_fingerprint_survives_a_no_op_edit():
+    # re-adding an EXISTING alias with its current value must not look like a
+    # drift (the fingerprint is over content, not edit history).
+    before = slate_config.team_alias_fingerprint()
+    slate_config._CANON_ALIASES["ATH"] = slate_config._CANON_ALIASES["ATH"]
+    assert slate_config.team_alias_fingerprint() == before
 
 
 # --------------------------------------------------------------------------- #
