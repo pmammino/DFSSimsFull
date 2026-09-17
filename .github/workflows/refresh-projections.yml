@@ -37,7 +37,7 @@ on:
         default: "2027"
         type: string
       scrape_bip:
-        description: "re-scrape Statcast BIP data (slow; otherwise reuse bip_inputs/)"
+        description: "re-scrape Statcast batted-ball data, replacing bip_inputs/ (slow, ~10min)"
         default: false
         type: boolean
       force:
@@ -72,9 +72,10 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     # The pipeline itself is ~6 minutes, but the BIP imputation and XGBoost
-    # training are the slow parts and a cold runner installing xgboost/sklearn
-    # adds several more. 90 matches refresh-sims.
-    timeout-minutes: 90
+    # training are the slow parts, a cold runner installing xgboost/sklearn
+    # adds several more, and a --refresh-bip run scrapes Statcast day by day on
+    # top of that. 120 leaves room for all three.
+    timeout-minutes: 120
     env:
       TARGET_YEAR: ${{ inputs.target_year }}
       SHARED_STORE_BUCKET: ${{ secrets.SHARED_STORE_BUCKET }}
@@ -108,10 +109,17 @@ jobs:
       - name: Rebuild the per-PA baselines
         run: |
           ARGS="--target-year $TARGET_YEAR --bip-dir bip_inputs --output-dir out"
-          # bip_inputs/bip_<year-1>.csv is committed, so the Statcast scrape is
-          # skipped automatically; the flag makes that explicit and guarantees
-          # the run does not depend on baseballsavant being reachable.
-          if [ "${{ inputs.scrape_bip }}" != "true" ]; then
+          if [ "${{ inputs.scrape_bip }}" = "true" ]; then
+            # --refresh-bip, NOT merely omitting --skip-2026-scrape. Because
+            # bip_inputs/bip_<year-1>.csv is committed, the pipeline's own
+            # "scrape if absent" path never fires, so omitting the skip flag
+            # would have produced a run that looked like it refreshed the
+            # batted-ball data and silently reused the stale file. Power and
+            # BABIP come off these batted balls, so that matters.
+            ARGS="$ARGS --refresh-bip"
+          else
+            # Reuse the committed batted-ball CSVs. Explicit, so the run does
+            # not depend on baseballsavant being reachable at all.
             ARGS="$ARGS --skip-2026-scrape"
           fi
           if [ "${{ inputs.force }}" = "true" ]; then
@@ -187,6 +195,7 @@ jobs:
             out/*.csv
             out/season_*/
             rosters/player_roles_*.xlsx
+            bip_inputs/*.csv
 
       - name: Push the rebuilt files to a branch
         if: inputs.commit == 'branch'
@@ -196,8 +205,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           # out/season_*/ is gitignored (derived in seconds from the CSVs), so
-          # only the committed artifact set moves here.
-          git add -A out rosters/player_roles_*.xlsx
+          # only the committed artifact set moves here. bip_inputs/ is included
+          # because --refresh-bip rewrites the batted-ball CSV in place, and
+          # that refreshed data is the whole point of a scraping run — without
+          # committing it the next non-scraping run falls back to the partial
+          # season again.
+          git add -A out rosters/player_roles_*.xlsx bip_inputs
           if git diff --cached --quiet; then
             echo "::notice title=No changes::the rebuild produced identical files"
             exit 0

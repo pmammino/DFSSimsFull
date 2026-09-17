@@ -234,7 +234,9 @@ def step2_build_rate_models(hit_df: pd.DataFrame, pit_df: pd.DataFrame,
 
 
 def step3_load_bip_data(target_year: int, bip_dir: Path | None,
-                       skip_2026_scrape: bool, force: bool) -> tuple[pd.DataFrame, pd.DataFrame]:
+                       skip_2026_scrape: bool, force: bool,
+                       refresh_bip: bool = False,
+                       ) -> tuple[pd.DataFrame, pd.DataFrame]:
     print("\n" + "═" * 70)
     print(f"STEP 3: Load BIP data")
     print("═" * 70)
@@ -265,11 +267,43 @@ def step3_load_bip_data(target_year: int, bip_dir: Path | None,
                     # Falls back to user running their own conversion
                     print("  (would call Rscript here — install r-base-core)")
 
-    # Live 2026 (or target_year - 1) scrape from Statcast — only if not provided
+    # Live target_year - 1 scrape from Statcast.
+    #
+    # Two distinct reasons to scrape, and conflating them was a real trap:
+    #
+    #   not in `recent`  — we simply have no batted balls for that season.
+    #   refresh_bip      — we HAVE a file but it is stale, and we want it
+    #                      replaced with everything played since.
+    #
+    # The second case used to be unreachable. The condition was
+    # `most_recent not in recent and not skip_2026_scrape`, so once
+    # bip_inputs/bip_<year-1>.csv existed the scrape was skipped no matter what
+    # flags were passed — and a committed mid-season file (2026 was 42% of a
+    # season of batted balls) would be used forever while LOOKING like a fresh
+    # build. Power and BABIP come off these batted balls, so that quietly caps
+    # the quality of every projection.
     most_recent = target_year - 1
-    if most_recent not in recent and not skip_2026_scrape:
-        print(f"\n  Scraping {most_recent} BIP data from Statcast...")
-        recent[most_recent] = fetch_statcast_season(most_recent, force=force)
+    have_local = most_recent in recent
+    if refresh_bip or (not have_local and not skip_2026_scrape):
+        why = "refreshing stale local data" if have_local else "not available locally"
+        print(f"\n  Scraping {most_recent} BIP data from Statcast ({why})...")
+        scraped = fetch_statcast_season(most_recent, force=force or refresh_bip)
+        if scraped is not None and len(scraped):
+            if have_local:
+                print(f"  Replacing {len(recent[most_recent]):,} local "
+                      f"{most_recent} BIP rows with {len(scraped):,} scraped")
+            recent[most_recent] = scraped
+            # Persist it back over the input CSV so the NEXT run (which will
+            # not scrape) starts from complete data instead of the partial
+            # season we just replaced.
+            if bip_dir is not None and refresh_bip:
+                dest = Path(bip_dir) / f"bip_{most_recent}.csv"
+                scraped.to_csv(dest, index=False)
+                print(f"  Wrote refreshed BIP data to {dest}")
+        else:
+            print(f"  Scrape returned nothing — keeping existing "
+                  f"{most_recent} data" if have_local else
+                  f"  Scrape returned nothing and no local data for {most_recent}")
 
     # Concatenate recent + historical
     parts = []
@@ -1035,6 +1069,12 @@ def main():
                              "(if pre-converted from RDS).")
     parser.add_argument("--skip-2026-scrape", action="store_true",
                         help="Skip live Statcast scrape (use only what's in --bip-dir).")
+    parser.add_argument("--refresh-bip", action="store_true",
+                        help="Re-scrape the target_year-1 Statcast season EVEN IF "
+                             "--bip-dir already has it, and write the result back "
+                             "over that CSV. Use when the committed batted-ball "
+                             "file is a partial season — without this, an existing "
+                             "file is reused no matter what other flags are set.")
     parser.add_argument("--force",       action="store_true",
                         help="Force re-fetch of all cached data sources.")
     parser.add_argument("--output-dir",  type=str, default=str(OUTPUT_DIR))
@@ -1061,7 +1101,8 @@ def main():
     # Step 3 — load BIP
     bip_all, bip_imp_pool = step3_load_bip_data(
         target, Path(args.bip_dir) if args.bip_dir else None,
-        args.skip_2026_scrape, args.force
+        args.skip_2026_scrape, args.force,
+        refresh_bip=args.refresh_bip,
     )
     if bip_imp_pool.empty:
         print("\n[!] No BIP data available — only rate projections will be saved.")
