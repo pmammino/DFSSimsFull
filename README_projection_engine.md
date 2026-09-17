@@ -63,6 +63,46 @@ Key flags:
 Total runtime: ~6 minutes on a fresh fetch (most of that is the BIP
 imputation + XGBoost training); ~2 minutes when caches are warm.
 
+### Or run it as a one-off GitHub Action
+
+**Actions → `refresh-projections` → Run workflow.** Manual only, no schedule —
+rebuilding the baselines is a deliberate, occasional act. Useful when you can't
+reach statsapi locally, or when you want the rebuild verified and recorded.
+
+It does the whole refresh in order: rebuild the baselines, **verify** them,
+run the full audit, build the season layer, and regenerate the role workbooks.
+
+| Input | Default | Notes |
+|---|---|---|
+| `target_year` | `2027` | season to project |
+| `scrape_bip` | off | re-scrape Statcast BIP; off reuses committed `bip_inputs/` and needs no baseballsavant access |
+| `force` | off | bypass caches, re-fetch every source |
+| `commit` | `branch` | push results to `refresh/projections-<year>-<run>` for review, or `none` to leave them on the run artifact |
+| `publish` | off | also push to the object store, which feeds the **live** app |
+
+The verification step is the reason this exists rather than just running the
+pipeline. `scripts/verify_refresh.py` compares the rebuilt output against real
+batted-ball data in `bip_inputs/` and **fails the job** if extra-base hits are
+still suppressed (>10% below their real share of the batted-ball pool), if the
+30 clubs aren't distinct, if playing-time tiers are missing, or if offense and
+defense disagree by more than 5%. "The pipeline ran without crashing" is not
+evidence the refresh worked — the committed artifacts pre-date these fixes, so
+the script fails against them by design.
+
+Run it locally the same way:
+
+```bash
+python scripts/verify_refresh.py --target-year 2027
+```
+
+Verification, the audit, and the season-layer output all land in the run
+summary, so a one-off run is readable without downloading anything. Results go
+to a branch by default rather than `main`, and `publish` is opt-in because the
+extra-base fix raises power ~19%, which moves DFS scoring and ownership.
+
+Distinct from the `refresh-sims` workflow, which is the daily scheduled job
+rebuilding projections *and* the slate/sims for the DFS app.
+
 ## Outputs
 
 Two CSVs in `--output-dir`:
