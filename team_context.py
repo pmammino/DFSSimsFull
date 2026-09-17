@@ -87,6 +87,29 @@ TEAM_ABBR_BY_ID: dict[int, str] = {
 
 TEAM_ID_BY_ABBR: dict[str, int] = {v: k for k, v in TEAM_ABBR_BY_ID.items()}
 
+# Free agency. A free agent is NOT the same thing as a player whose team we
+# failed to determine, and conflating them loses real information:
+#
+#   FREE_AGENT_TEAM_ID  we know he belongs to no club — an unsigned free agent
+#                       at projection time. He still gets a full rate line and
+#                       can be assigned playing time and a role, because he
+#                       will sign somewhere; we just don't know where yet.
+#   team_id = None      we could not resolve a team at all (unlinked id, bad
+#                       data). Provenance unknown.
+#
+# The distinction matters for team budgets. A team expected to sign a free
+# agent should be projected with its roster summing to LESS than the full
+# playing-time budget, leaving room for the signing (see
+# `load_roster_reserves`). If free agents were silently folded into "unknown",
+# there would be no way to say "these 40 players' plate appearances are coming
+# from somewhere, just not from a roster we can name".
+#
+# The id is negative so it can never collide with an MLBAM team id, and so any
+# code that forgets to handle it fails a lookup loudly instead of quietly
+# landing on a real club.
+FREE_AGENT_TEAM_ID = -1
+FREE_AGENT_ABBR = "FA"
+
 assert len(TEAM_ABBR_BY_ID) == 30, "expected 30 MLB franchises"
 assert len(TEAM_ID_BY_ABBR) == 30, "team abbreviations must be unique"
 
@@ -94,16 +117,30 @@ assert len(TEAM_ID_BY_ABBR) == 30, "team abbreviations must be unique"
 def abbr_for_team_id(team_id) -> str | None:
     """Canonical abbreviation for an MLBAM team id, or None if unknown.
 
-    Unknown ids return None rather than raising: minor-league affiliates and
-    All-Star/exhibition team ids do appear in statsapi responses, and they
-    should degrade to "no team" rather than kill a pipeline run.
+    Returns "FA" for `FREE_AGENT_TEAM_ID`. Unknown ids return None rather than
+    raising: minor-league affiliates and All-Star/exhibition team ids do appear
+    in statsapi responses, and they should degrade to "no team" rather than
+    kill a pipeline run.
     """
     if team_id is None or (isinstance(team_id, float) and np.isnan(team_id)):
         return None
     try:
-        return TEAM_ABBR_BY_ID.get(int(team_id))
+        tid = int(team_id)
     except (TypeError, ValueError):
         return None
+    if tid == FREE_AGENT_TEAM_ID:
+        return FREE_AGENT_ABBR
+    return TEAM_ABBR_BY_ID.get(tid)
+
+
+def is_free_agent(team_id) -> bool:
+    """True for an explicit free agent, False for a club or an unknown team."""
+    if team_id is None or (isinstance(team_id, float) and np.isnan(team_id)):
+        return False
+    try:
+        return int(team_id) == FREE_AGENT_TEAM_ID
+    except (TypeError, ValueError):
+        return False
 
 
 def team_id_for_abbr(abbr) -> int | None:
@@ -111,10 +148,14 @@ def team_id_for_abbr(abbr) -> int | None:
 
     Routes through `slate_config.canonical_team`, so Rotowire codes ("NY-A"),
     FantasyLabs variants ("CHW"), and full names ("New York Yankees") all
-    resolve. Returns None for anything unrecognized.
+    resolve. "FA" / "free agent" resolve to `FREE_AGENT_TEAM_ID`. Returns None
+    for anything unrecognized.
     """
     if abbr is None:
         return None
+    raw = str(abbr).strip().upper()
+    if raw in ("FA", "FREE AGENT", "FREE-AGENT", "FREEAGENT"):
+        return FREE_AGENT_TEAM_ID
     canon = canonical_team(abbr)
     return TEAM_ID_BY_ABBR.get(canon) if canon else None
 
@@ -212,6 +253,81 @@ def load_team_overrides(path: str | Path) -> dict[int, int | None]:
             warnings.warn(f"override for {pid} has unresolvable team {raw!r}; skipped")
             continue
         out[pid] = tid
+    return out
+
+
+def load_roster_reserves(path: str | Path) -> dict[int, dict[str, float]]:
+    """Load per-team playing-time reserved for expected signings.
+
+    A team we expect to sign a free agent should be projected with its known
+    roster summing to LESS than the full playing-time budget, leaving room for
+    the player it has not signed yet. Without this, the allocator would spread
+    the full ~6,150 PA across the players currently on hand and systematically
+    over-project every one of them — the incumbent third baseman absorbs the
+    plate appearances that will actually go to the free agent.
+
+    Read from the same file as team overrides:
+
+        {
+          "target_year": 2027,
+          "reserves": [
+            {"team": "NYY", "pa_share": 0.10, "note": "expected corner OF"},
+            {"team": "SD",  "ip_share": 0.12, "note": "expected #2 starter"}
+          ]
+        }
+
+    Shares are fractions of that team's budget, clipped to [0, 0.5] — a team
+    cannot sensibly reserve more than half its playing time for players it has
+    not acquired. Hitters and pitchers reserve independently, since a team
+    shopping for a starter is not necessarily shopping for a bat.
+
+    The reserved share is the natural counterpart to `FREE_AGENT_TEAM_ID`: the
+    free agents hold the plate appearances, the reserves hold the space for
+    them, and the two should roughly balance league-wide.
+    """
+    p = Path(path)
+    if not p.exists():
+        return {}
+    payload = json.loads(p.read_text())
+    entries = payload.get("reserves", []) if isinstance(payload, dict) else []
+
+    out: dict[int, dict[str, float]] = {}
+    for entry in entries:
+        tid = (int(entry["team_id"]) if entry.get("team_id") is not None
+               else team_id_for_abbr(entry.get("team")))
+        if tid is None or tid not in TEAM_ABBR_BY_ID:
+            warnings.warn(f"roster reserve for unknown team {entry!r}; skipped")
+            continue
+        rec = out.setdefault(tid, {"pa_share": 0.0, "ip_share": 0.0})
+        for key in ("pa_share", "ip_share"):
+            if entry.get(key) is not None:
+                rec[key] = float(np.clip(float(entry[key]), 0.0, 0.5))
+    return out
+
+
+def attach_roster_reserves(
+    factors: pd.DataFrame,
+    reserves: Mapping[int, Mapping[str, float]] | None = None,
+    *,
+    team_col: str = "team_id",
+) -> pd.DataFrame:
+    """Add `pa_reserve_share` / `ip_reserve_share` to a team-context frame.
+
+    Carried as metadata for the playing-time allocator to honour. It cannot be
+    applied to the RATE projections, because the quality of a player a team has
+    not signed is unknowable — a reserve says "this team's playing time is not
+    all accounted for", not "this team is better than its roster looks".
+    Consumers should read a non-zero reserve as: this club is deliberately
+    under-projected, and its counting-stat totals will come in light.
+    """
+    out = factors.copy()
+    reserves = reserves or {}
+    out["pa_reserve_share"] = [
+        float(reserves.get(int(t), {}).get("pa_share", 0.0)) for t in out[team_col]
+    ]
+    out["ip_reserve_share"] = [
+        float(reserves.get(int(t), {}).get("ip_share", 0.0)) for t in out[team_col]
+    ]
     return out
 
 
@@ -429,6 +545,22 @@ def runs_per_pa(df: pd.DataFrame, weights: np.ndarray | None = None,
     return float(total + RUNS_INTERCEPT_DEFAULT)
 
 
+def mlb_clubs_only(df: pd.DataFrame, *, team_col: str = "team_id"
+                   ) -> pd.DataFrame:
+    """Rows belonging to one of the 30 clubs — free agents and unknowns out.
+
+    Free agents must be excluded from team and league aggregates, or
+    `FREE_AGENT_TEAM_ID` becomes a 31st "team": it would take a share of the
+    normalization weight and pull every real club's factor off 1.0. They are
+    still carried in the projection output with full rate lines — they just do
+    not belong to anyone's roster until they sign.
+    """
+    if team_col not in df.columns:
+        return df
+    tid = pd.to_numeric(df[team_col], errors="coerce")
+    return df[tid.notna() & (tid != FREE_AGENT_TEAM_ID)]
+
+
 def _normalize_to_unit_mean(factors: np.ndarray,
                             team_weights: np.ndarray) -> np.ndarray:
     """Scale factors so their VOLUME-WEIGHTED mean is exactly 1.0.
@@ -488,7 +620,7 @@ def bottom_up_team_factors(
     team_RPA, bottom_up_factor].
     """
     rows = []
-    for team_id, g in hitters.dropna(subset=[team_col]).groupby(team_col):
+    for team_id, g in mlb_clubs_only(hitters, team_col=team_col).groupby(team_col):
         n_projected = (int((g["pt_tier"].astype(str) != "floor").sum())
                        if "pt_tier" in g.columns else len(g))
         rows.append({

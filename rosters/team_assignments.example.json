@@ -16,10 +16,16 @@
     "Fields per entry:",
     "  player_id  (required) MLBAM player id, matching PlayerId in out/*.csv",
     "  team       any code or full name canonical_team() understands --",
-    "             'SF', 'NY-A', 'CHW', 'New York Yankees'. Use null for a",
-    "             player with no team (unsigned, retired, or out for the year);",
-    "             he is then carried with neutral context rather than keeping",
-    "             his old club.",
+    "             'SF', 'NY-A', 'CHW', 'New York Yankees'. Two special values:",
+    "               'FA'  an unsigned FREE AGENT. He keeps a full rate line and",
+    "                     can be given playing time and a role, because he will",
+    "                     sign somewhere -- we just don't know where yet. He is",
+    "                     excluded from every team aggregate so he cannot act",
+    "                     as a 31st club.",
+    "               null  team genuinely unknown (unlinked id, bad data). Not",
+    "                     the same as a free agent; provenance is missing.",
+    "             Use null only for real ignorance, and 'FA' whenever you know",
+    "             the player is simply unsigned.",
     "  team_id    alternative to 'team': an explicit MLBAM team id.",
     "  note       free text, ignored by the loader. Record the transaction and",
     "             its date here.",
@@ -43,8 +49,51 @@
     },
     {
       "player_id": 999999,
+      "team": "FA",
+      "note": "EXAMPLE ONLY -- an unsigned free agent. He keeps his rate line and can be given playing time; he just has no club yet. Delete this block."
+    },
+    {
+      "player_id": 999998,
       "team": null,
-      "note": "EXAMPLE ONLY -- shows an unsigned/retired player. Delete this block."
+      "note": "EXAMPLE ONLY -- team genuinely unknown, which is NOT the same as 'FA'. Delete this block."
+    }
+  ],
+
+  "_reserves_comment": [
+    "Playing time each club is holding back for a signing it has not made yet.",
+    "",
+    "Without this, the allocator spreads the full ~6,150 PA / ~1,458 IP across",
+    "the players currently on hand, so every incumbent absorbs the plate",
+    "appearances that will actually go to the free agent -- the whole roster is",
+    "over-projected. Reserving a share leaves the club deliberately UNDER-",
+    "projected instead, which is the honest state of a team mid-offseason.",
+    "",
+    "  team / team_id  which club (same vocabulary as assignments above)",
+    "  pa_share        fraction of the hitter PA budget held back, 0 to 0.5",
+    "  ip_share        fraction of the pitcher IP budget held back, 0 to 0.5",
+    "",
+    "Hitters and pitchers reserve independently -- a club shopping for a",
+    "starter is not necessarily shopping for a bat. Reserves are the",
+    "counterpart to the 'FA' assignments above: the free agents hold the",
+    "playing time, the reserves hold the space for them, and the two should",
+    "roughly balance league-wide.",
+    "",
+    "A reserve says 'this club's playing time is not all accounted for'. It does",
+    "NOT say 'this club is better than its roster looks' -- the quality of a",
+    "player nobody has signed is unknowable, so reserves never touch the rate",
+    "projections."
+  ],
+
+  "reserves": [
+    {
+      "team": "NYY",
+      "pa_share": 0.10,
+      "note": "EXAMPLE ONLY -- expected to sign a corner outfielder. Delete this block."
+    },
+    {
+      "team": "SD",
+      "ip_share": 0.12,
+      "note": "EXAMPLE ONLY -- expected to sign a mid-rotation starter. Delete this block."
     }
   ]
 }

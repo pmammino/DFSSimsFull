@@ -23,22 +23,35 @@ What it does today
    contexts — he leaves one roster aggregate and joins another — and every
    hitter on both teams has R/RBI rescaled off the team-context-free
    `Pred_R_per_PA_neutral`.
-4. **Reconciliation diagnostics.** Reports the closure errors that a season
+4. **Free agents and roster reserves.** Unsigned players are carried with full
+   rate lines under `FREE_AGENT_TEAM_ID`, excluded from team aggregates but
+   available for playing time and a role. A club expected to sign someone can
+   reserve part of its playing-time budget so it is deliberately
+   under-projected rather than spreading those plate appearances across the
+   players currently on hand.
+5. **Team wins and save / hold opportunity** (`team_wins.py`). Pythagenpat off
+   the bottom-up RS and RA factors, normalized so league wins total exactly
+   2,430, then converted into per-team save and hold opportunity pools.
+6. **Reconciliation diagnostics.** Reports the closure errors that a season
    engine must eventually drive to zero, so progress is measurable.
+
+Wins are available without a playing-time model because **rates do not need
+one** — Pythagenpat runs on RS/G and RA/G, and the original audit's 2,618-win
+result came from offense and defense being aggregated over differently-selected
+pools, not from missing playing time. See the module docstring in
+`team_wins.py`.
 
 What it deliberately does NOT do yet
 ------------------------------------
-**Playing time** (PA/G/IP/GS). Without it the roster aggregate must use a
-volume proxy (see `team_context.career_pa_weights`), and no counting-stat
-total or wins figure can be trusted. Every function takes playing time as an
-injectable weight source so the real model drops in without touching this
+**Playing time** (PA/G/IP/GS) and **roles**. Without playing time, no
+player-level counting stat is trustworthy, and team aggregates fall back to a
+volume proxy (`team_context.career_pa_weights`). Playing time is injected as a
+`PlayingTimeWeights` callable so the real model drops in without touching this
 logic.
 
-Consequently there is **no wins output here**. Wins require league-wide
-runs-scored = runs-allowed closure, which requires playing time. The
-diagnostics report how far off closure currently is rather than publishing a
-wins column that would be wrong. See CURRENT_STATE_ASSESSMENT.md §6, phases
-3-4.
+Saves and holds are published as TEAM pools only. Dividing them among pitchers
+requires a bullpen role (closer / setup / middle) — designed but not built; see
+"Designing the role taxonomy" in README_projection_engine.md.
 """
 
 from __future__ import annotations
@@ -57,12 +70,15 @@ from team_context import (
     abbr_for_team_id,
     apply_team_context,
     assign_target_teams,
+    attach_roster_reserves,
     blend_team_factors,
     bottom_up_team_factors,
     career_pa_weights,
     depth_weights,
     describe_moves,
+    load_roster_reserves,
     load_team_overrides,
+    mlb_clubs_only,
     runs_per_pa,
     team_context_report,
 )
@@ -284,6 +300,7 @@ def reconciliation_report(hitters: pd.DataFrame, pitchers: pd.DataFrame,
 
 def run(target_year: int, out_dir: Path, *, override_path: Path | None = None,
         bottom_up_weight: float = TEAM_CONTEXT_BOTTOM_UP_WEIGHT,
+        league_rs_per_game: float = 4.45,
         write: bool = True) -> dict[str, pd.DataFrame]:
     """Build the season layer. Returns {"hitters","pitchers","teams"}."""
     print("=" * 74)
@@ -295,6 +312,7 @@ def run(target_year: int, out_dir: Path, *, override_path: Path | None = None,
 
     path = override_path or TEAM_OVERRIDE_PATH(target_year)
     overrides = load_team_overrides(path)
+    reserves = load_roster_reserves(path)
     print(f"  roster overrides: {len(overrides)} from "
           f"{path if path.exists() else f'{path} (absent)'}")
 
@@ -320,6 +338,7 @@ def run(target_year: int, out_dir: Path, *, override_path: Path | None = None,
     print("STEP 2: build team run environment from the roster")
     print("-" * 74)
     factors = build_team_context(hitters, bottom_up_weight=bottom_up_weight)
+    factors = attach_roster_reserves(factors, reserves, team_col="team_id")
     print(f"  bottom-up weight {bottom_up_weight:.2f} "
           f"(roster) / {1 - bottom_up_weight:.2f} (historical RPG prior)")
     if not factors.empty:
@@ -344,7 +363,24 @@ def run(target_year: int, out_dir: Path, *, override_path: Path | None = None,
               if moved else "  no hitters changed team context")
 
     print("\n" + "-" * 74)
-    print("STEP 4: reconciliation")
+    print("STEP 4: team wins, save & hold opportunity")
+    print("-" * 74)
+    from team_wins import (
+        bottom_up_team_ra, project_save_hold_opportunity, project_team_wins,
+        wins_report,
+    )
+
+    defense = bottom_up_team_ra(pitchers, team_col="team_id")
+    wins = project_team_wins(factors, defense, team_col="team_id",
+                             league_rs_per_game=league_rs_per_game)
+    wins = project_save_hold_opportunity(wins, team_col="team_id")
+    print("  " + wins_report(wins).replace("\n", "\n  "))
+    print("\n  Saves and holds are TEAM opportunity pools. Dividing them among")
+    print("  pitchers needs a bullpen role (closer / setup / middle), which is")
+    print("  designed but not built — see README_projection_engine.md.")
+
+    print("\n" + "-" * 74)
+    print("STEP 5: reconciliation")
     print("-" * 74)
     print("  " + reconciliation_report(hitters, pitchers, factors)
           .replace("\n", "\n  "))
@@ -372,12 +408,16 @@ def main(argv: list[str] | None = None) -> int:
                     default=TEAM_CONTEXT_BOTTOM_UP_WEIGHT,
                     help="weight on the roster-derived team factor vs the "
                          "historical team-RPG prior")
+    ap.add_argument("--league-rs-per-game", type=float, default=4.45,
+                    help="forecast league runs per game; sets the absolute run "
+                         "environment for the wins model")
     ap.add_argument("--no-write", action="store_true",
                     help="report only; don't write season_<year>/")
     args = ap.parse_args(argv)
 
     run(args.target_year, args.out_dir, override_path=args.overrides,
-        bottom_up_weight=args.bottom_up_weight, write=not args.no_write)
+        bottom_up_weight=args.bottom_up_weight,
+        league_rs_per_game=args.league_rs_per_game, write=not args.no_write)
     return 0
 
 

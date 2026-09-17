@@ -410,6 +410,128 @@ Walk-forward: project 2025 playing time from data through 2024 only.
 - AUC on the binary "did he play at all" — this is where most systems fail, and
   it is the metric the floor tier exists to serve
 
+## Designing the role taxonomy
+
+Not built. This is the plan, and the two workbooks in `rosters/` are its input
+format.
+
+Roles are a better Stage 2 than the lineup-slot sketch above, for a concrete
+reason: lineup slot mostly moves PA *per game* (~0.1 PA per slot), whereas a
+role moves **games played and PA per game together**, which is where the
+variance actually lives.
+
+### Three principles
+
+**1. A role is a probability vector, not a label.** A player in a job battle is
+~50% full-time / 30% platoon / 20% bench. One label yields a plausible ~480 PA
+that is the *mean of a bimodal distribution* — wrong in both worlds.
+
+```
+Proj_PA = Σ_role P(role) × E[PA | role] × availability_share
+```
+
+Same arithmetic, and the variance comes free, which is what season-long ranking
+and DFS leverage both want.
+
+**2. Separate the JOB from the TIMING.** "Mid-season callup" conflates two
+things. A callup who becomes a full-timer and one who becomes a platoon bat have
+very different rate lines, and a single role can't express the difference.
+Instead: role = the job, `role_share` = the fraction of the season he holds it.
+
+This also collapses two mechanisms into one — "called up in June" and "back from
+the IL in June" are the same parameter:
+
+| Role start | `role_share` |
+|---|---|
+| Opening Day | 1.00 |
+| Early season (≈ May) | 0.80 |
+| Mid season (≈ July) | 0.50 |
+| Late season (≈ Sept) | 0.20 |
+
+**3. Availability is orthogonal to role.** "Injured" is not a role — a player has
+a role *and* an availability factor. Otherwise you cannot express "full-time
+player who misses April," which is extremely common. A February Tommy John means
+availability ≈ 0, so the role's `E[PA]` collapses and the player lands on the 1
+PA floor — the existing rule, reached through the model rather than bolted on.
+
+### Catcher needs its own ladder
+
+The single most damaging gap if missed. A full-time catcher is ~480–520 PA, not
+600+, because of rest days; a tandem is roughly 350/300. Applying a generic
+"full time" archetype to catchers over-projects **every catcher in baseball** by
+~120 PA.
+
+### Roles and the platoon splits already in the engine
+
+`splits_model.py:153` derives `vL_share` from each player's **historical** PA
+distribution, shrunk to a league default. That is backward-looking: it encodes
+the platoon usage a player *had*, not the role he is *projected into*. A hitter
+moving into a weak-side platoon job keeps a stale ~26% vs-LHP share when the
+real number is 70–75%.
+
+This matters more than the volume correction, because the engine already
+produces `P_*_vL` / `P_*_vR` and already anchors the overall projection to
+`vL_share × vL + vR_share × vR`. Making `vL_share` **role-conditional** fixes a
+platoon player's volume *and* his rate line at once, using machinery that
+already exists. Of everything in the taxonomy this is the highest-value piece.
+
+### Roles do not sum to a roster
+
+Assigned independently, roles produce teams with eleven full-time hitters and
+7,300 PA. Roles are the right *vocabulary*; the allocation is still Stage 3 —
+fill a **typed slot template** per club, then normalize to the budget:
+
+```
+per team:  1 primary C (or a tandem)   ~8 everyday spots   4-5 bench
+           5 rotation slots            8 bullpen slots
+```
+
+Typed slots make the allocation much better-posed than talent rank alone,
+because a catcher is matched to a catcher slot rather than merely out-ranking an
+outfielder. The budget to fill is
+`162 × PA_PER_TEAM_GAME × (1 − pa_reserve_share)` — see **Free agents and
+roster reserves** below, which is how a club expected to sign someone is left
+deliberately under-projected.
+
+### Saves and holds
+
+Already built, on the team side (`team_wins.py`). A save or hold decomposes as:
+
+```
+player saves = team save opportunities × player's share × conversion rate
+```
+
+The team pool exists now and closes exactly to the league level. Roles supply
+the middle term — a closer takes the large majority of his team's save
+opportunities, a setup man takes holds. That is the whole reason bullpen roles
+are worth distinguishing: reliever **IP is nearly flat** across bullpen jobs
+(~60–70 for everyone), while save and hold context differ enormously. The
+taxonomy captures the thing that actually varies.
+
+### Injury risk
+
+Two refinements beyond a flat hazard:
+
+- **Condition on role and position.** Catchers and pitchers carry much higher
+  risk; a 34-year-old full-timer much more than a 26-year-old. A flat rate
+  systematically over-projects older regulars and catchers.
+- **Injuries to starters are what create bench playing time.** That is a
+  team-level coupling, so the "injury replacement" role cannot be a point
+  estimate. If team PA must close *and* bench playing time be realistic, the
+  injury draw has to redistribute PA *within* the club — a Monte Carlo wrapper
+  around the allocation rather than a product of expectations. That is also the
+  natural place to handle the rates/playing-time selection coupling.
+
+### Input format
+
+`rosters/player_roles_hitters_<year>.xlsx` and
+`rosters/player_roles_pitchers_<year>.xlsx` — generated pre-populated by
+`scripts/build_role_templates.py`. Roles are columns holding probabilities;
+each workbook also carries a Reference sheet with the PA/IP/SV/HLD anchors per
+role and a Teams sheet for roster reserves. Same pattern as
+`rosters/team_assignments_<year>.json`: human judgment in a maintained file,
+volume computed by the model.
+
 ### Where the tier comes from until then
 
 `playing_time.classify_tier` uses evidence: did the player clear 25 PA within 2
