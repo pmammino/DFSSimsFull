@@ -383,9 +383,10 @@ def _hitter_row(mlbam, name, rec, season, age, pa_eff, tr) -> dict:
     tp  = bip["triple"]   * bip_mass
     h   = sg + db + tp + hr
     ab  = pa_eff - bb - hbp - sf
+    org, org_id = _parent_org(rec)
     return {
         "Season": season, "PlayerId": mlbam, "Name": name,
-        "Team": rec.get("currentTeam") or rec.get("team"), "TeamId": np.nan,
+        "Team": org, "TeamId": org_id,
         "Age": age, "PA": pa_eff, "AB": ab,
         "K": k, "BB": bb, "IBB": 0.0, "HBP": hbp, "SF": sf, "SH": 0.0,
         "H": h, "HR": hr, "2B": db, "3B": tp,
@@ -395,6 +396,35 @@ def _hitter_row(mlbam, name, rec, season, age, pa_eff, tr) -> dict:
         "K%": tr["K%"], "BB%": tr["BB%"], "HBP%": tr["HBP%"], "SF%": tr["SF%"],
         "mle_source": "MiLB",
     }
+
+
+def _parent_org(rec: dict) -> tuple[str | None, float]:
+    """Resolve a minors record to its PARENT ORGANIZATION, as (abbr, team_id).
+
+    The feed carries two different team fields and they mean different things:
+
+        `team`        the affiliate — "Oklahoma C", "Rocket City"
+        `currentTeam` the parent organization — "LAD", "HOU"
+
+    Only `currentTeam` is useful here. A season engine that projects a whole
+    organization has to attach a Double-A catcher to the club that controls
+    him, and affiliate names do not resolve to an MLB team id at all.
+
+    This previously set `TeamId: np.nan` for every translated player — so MLE
+    players had no organization, got no park factors, and fell into neutral
+    team context. Worse, hitters used `currentTeam` while pitchers used the
+    affiliate `team`, so the two sides disagreed about what the column meant.
+
+    Returns (None, nan) when nothing resolves, which degrades to neutral
+    context rather than guessing an org.
+    """
+    from team_context import abbr_for_team_id, team_id_for_abbr
+
+    raw = rec.get("currentTeam") or rec.get("team")
+    team_id = team_id_for_abbr(raw)
+    if team_id is None:
+        return (str(raw) if raw else None), np.nan
+    return abbr_for_team_id(team_id), float(team_id)
 
 
 def _pitcher_row(mlbam, name, rec, season, age, tbf_eff, tr, obs) -> dict:
@@ -407,9 +437,10 @@ def _pitcher_row(mlbam, name, rec, season, age, tbf_eff, tr, obs) -> dict:
     bip_mass = max(0.0, 1.0 - tr["K%"] - tr["BB%"] - tr["HBP%"] - tr["SF%"]) * tbf_eff
     hr  = bip["home_run"] * bip_mass
     h   = (bip["single"] + bip["double"] + bip["triple"]) * bip_mass + hr
+    org, org_id = _parent_org(rec)
     return {
         "Season": season, "PlayerId": mlbam, "Name": name,
-        "Team": rec.get("team"), "TeamId": np.nan, "Age": age,
+        "Team": org, "TeamId": org_id, "Age": age,
         "PA": 0.0, "AB": 0.0,
         "K": k, "BB": bb, "IBB": 0.0, "HBP": hbp, "SF": sf, "SH": 0.0,
         "H": h, "HR": hr, "2B": bip["double"] * bip_mass,

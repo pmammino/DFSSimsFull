@@ -11,3 +11,7 @@ deliverables/hitter_stat_sims.npy
 # scripts/build_ownership.py (scheduled refresh), synced via the object store.
 deliverables/projected_ownership.csv
 deliverables/.ownership_pool_sig.json
+
+# season-layer outputs: derived from the committed per-PA CSVs in seconds
+# via `python season_engine.py --target-year <year>`
+out/season_*/

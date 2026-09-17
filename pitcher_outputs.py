@@ -115,6 +115,15 @@ LINEAR_WEIGHTS_RUNS = {
 # Intercept that brings the sum-of-weights mean prediction in line with
 # absolute league R/PA. Empirically -0.047 on 2022-2025 data — see the
 # calibration block in `experiment_pitcher_outputs.py`.
+#
+# Both the weights and this intercept were fitted on ACTUAL pitcher-season
+# event rates, so they assume the per-PA probabilities fed in are unbiased.
+# They are not a correction layer for upstream bias: when the extra-base blend
+# weights were deflating HR/2B/3B (see EVENT_BLEND_WEIGHTS_* in
+# pipeline_config.py), this mapping faithfully passed that bias through as a
+# league RA9 of 4.13 against a real ~4.40. If the event distribution's league
+# calibration moves again, re-check against audit_baselines.py check 2 rather
+# than re-tuning this intercept to absorb it.
 RUNS_INTERCEPT_DEFAULT = -0.047
 
 # Empirical calibration factor for TBF/IP. Naive formula 3/(K+BIPOut+SF)

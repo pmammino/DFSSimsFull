@@ -1,0 +1,99 @@
+{
+  "_comment": [
+    "Roster overrides for the season projection engine.",
+    "",
+    "Copy to rosters/team_assignments_<target_year>.json and edit. This file",
+    "expresses everything player history cannot: offseason signings, trades,",
+    "retirements, and manual corrections. Without it, a player's target team is",
+    "inferred from his most recent playing time, so every offseason move is",
+    "wrong until the next season's data exists.",
+    "",
+    "An override changes team context for BOTH clubs: the player leaves one",
+    "roster aggregate and joins another, so both teams' bottom-up run",
+    "environments are recomputed, and every hitter on both teams has his R/RBI",
+    "rescaled accordingly.",
+    "",
+    "Fields per entry:",
+    "  player_id  (required) MLBAM player id, matching PlayerId in out/*.csv",
+    "  team       any code or full name canonical_team() understands --",
+    "             'SF', 'NY-A', 'CHW', 'New York Yankees'. Two special values:",
+    "               'FA'  an unsigned FREE AGENT. He keeps a full rate line and",
+    "                     can be given playing time and a role, because he will",
+    "                     sign somewhere -- we just don't know where yet. He is",
+    "                     excluded from every team aggregate so he cannot act",
+    "                     as a 31st club.",
+    "               null  team genuinely unknown (unlinked id, bad data). Not",
+    "                     the same as a free agent; provenance is missing.",
+    "             Use null only for real ignorance, and 'FA' whenever you know",
+    "             the player is simply unsigned.",
+    "  team_id    alternative to 'team': an explicit MLBAM team id.",
+    "  note       free text, ignored by the loader. Record the transaction and",
+    "             its date here.",
+    "",
+    "Unresolvable teams and entries with no usable player_id are skipped with a",
+    "warning rather than failing the run."
+  ],
+
+  "target_year": 2027,
+
+  "assignments": [
+    {
+      "player_id": 592450,
+      "team": "SF",
+      "note": "EXAMPLE ONLY -- Aaron Judge did not sign with San Francisco. Delete this block."
+    },
+    {
+      "player_id": 660271,
+      "team_id": 147,
+      "note": "EXAMPLE ONLY -- shows the explicit team_id form (147 = NYY). Delete this block."
+    },
+    {
+      "player_id": 999999,
+      "team": "FA",
+      "note": "EXAMPLE ONLY -- an unsigned free agent. He keeps his rate line and can be given playing time; he just has no club yet. Delete this block."
+    },
+    {
+      "player_id": 999998,
+      "team": null,
+      "note": "EXAMPLE ONLY -- team genuinely unknown, which is NOT the same as 'FA'. Delete this block."
+    }
+  ],
+
+  "_reserves_comment": [
+    "Playing time each club is holding back for a signing it has not made yet.",
+    "",
+    "Without this, the allocator spreads the full ~6,150 PA / ~1,458 IP across",
+    "the players currently on hand, so every incumbent absorbs the plate",
+    "appearances that will actually go to the free agent -- the whole roster is",
+    "over-projected. Reserving a share leaves the club deliberately UNDER-",
+    "projected instead, which is the honest state of a team mid-offseason.",
+    "",
+    "  team / team_id  which club (same vocabulary as assignments above)",
+    "  pa_share        fraction of the hitter PA budget held back, 0 to 0.5",
+    "  ip_share        fraction of the pitcher IP budget held back, 0 to 0.5",
+    "",
+    "Hitters and pitchers reserve independently -- a club shopping for a",
+    "starter is not necessarily shopping for a bat. Reserves are the",
+    "counterpart to the 'FA' assignments above: the free agents hold the",
+    "playing time, the reserves hold the space for them, and the two should",
+    "roughly balance league-wide.",
+    "",
+    "A reserve says 'this club's playing time is not all accounted for'. It does",
+    "NOT say 'this club is better than its roster looks' -- the quality of a",
+    "player nobody has signed is unknowable, so reserves never touch the rate",
+    "projections."
+  ],
+
+  "reserves": [
+    {
+      "team": "NYY",
+      "pa_share": 0.10,
+      "note": "EXAMPLE ONLY -- expected to sign a corner outfielder. Delete this block."
+    },
+    {
+      "team": "SD",
+      "ip_share": 0.12,
+      "note": "EXAMPLE ONLY -- expected to sign a mid-rotation starter. Delete this block."
+    }
+  ]
+}

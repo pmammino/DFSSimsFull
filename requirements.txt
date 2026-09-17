@@ -10,3 +10,5 @@ pyyaml
 streamlit
 altair
 boto3
+# role-assignment workbooks (scripts/build_role_templates.py)
+openpyxl
