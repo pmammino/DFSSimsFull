@@ -410,6 +410,26 @@ and a test move of the two highest-volume hitters to Colorado raising COL
 (+0.110) while dropping NYY (−0.053) and LAD (−0.045). 54 new tests; full
 suite 221 passing.
 
+### Done — organizational depth and playing-time tiers
+
+| Item | Where | Effect |
+|---|---|---|
+| **Roster coverage** | `RATE_MIN_PA_ACTIVE` 25→1, `RATE_ACTIVE_LOOKBACK` 2→4 | September callups, 4A players, and the long-term injured were dropped by `build_inference_panel` *and* skipped by MLE (which only adds no-MLB-history players) — they fell through both gates. Now covered, with thin evidence correctly regressed to the league mean. |
+| **MLE down the ladder** | `MLE_LEVELS` = AAA/AA/A+/A | Full org depth. Credibility falls 0.55 → 0.35 → 0.20 → 0.12 so a Single-A line can't masquerade as a forecast. A+/A factors are labelled as extrapolations, not published values. |
+| **MiLB org alignment** | `mle_translations._parent_org` | MLE rows carried `TeamId: np.nan`, so translated players had no organization, no park, and neutral context. Hitters also used `currentTeam` while pitchers used the *affiliate* name. Both now resolve the parent org to an MLBAM id. |
+| **Playing-time tiers + floor** | `playing_time.py`, `PLAYING_TIME_COLS` | `pt_tier` = `projected`/`floor`; floor players get exactly 1 PA / 1 IP, projected players get NaN marked `unmodeled` rather than a guess. |
+| **Containment** | `team_context.roster_volume_weights` | Floor players receive a team factor but don't consume team plate appearances. Adding 400 depth hitters to the real artifacts leaves league R/PA and every team factor unchanged. |
+| **Daily-path protection** | `matchup._mlb_rows` | `resolve_collisions` marks any name with 2+ projection rows ambiguous, so a Single-A namesake would have dropped a real MLB player from the slate. Depth rows are now excluded from ambiguity and resolution, but still available for a direct match. |
+
+31 further tests (`test_playing_time.py`, `test_depth_player_collisions.py`);
+full suite 252 passing.
+
+The playing-time **model** is designed but not built — see "Designing the
+playing-time model" in `README_projection_engine.md` for the three-stage
+allocation approach, the injured and minor-league cases, and the incremental
+path (Stage 3 alone is implementable today with no new data and would close the
+team and league identities).
+
 ### Not done, and why
 
 - **`out/` not regenerated.** statsapi is unreachable from this environment

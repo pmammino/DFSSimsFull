@@ -35,8 +35,52 @@ INPUT_HISTORICAL = Path("./bip_historical.csv")
 
 # ── Rate-model thresholds ────────────────────────────────────────────────────
 RATE_MIN_PA_TRAIN  = 50   # PA threshold to enter K%/BB% training panel
-RATE_MIN_PA_ACTIVE = 25   # PA threshold to be projected for the target year
-RATE_ACTIVE_LOOKBACK = 2  # Active = appeared within this many years before TARGET
+
+# Who gets a projection AT ALL. These used to be 25 PA / 2 years, which quietly
+# dropped three populations the season engine needs — and that MLE did not
+# rescue, because MLE only ADDS players with no MLB history at all:
+#
+#   * September callups — 12 MLB PA last season is below a 25-PA gate
+#   * 4A players — last MLB action 3+ years ago, in AAA since
+#   * long-term injured — two lost seasons pushes them outside the lookback
+#
+# All three have SOME MLB history, so `existing_ids` made MLE skip them while
+# the gate dropped them: they fell through both. Widening to 1 PA / 4 years
+# means "everyone we have any evidence for gets a row", and the thin-evidence
+# players are then correctly regressed almost all the way to the league mean by
+# the existing shrinkage machinery — a 12-PA sample carries almost no weight
+# against RATE_SHRINK_K_HITTER = 100.
+#
+# Being in the output is NOT a claim of playing time. That is what the
+# playing-time tier below is for: these players are marked `floor` and carry
+# Proj_PA = 1, so they never move a team aggregate or a league total.
+RATE_MIN_PA_ACTIVE = 1    # PA threshold to be projected for the target year
+RATE_ACTIVE_LOOKBACK = 4  # Active = appeared within this many years before TARGET
+
+# ── Playing time ─────────────────────────────────────────────────────────────
+# There is no playing-time MODEL yet (see README_projection_engine.md). What
+# exists is the plumbing plus one rule: a player who does not project for real
+# playing time still gets a row, with a floor of 1 PA (hitters) / 1 IP
+# (pitchers) rather than 0 or NaN.
+#
+# Why a floor of 1 and not 0:
+#   * 0 makes every rate-times-volume product 0, so the player silently
+#     vanishes from any total while still occupying a row — the worst of both
+#     worlds.
+#   * NaN propagates through sums and breaks aggregates.
+#   * 1 keeps the player present, ranked, and joinable, contributes a
+#     rounding error to team and league totals, and reads unambiguously as
+#     "replacement-level placeholder" to anyone scanning the column.
+#
+# The tier is currently decided by evidence (did the player clear the OLD
+# 25-PA / 2-year gate?), because without a playing-time model there is nothing
+# better to decide it with. When that model lands it owns the tier, and this
+# threshold reverts to being a pure data-quality note. See
+# `playing_time.classify_tier`.
+PT_FLOOR_PA          = 1.0   # hitters with no projected playing time
+PT_FLOOR_IP          = 1.0   # pitchers with no projected playing time
+PT_PROJECTED_MIN_PA  = 25    # evidence bar for the "projected" tier
+PT_PROJECTED_LOOKBACK = 2    # ...within this many years of TARGET
 
 # ── Minor-league translations (MLE) for no-MLB-history players ────────────────
 # The rate/BIP models only project players with prior MLB data — a debut rookie
@@ -53,7 +97,12 @@ RATE_ACTIVE_LOOKBACK = 2  # Active = appeared within this many years before TARG
 # with mle_source in the output so downstream consumers can treat them as
 # low-confidence.
 MLE_ENABLE          = True
-MLE_LEVELS          = ("AAA", "AA")   # levels to translate (highest signal first)
+# Levels to translate, highest signal first. Full-organization depth needs the
+# lower levels too — a season engine that projects "the whole org" cannot stop
+# at AA. The lower levels carry progressively less credibility (see
+# MLE_PA_CREDIBILITY), so including them adds coverage without letting a
+# Single-A line masquerade as a real MLB forecast.
+MLE_LEVELS          = ("AAA", "AA", "A+", "A")
 MLE_SEASON_OFFSET   = 1               # inject as (target_year - offset) season row
 
 # Per-level, per-component multipliers applied to a player's observed minor-
@@ -68,11 +117,22 @@ MLE_SEASON_OFFSET   = 1               # inject as (target_year - offset) season 
 #   BB%  falls slightly (fewer free passes) → factor < 1
 #   HR / 2B / 3B / BABIP all regress down (better defense + pitching) → < 1
 #   SB attempt rate roughly holds
+#
+# AAA and AA are published-consensus values. A+ and A extend the ladder by
+# continuing its own spacing — they are EXTRAPOLATIONS, not published figures,
+# and are the least trustworthy numbers in this file. They exist so a low-level
+# prospect gets a differentiated baseline rather than a league-average one; the
+# credibility discount below is what keeps them from being taken too seriously.
+# Validate all four levels against players who graduated before tuning.
 MLE_HITTER_FACTORS = {
     "AAA": {"K%": 1.20, "BB%": 0.92, "HR": 0.80, "2B": 0.90, "3B": 0.85,
             "BABIP": 0.95, "SB": 0.90},
     "AA":  {"K%": 1.28, "BB%": 0.88, "HR": 0.70, "2B": 0.85, "3B": 0.80,
             "BABIP": 0.93, "SB": 0.85},
+    "A+":  {"K%": 1.36, "BB%": 0.84, "HR": 0.60, "2B": 0.80, "3B": 0.75,
+            "BABIP": 0.91, "SB": 0.80},
+    "A":   {"K%": 1.45, "BB%": 0.80, "HR": 0.52, "2B": 0.75, "3B": 0.70,
+            "BABIP": 0.89, "SB": 0.75},
 }
 # Pitchers (events the pitcher ALLOWS, per TBF):
 #   K%   allowed falls in MLB (hitters harder to miss) → factor < 1
@@ -81,13 +141,20 @@ MLE_HITTER_FACTORS = {
 MLE_PITCHER_FACTORS = {
     "AAA": {"K%": 0.85, "BB%": 1.08, "HR": 1.15, "BABIP": 1.02},
     "AA":  {"K%": 0.78, "BB%": 1.12, "HR": 1.25, "BABIP": 1.03},
+    "A+":  {"K%": 0.72, "BB%": 1.17, "HR": 1.38, "BABIP": 1.04},
+    "A":   {"K%": 0.66, "BB%": 1.22, "HR": 1.50, "BABIP": 1.05},
 }
 
 # Credibility discount: a full minor-league season is NOT worth a full MLB
 # season of evidence. We deflate the plate-appearance (hitter) / batters-faced
 # (pitcher) count carried by the synthetic row so the shrinkage machinery pulls
 # these players harder toward the league mean. AAA carries more weight than AA.
-MLE_PA_CREDIBILITY = {"AAA": 0.55, "AA": 0.35}
+# A+ and A fall off steeply on purpose: a Single-A line says very little about
+# MLB performance, so the synthetic row carries only ~12% of its PA and the
+# shrinkage machinery pulls the player almost all the way to the league mean.
+# That is the intended outcome — these players exist in the output for
+# organizational completeness, not because we claim to know their MLB rates.
+MLE_PA_CREDIBILITY = {"AAA": 0.55, "AA": 0.35, "A+": 0.20, "A": 0.12}
 
 # Default age for a translated player when the Chadwick lookup has no birth year
 # (prospects skew young; this only affects display + the unused ML rate path).

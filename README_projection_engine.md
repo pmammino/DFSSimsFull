@@ -230,20 +230,199 @@ rescaled off the team-context-free `Pred_R_per_PA_neutral`.
 Tune the blend with `--bottom-up-weight`; `0.0` reproduces the historical
 prior (but closed), `1.0` ignores it.
 
-### Not built yet
+## Organizational depth and playing-time tiers (`playing_time.py`)
 
-**Playing time** (PA / G / IP / GS) is the keystone and does not exist. Team
-aggregates therefore use a documented volume proxy
-(`team_context.career_pa_weights`, which skews veteran), injected as a
-`PlayingTimeWeights` callable so the real model drops in without touching team
-logic.
+The projection set covers a whole organization — MLB regulars, September
+callups, 4A players, the long-term injured, and MLE-translated minor leaguers
+down to Single-A. That makes one distinction load-bearing:
 
-Consequently there is **no wins output**. Wins need league-wide runs-scored =
-runs-allowed closure, which needs playing time. `season_engine.py` instead
-reports how far off each identity currently is, so the gap is a number that
-moves. Also still missing: position data (so no depth chart or batting order),
-an aging curve, and league-level anchoring. See
-`deliverables/projection_engine/CURRENT_STATE_ASSESSMENT.md`.
+> **Being in the output is not a claim of playing time.**
+
+### Who used to be missing
+
+Three populations fell through *both* gates. `build_inference_panel` dropped
+them (under 25 PA, or no season within 2 years), and MLE skipped them because
+it only ADDS players with no MLB history — these players have some:
+
+| Population | Why it was dropped |
+|---|---|
+| September callups | 12 MLB PA is below a 25-PA bar |
+| 4A players | last MLB action 3+ years ago, in AAA since |
+| Long-term injured | two lost seasons pushes them outside the lookback |
+
+`RATE_MIN_PA_ACTIVE` is now 1 and `RATE_ACTIVE_LOOKBACK` is 4: everyone we
+have any evidence for gets a row, and thin evidence is correctly regressed
+almost all the way to the league mean by the existing shrinkage (a 12-PA
+sample carries almost nothing against `RATE_SHRINK_K_HITTER = 100`).
+`MLE_LEVELS` now spans `AAA, AA, A+, A`, with credibility falling steeply
+(0.55 → 0.35 → 0.20 → 0.12) so a Single-A line cannot masquerade as a forecast.
+
+### The two columns
+
+| Column | Meaning |
+|---|---|
+| `pt_tier` | `projected` (expected to accumulate real MLB playing time) or `floor` (carried for organizational completeness) |
+| `Proj_PA` / `Proj_IP` | `floor` tier gets exactly **1.0**. `projected` tier gets **NaN** with `pt_source = "unmodeled"` until a playing-time model exists. |
+
+**Why the floor is 1 and not 0.** Zero makes every rate × volume product zero,
+so the player silently vanishes from totals while still occupying a row — the
+worst of both worlds. NaN propagates through sums. One keeps him present,
+ranked and joinable, contributes a rounding error, and reads unambiguously as
+a replacement-level placeholder.
+
+**Why `projected` gets NaN rather than a guess.** Filling in a plausible 600 PA
+would make every downstream total quietly wrong in a way that is very hard to
+notice. A NaN fails loudly at the point of use. A `floor` player's 1.0 is not a
+placeholder for a missing number — his volume is genuinely known to be
+approximately none.
+
+### Containment
+
+Depth players receive a team factor (so their own R/RBI are contextualized) but
+must not **consume** team playing time — a club bats about 6,150 times, so
+counting 200 farmhands at the floor would shift its share of the league.
+`team_context.roster_volume_weights` zeroes floor-tier rows for exactly this
+reason, and it is the basis used to normalize team factors. Verified: adding
+400 depth hitters to the real artifacts leaves league R/PA and every team
+factor unchanged.
+
+**Daily path.** `matchup.resolve_collisions` treats any name with 2+ projection
+rows as needing disambiguation, so a Single-A namesake would have marked a real
+MLB player ambiguous and **dropped him from the slate** — the same failure mode
+as the truncated-team-code bug. `matchup._mlb_rows` therefore excludes
+floor-tier rows from ambiguity counting and collision resolution, while leaving
+them available for a direct match so a just-promoted player still gets his own
+baseline. Files without `pt_tier` default to `projected`, making the filter a
+no-op on legacy output.
+
+## Designing the playing-time model
+
+Not built. This is the intended design, and it is the keystone: every remaining
+closure identity and the wins model depend on it.
+
+### The framing that matters
+
+PA and IP are **not player-level quantities**. They are allocations of a fixed
+team budget under competition:
+
+```
+team hitter PA ≈ 162 × 38   ≈ 6,150
+team IP        ≈ 162 × 9    ≈ 1,458
+```
+
+A team cannot bat 7,000 times. Regressing each player's PA on his own history
+and summing is the common approach and it is wrong: the totals don't close, so
+you normalize at the end, and then every player's number moves for reasons that
+have nothing to do with him. Model it as **constrained allocation** instead and
+the constraint is exact by construction — which is precisely what
+`playing_time.PlayingTimeModel` requires.
+
+### Three stages
+
+**Stage 1 — Availability** (per player, unconstrained). What share of the season
+is he available?
+
+```
+availability = P(on an MLB roster) × (162 − E[games missed]) / 162
+```
+
+Inputs: age, IL history, current injury status and expected return, offseason
+surgery, service time. This is a survival/hazard problem, not a point estimate —
+carry a distribution, because the uncertainty is the useful part.
+
+**Stage 2 — Role** (per player, competitive). Given availability, what job does
+he win? A multinomial over {lineup slot 1-9, bench, MiLB} per position group for
+hitters; {rotation slot 1-5, swing, bullpen role, MiLB} for pitchers.
+
+The key move: drive role from **projected talent rank within the org at that
+position** — which closes the loop with the rate engine already in place. The
+org's best projected shortstop gets the shortstop job.
+
+**Stage 3 — Allocation** (team-level, constrained). Each player carries a claim
+of `availability × role weight`; normalize claims within each team to the budget
+above. Team closure holds by construction, so the league total is 30 × budget,
+so runs-scored equals runs-allowed, so **wins become computable**.
+
+### The hard cases
+
+**Injured players.** Two factors, not one:
+`Proj_PA = full_time_PA × availability_share`. A player out until June gets
+~0.55. Availability comes from an injury-type → recovery-timeline table (TJ
+~12-18 months, UCL brace ~8-10, hamstring grade 2 ~3-5 weeks) plus a re-injury
+hazard. A February TJ means availability ≈ 0 → **floor tier, 1 PA** — the rule
+falls out of the model rather than being bolted on.
+
+Important: do **not** discount the *rate* projection for injury. A hurt player's
+per-PA skill is not worse. Post-surgery velocity loss is real but belongs in the
+rate model as its own adjustment, not smuggled into playing time.
+
+**Players starting in the minors.**
+`Proj_PA = P(promoted) × E[PA | promoted]`. Promotion probability is driven by
+projected talent versus the incumbent at his position, option status and 40-man
+standing, age and pedigree, and the org's competitive position. A top prospect
+blocked by an All-Star should get a real but modest ~150 PA — not 1, and not
+550. A Single-A player's role weight rounds to zero → floor tier. Collapse any
+allocation below ~5 PA to the floor rather than carrying a falsely precise 2.7.
+
+### The subtle one: PT and rates are not independent
+
+A player only accumulates 600 PA *if he performs*. So conditional on 600 PA, his
+rates are better than his unconditional projection; projecting the marginal rate
+and the marginal PA and multiplying over-weights bad outcomes. Talent-conditional
+allocation in Stage 2 partially handles this. Handling it properly means
+simulating: draw a playing-time scenario, then draw rates conditioned on it.
+This is also the honest way to express that a 26-year-old with a job battle is a
+bimodal outcome, not a 300-PA expectation.
+
+### Data we need and don't have
+
+| Need | Status |
+|---|---|
+| `primaryPosition` | **Easy** — a statsapi field the fetch simply doesn't request |
+| Positions for prospects | **Already there** — the minors feed carries `position` |
+| Depth charts | RotoWire has them; the minors feed is already a RotoWire endpoint |
+| IL transactions / injury status | statsapi has a transactions endpoint |
+| 40-man + option status | Harder; may need a maintained file like `rosters/team_assignments_<year>.json` |
+| Contract / service time | Mostly manual |
+
+### Incremental path
+
+Each stage is independently useful, in reverse order of difficulty:
+
+1. **Stage 3 alone** — allocate each team's fixed budget by projected talent
+   rank. Implementable today with the rate projections and team assignment that
+   already exist, no new data. Immediately closes the team and league identities
+   and unlocks wins.
+2. **Add positions** → Stage 2 becomes real, and depth charts and batting orders
+   become possible.
+3. **Add injury/IL data** → Stage 1 becomes real, and the injured and
+   minor-league cases stop depending on the evidence proxy.
+
+### Validation
+
+Walk-forward: project 2025 playing time from data through 2024 only.
+
+- MAE on PA among players who actually played
+- **Team-total closure error** — should be ~0 by construction; if not, the
+  allocation is broken
+- Calibration of promotion probability — of players given P ≈ 0.3, did ~30% get
+  promoted?
+- AUC on the binary "did he play at all" — this is where most systems fail, and
+  it is the metric the floor tier exists to serve
+
+### Where the tier comes from until then
+
+`playing_time.classify_tier` uses evidence: did the player clear 25 PA within 2
+years? That is a poor proxy for exactly the cases that matter most — a top
+prospect about to break camp as the starting shortstop is `floor`, and a
+just-retired veteran is `projected`. It is used because there is nothing better
+yet, and because it errs toward `floor`, and a floor player cannot distort
+anything. When the real model lands it owns the tier.
+
+### Also still missing
+
+An aging curve, league-level anchoring, and R/RBI as an allocation of team runs.
+See `deliverables/projection_engine/CURRENT_STATE_ASSESSMENT.md`.
 
 ## Players with no MLB history — minor-league translations (MLE)
 

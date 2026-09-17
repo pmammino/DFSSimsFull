@@ -298,20 +298,69 @@ PlayingTimeWeights = Callable[[pd.DataFrame], np.ndarray]
 
 def career_pa_weights(df: pd.DataFrame, *, column: str = "Career_PA",
                       floor: float = 1.0) -> np.ndarray:
-    """PROVISIONAL playing-time proxy: career volume.
+    """Playing-time weights, preferring real projected volume.
 
-    Known bias: skews veteran. A 33-year-old part-timer with 4000 career PA
-    outweighs a 24-year-old everyday starter with 600. It is used only because
-    there is no playing-time model yet, and it is at least stable — `Last_PA`
-    is worse, since the committed artifacts were built from a partial season.
+    Uses `Proj_PA` / `Proj_IP` where the playing-time layer has set it, and
+    falls back to career volume for rows it has not. Two things make this
+    correct rather than merely convenient:
 
-    Replace with the real projected-PA model as soon as it exists; that is the
-    single highest-value upgrade to team-level accuracy.
+      * A **floor-tier** player's explicit 1.0 survives — it is NOT replaced by
+        his career total. That is what stops a thousand organizational-depth
+        rows from dragging team aggregates around now that the projection set
+        spans whole organizations.
+      * A `projected`-tier player with no model yet carries NaN, so he falls
+        back to career volume and team aggregates keep working.
+
+    Known bias in the fallback: career volume skews veteran — a 33-year-old
+    part-timer with 4000 career PA outweighs a 24-year-old everyday starter
+    with 600. `Last_PA` is worse, since the committed artifacts were built from
+    a partial season. Replacing the fallback with a real projected-PA model is
+    the single highest-value upgrade to team-level accuracy.
     """
+    n = len(df)
+    for pt_col in ("Proj_PA", "Proj_IP"):
+        if pt_col not in df.columns:
+            continue
+        w = pd.to_numeric(df[pt_col], errors="coerce").to_numpy(float)
+        if column in df.columns:
+            fb = pd.to_numeric(df[column], errors="coerce").fillna(0.0)
+            # Fill ONLY where playing time is unknown (NaN). An explicit 1.0
+            # from the floor is a real answer and must not be overwritten.
+            w = np.where(np.isnan(w), fb.to_numpy(float), w)
+        w = np.nan_to_num(w, nan=0.0)
+        if w.sum() > 0:
+            return np.maximum(w, 0.0)
+
     if column not in df.columns:
-        return np.ones(len(df))
+        return np.ones(n)
     w = pd.to_numeric(df[column], errors="coerce").fillna(0.0).to_numpy(float)
     return np.maximum(w, floor)
+
+
+def roster_volume_weights(df: pd.DataFrame, *,
+                          column: str = "Career_PA") -> np.ndarray:
+    """Playing-time weights with floor-tier players zeroed out.
+
+    This is the basis for NORMALIZING team factors, and it is deliberately not
+    the same as `career_pa_weights`. A floor-tier player (organizational depth,
+    injured, or MLE-translated — see playing_time.py) *receives* a team factor,
+    so his own R/RBI are contextualized. But he must not *consume* a share of
+    the team's plate appearances.
+
+    Otherwise the arithmetic breaks: a real team bats about
+    `162 x PA_PER_TEAM_GAME` ~ 6,150 times, so counting 200 farmhands at the
+    1-PA floor would add 200 PA to a fixed budget and shift that club's share
+    of the league. The 1-PA floor exists so a player is present, ranked and
+    joinable — not so he takes playing time away from the major-league roster.
+
+    Falls back to `career_pa_weights` when no tier column is present, so legacy
+    frames behave as before.
+    """
+    if "pt_tier" not in df.columns:
+        return career_pa_weights(df, column=column)
+    w = career_pa_weights(df, column=column)
+    is_floor = df["pt_tier"].astype(str).to_numpy() == "floor"
+    return np.where(is_floor, 0.0, w)
 
 
 def depth_weights(df: pd.DataFrame, *, column: str = "Career_PA",
@@ -429,25 +478,31 @@ def bottom_up_team_factors(
       `team_RPA`     uses `weight_fn` — WHO DEFINES the team's offense. A
                      depth-chart weighting should consider the lineup, not the
                      30th man.
-      `team_weight`  uses total roster volume — WHO RECEIVES the factor. Every
-                     hitter on the roster gets it, so normalization must be
-                     weighted by all of them or league runs shift.
+      `team_weight`  uses `roster_volume_weights` — WHOSE PLAYING TIME the
+                     factor is applied to. Normalization must be weighted by
+                     that or league runs shift. Floor-tier players are excluded
+                     because they receive a factor without consuming team plate
+                     appearances; see `roster_volume_weights`.
 
-    Returns [team_col, team_abbr, n_hitters, team_weight, team_RPA,
-    bottom_up_factor].
+    Returns [team_col, team_abbr, n_hitters, n_projected, team_weight,
+    team_RPA, bottom_up_factor].
     """
     rows = []
     for team_id, g in hitters.dropna(subset=[team_col]).groupby(team_col):
+        n_projected = (int((g["pt_tier"].astype(str) != "floor").sum())
+                       if "pt_tier" in g.columns else len(g))
         rows.append({
             team_col: int(team_id),
             "team_abbr": abbr_for_team_id(team_id),
             "n_hitters": len(g),
-            "team_weight": float(np.sum(career_pa_weights(g))),
+            "n_projected": n_projected,
+            "team_weight": float(np.sum(roster_volume_weights(g))),
             "team_RPA": runs_per_pa(g, weight_fn(g)),
         })
     out = pd.DataFrame(rows)
     if out.empty:
-        return out.assign(team_weight=[], team_RPA=[], bottom_up_factor=[])
+        return out.assign(n_projected=[], team_weight=[], team_RPA=[],
+                          bottom_up_factor=[])
 
     league = float(np.average(out["team_RPA"], weights=out["team_weight"])) \
         if out["team_weight"].sum() > 0 else float(out["team_RPA"].mean())

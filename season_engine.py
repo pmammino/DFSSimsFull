@@ -253,11 +253,32 @@ def reconciliation_report(hitters: pd.DataFrame, pitchers: pd.DataFrame,
     lines.append("roster shape")
     n = factors["n_hitters"] if "n_hitters" in factors.columns else pd.Series(dtype=float)
     if len(n):
-        lines.append(f"  hitters per team           min {int(n.min())}"
+        lines.append(f"  players per org            min {int(n.min())}"
                      f"  max {int(n.max())}  mean {n.mean():.1f}")
-        lines.append("  ^ unconstrained: no position data is fetched, so no")
-        lineup_note = "    depth chart or batting order can be built yet."
-        lines.append(lineup_note)
+    if "n_projected" in factors.columns:
+        p_ = factors["n_projected"]
+        lines.append(f"  of which projected         min {int(p_.min())}"
+                     f"  max {int(p_.max())}  mean {p_.mean():.1f}")
+        lines.append("  ^ the rest are organizational depth at the 1 PA / 1 IP")
+        lines.append("    floor: present and joinable, but excluded from team")
+        lines.append("    playing time so they cannot move an aggregate.")
+    lines.append("  ^ still unconstrained: no position data from statsapi, so no")
+    lines.append("    depth chart or batting order can be built yet — though the")
+    lines.append("    minors feed DOES carry `position`, which is a way in.")
+
+    if "pt_tier" in hitters.columns:
+        lines.append("")
+        lines.append("playing-time tiers")
+        for label, df in (("hitters", hitters), ("pitchers", pitchers)):
+            if "pt_tier" not in df.columns:
+                continue
+            counts = df["pt_tier"].astype(str).value_counts().to_dict()
+            lines.append(f"  {label:<9} {counts}")
+        vol = "Proj_PA"
+        if vol in hitters.columns:
+            unmodeled = int(hitters[vol].isna().sum())
+            lines.append(f"  {unmodeled} hitters await a playing-time model"
+                         f" (Proj_PA is NaN, not a guess)")
     return "\n".join(lines)
 
 

@@ -148,7 +148,35 @@ def load_projections(out_dir, target_year):
     p = pd.read_csv(os.path.join(out_dir, f'pitcher_pa_projections_{target_year}.csv'))
     h['name_key'] = h['Name'].map(_norm)
     p['name_key'] = p['Name'].map(_norm)
+    # Projection files generated before playing-time tiers existed have no
+    # pt_tier. Default them to 'projected' so a legacy file behaves exactly as
+    # it did before — the tier filter below then becomes a no-op.
+    for df in (h, p):
+        if 'pt_tier' not in df.columns:
+            df['pt_tier'] = 'projected'
+        else:
+            df['pt_tier'] = df['pt_tier'].fillna('projected')
     return h, p
+
+
+def _mlb_rows(df):
+    """The subset of projection rows that could plausibly be in an MLB lineup.
+
+    The projection set spans a whole organization — MLB regulars plus depth,
+    injured, and MLE-translated minor leaguers down to Single-A, each carrying
+    a 1-PA floor (see playing_time.py). Those depth rows must never influence
+    same-name resolution: ``resolve_collisions`` treats any name with 2+
+    projection rows as needing disambiguation, so a Double-A namesake would
+    make a real MLB player "ambiguous" and get him DROPPED from the slate —
+    the same failure mode as the truncated-team-code bug.
+
+    Falls back to the full frame if the filter would empty it, so a
+    misconfigured tier column can never blank out a slate.
+    """
+    if 'pt_tier' not in df.columns:
+        return df
+    keep = df[df['pt_tier'].astype(str) == 'projected']
+    return keep if len(keep) else df
 
 
 def _row_for(df, name, team=None):
@@ -159,9 +187,18 @@ def _row_for(df, name, team=None):
     team code. If team can't pick a single row it falls back to the first, which
     is only reached for a *single* slate occurrence of the name (a true two-on-
     the-slate collision is resolved up front by :func:`resolve_collisions`, which
-    also uses assignment-by-elimination and can fail safe)."""
+    also uses assignment-by-elimination and can fail safe).
+
+    MLB-tier rows are preferred over organizational-depth rows, but a depth row
+    is still returned when it is the ONLY match — that way a player just called
+    up (whose tier was set from last season's evidence) still gets his own
+    baseline instead of no projection at all."""
     k = _norm(name)
     hit = df[df['name_key'] == k]
+    if len(hit) > 1:
+        mlb = _mlb_rows(hit)
+        if len(mlb):
+            hit = mlb
     if len(hit) > 1 and team is not None:
         ct = canonical_team(team)
         tmatch = hit[hit['Team'].map(canonical_team) == ct]
@@ -221,7 +258,15 @@ def resolve_collisions(slate, hproj):
     # simply isn't in a posted lineup right now). The latter matters because the DK
     # salary feed still lists BOTH players, so a single lineup occurrence keyed by
     # a plain name would later be shared with its twin in build_pool.
-    proj_counts = hproj['name_key'].value_counts()
+    #
+    # Counted over MLB-TIER rows only. The projection set spans a whole
+    # organization, so a real player very often has a namesake somewhere in
+    # A-ball; counting those would mark him ambiguous, push him through
+    # disambiguation he cannot win, and drop him from the slate. Depth players
+    # are never in a posted lineup, so they carry no information about whether
+    # a slate name is genuinely shared.
+    mlb_proj = _mlb_rows(hproj)
+    proj_counts = mlb_proj['name_key'].value_counts()
     ambiguous = set(proj_counts[proj_counts >= 2].index)
 
     assign, unresolved, collided = {}, set(), set()
@@ -229,7 +274,11 @@ def resolve_collisions(slate, hproj):
         if len(teams) < 2 and nk not in ambiguous:
             continue                              # unique name — nothing to separate
         collided.add(nk)
-        rows = hproj[hproj['name_key'] == nk]
+        # Resolve against MLB-tier rows for the same reason, but fall back to
+        # the full set so a just-promoted depth player can still be placed.
+        rows = mlb_proj[mlb_proj['name_key'] == nk]
+        if rows.empty:
+            rows = hproj[hproj['name_key'] == nk]
         if len(rows) < 2:
             if len(rows) == 1 and len(teams) == 1:   # 1 row, 1 slate team → it's them
                 assign[(nk, teams[0])] = rows.index[0]

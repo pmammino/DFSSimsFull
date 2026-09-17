@@ -456,6 +456,17 @@ RUNS_RBI_COLS = ["P_R", "P_RBI", "SD_R", "SD_RBI",
 TEAM_ID_COLS = ["Pred_target_team_id", "Pred_target_team_abbr",
                 "team_assign_source"]
 
+# Playing time. `pt_tier` is "projected" (expected to accumulate real MLB
+# playing time) or "floor" (carried for organizational completeness — depth,
+# injured, or MLE-translated minor leaguers). Floor-tier players carry
+# Proj_PA/Proj_IP = 1.0; projected-tier players carry NaN until a playing-time
+# model exists, marked by `pt_source` = "unmodeled". See playing_time.py.
+#
+# Consumers that must not treat a depth player as a real MLB option — the DFS
+# slate path above all — should filter on `pt_tier == "projected"`.
+PLAYING_TIME_COLS = ["pt_tier", "pt_source", "Proj_PA", "Proj_IP",
+                     "evidence_volume", "evidence_season"]
+
 # Park-adjusted column groups (both hitters and pitchers). All neutral
 # probabilities have a `_park` counterpart. Effective park factors (after
 # the 50/50 home/away blend) are exposed via `eff_HR`, `eff_1B`, etc., and
@@ -554,6 +565,7 @@ def _format_output(df: pd.DataFrame) -> pd.DataFrame:
     # so de-dupe against it to keep the hitter column order unchanged.
     extra_team = [c for c in TEAM_ID_COLS
                   if c in df.columns and c not in RUNS_RBI_COLS]
+    extra_pt = [c for c in PLAYING_TIME_COLS if c in df.columns]
     extra_sb = [c for c in SB_COLS if c in df.columns]
     extra_rr = [c for c in RUNS_RBI_COLS if c in df.columns]
     extra_park_prob = [c for c in PARK_PROB_COLS if c in df.columns]
@@ -563,7 +575,7 @@ def _format_output(df: pd.DataFrame) -> pd.DataFrame:
     extra_pit_summ  = [c for c in PITCHER_SUMMARY_COLS if c in df.columns]
     extra_splits    = [c for c in SPLITS_COLS if c in df.columns]
     cols = ([c for c in keep_meta if c in df.columns]
-            + extra_team
+            + extra_team + extra_pt
             + PROB_COLS + SD_COLS
             + extra_sb + extra_rr
             + extra_park_prob + extra_park_sum + extra_park_sb + extra_park_fac
@@ -1142,6 +1154,29 @@ def main():
     if hit_mle_ids or pit_mle_ids:
         print(f"\n  MLE baselines in output: {len(hit_mle_ids)} hitters, "
               f"{len(pit_mle_ids)} pitchers")
+
+    # Step 13 — Playing-time tier + the 1 PA / 1 IP floor.
+    #
+    # The projection set now spans a whole organization, so being in the output
+    # is no longer a claim of playing time. Every player gets a `pt_tier`, and
+    # anyone who does not project for real playing time gets Proj_PA = 1 /
+    # Proj_IP = 1 rather than 0 or NaN. There is no playing-time MODEL yet, so
+    # `projected`-tier players carry NaN volume marked "unmodeled" — a
+    # plausible-looking guess there would make every downstream total quietly
+    # wrong, where a NaN fails loudly at the point of use.
+    print("\n" + "═" * 70)
+    print("STEP 13: Playing-time tiers (1 PA / 1 IP floor for depth players)")
+    print("═" * 70)
+    from playing_time import apply_playing_time, classify_tier, tier_report
+
+    h_tiers = classify_tier(hit_df, target, volume_col="PA",
+                            mle_ids=set(hit_mle_ids))
+    p_tiers = classify_tier(pit_df, target, volume_col="TBF",
+                            mle_ids=set(pit_mle_ids))
+    h_final = apply_playing_time(h_final, h_tiers, role="hitter")
+    p_final = apply_playing_time(p_final, p_tiers, role="pitcher")
+    print(" hitters:"); print(tier_report(h_final, role="hitter"))
+    print(" pitchers:"); print(tier_report(p_final, role="pitcher"))
 
     # Names
     chadwick = fetch_chadwick_lookup(force=args.force)
