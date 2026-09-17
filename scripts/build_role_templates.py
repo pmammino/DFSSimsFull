@@ -221,6 +221,18 @@ def _legend(wb, role_defs, kind):
         ("  deliberately UNDER-projected instead of spreading those "
          f"{vol} across the players on hand.", False),
         ("", False),
+        ("THE PROJECTION COLUMNS:", True),
+        (f"  Proj {vol} and the columns beside it are FORMULAS, so they update "
+         f"as you edit probabilities.", False),
+        ("  They show blank until you open this file in Excel or LibreOffice, "
+         "which computes them on", False),
+        ("  open — openpyxl cannot write cached values alongside a formula. "
+         "That is cosmetic: the", False),
+        ("  pipeline reads the INPUT columns (role probabilities, Role Start, "
+         "Availability) and recomputes", False),
+        ("  the volumes itself, so a blank formula cell never reaches a "
+         "projection.", False),
+        ("", False),
         ("CALIBRATION STATUS:", True),
         (f"  Every anchor on the Roles sheet is a documented starting point, "
          f"not a fitted value. Fit them", False),
@@ -285,7 +297,9 @@ def _roles_sheet(wb, role_defs, kind):
     ws.cell(row=note_row, column=1,
             value="Share weights are RELATIVE within a team — the allocator "
                   "normalizes them to that club's save/hold pool from "
-                  "team_wins.py, so they need not sum to 1."
+                  "team_wins.py, so they need not sum to 1. They are scaled "
+                  "by Role Share x Availability first, so a closer who misses "
+                  "half the season claims half as much of the pool."
             if kind == "pitcher" else
             "Anchors are per 162 team games at full availability with the role "
             "held all season. Multiply by Role Share and Availability.").font = \
@@ -475,14 +489,21 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
                 f'/({pa_col}{i}/($K{i}*$L{i})),"")'
             )).number_format = "0.00"
         else:
+            # Every derived quantity is scaled by Role Share x Availability,
+            # save and hold weights included: a closer who misses half the
+            # season should claim half as much of his team's save pool, and
+            # the allocator normalizes the claims within the club afterwards.
+            # Leaving the weights unscaled would hand a hurt closer a full
+            # claim and quietly take saves away from the healthy arm behind
+            # him.
             for field, fmt in (("gs", "0.0"), ("g", "0.0"),
                                ("sv", "0.000"), ("hld", "0.000")):
                 col += 1
                 ar = extra_rows[field]
-                scale = "*$K{0}*$L{0}".format(i) if field in ("gs", "g") else ""
                 ws.cell(row=i, column=col, value=(
                     f"=SUMPRODUCT({RC0}{i}:{RC1}{i},"
-                    f"${RC0}${ar}:${RC1}${ar}){scale}")).number_format = fmt
+                    f"${RC0}${ar}:${RC1}${ar})*$K{i}*$L{i}"
+                )).number_format = fmt
         col += 1
         c = ws.cell(row=i, column=col, value=rec.get("Notes"))
         c.fill = EXAMPLE_FILL if is_example else INPUT_FILL
