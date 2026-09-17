@@ -442,6 +442,20 @@ RUNS_RBI_COLS = ["P_R", "P_RBI", "SD_R", "SD_RBI",
                  "Pred_lineup_slot",
                  "n_eff_R_per_PA", "n_eff_RBI_per_PA"]
 
+# Team identity, emitted for BOTH hitters and pitchers so the season layer can
+# join either side on one key. `Pred_target_team_id` is the MLBAM id and is the
+# durable join key — it survives relocations and rebrands that break
+# abbreviation strings. `Pred_target_team_abbr` is the canonical display code
+# (see team_context.TEAM_ABBR_BY_ID), and `team_assign_source` records whether
+# the team came from the roster-override file ("override"), the player's own
+# playing time ("history"), or nowhere ("unknown").
+#
+# The legacy `Team` column is the team the player last actually appeared for,
+# straight from statsapi, and is display-only. Prefer these columns for any
+# team-level aggregation.
+TEAM_ID_COLS = ["Pred_target_team_id", "Pred_target_team_abbr",
+                "team_assign_source"]
+
 # Park-adjusted column groups (both hitters and pitchers). All neutral
 # probabilities have a `_park` counterpart. Effective park factors (after
 # the 50/50 home/away blend) are exposed via `eff_HR`, `eff_1B`, etc., and
@@ -535,6 +549,11 @@ def _format_output(df: pd.DataFrame) -> pd.DataFrame:
             df[c] = df[c].round(5)
     keep_meta = ["PlayerId", "Name", "Team", "Age", "Last_PA", "Career_PA",
                  "N_BIP", "mle_source"]
+    # Team identity goes right after the metadata block, before the rate
+    # columns — RUNS_RBI_COLS already carries Pred_target_team_id for hitters,
+    # so de-dupe against it to keep the hitter column order unchanged.
+    extra_team = [c for c in TEAM_ID_COLS
+                  if c in df.columns and c not in RUNS_RBI_COLS]
     extra_sb = [c for c in SB_COLS if c in df.columns]
     extra_rr = [c for c in RUNS_RBI_COLS if c in df.columns]
     extra_park_prob = [c for c in PARK_PROB_COLS if c in df.columns]
@@ -544,6 +563,7 @@ def _format_output(df: pd.DataFrame) -> pd.DataFrame:
     extra_pit_summ  = [c for c in PITCHER_SUMMARY_COLS if c in df.columns]
     extra_splits    = [c for c in SPLITS_COLS if c in df.columns]
     cols = ([c for c in keep_meta if c in df.columns]
+            + extra_team
             + PROB_COLS + SD_COLS
             + extra_sb + extra_rr
             + extra_park_prob + extra_park_sum + extra_park_sb + extra_park_fac
@@ -642,10 +662,34 @@ def step9_project_runs_rbi(h_final: pd.DataFrame, hit_df: pd.DataFrame,
         print("  No team_rpg data available — skipping R/RBI projection")
         return h_final
 
+    # One shared team-assignment rule for hitters and pitchers, honoring the
+    # roster-override file so offseason signings and trades are reflected here
+    # and not only in the season layer.
+    from team_context import (
+        TEAM_OVERRIDE_PATH, assign_target_teams, describe_moves,
+        load_team_overrides,
+    )
+
+    overrides = load_team_overrides(TEAM_OVERRIDE_PATH(target_year))
+    hit_assign = assign_target_teams(
+        hit_df, target_year, id_col="PlayerId", volume_col="PA",
+        min_volume=25.0, overrides=overrides,
+    )
+    if overrides:
+        names = dict(zip(hit_df["PlayerId"], hit_df["Name"]))
+        print("  " + describe_moves(hit_assign, names=names).replace("\n", "\n  "))
+
     proj = project_runs_and_rbi(
         hit_df, team_rpg, target_year,
         k_pa=RUNS_RBI_K_PA, decay=RUNS_RBI_DECAY,
         max_history_years=RUNS_RBI_MAX_HISTORY_YEARS,
+        team_assignments=hit_assign,
+    )
+    proj = proj.merge(
+        hit_assign[["PlayerId", "team_abbr", "assign_source"]].rename(
+            columns={"team_abbr": "Pred_target_team_abbr",
+                     "assign_source": "team_assign_source"}),
+        on="PlayerId", how="left",
     )
     print(f"  Projections for {len(proj)} players")
     print(f"  League avg projected R/PA:   {proj['Pred_R_per_PA'].mean():.4f}")
@@ -738,17 +782,30 @@ def step10_apply_park_factors(h_final: pd.DataFrame, p_final: pd.DataFrame,
     else:
         print("  Hitter R/RBI step didn't run — no team_id column; skipping hitters")
 
-    # ── Pitchers — need to derive home team from history ──────────────────
+    # ── Pitchers — derive target team from history ─────────────────────────
     if p_final is not None and len(p_final) > 0:
-        # Map each pitcher's most recent team
-        pit_history = (pit_df[pit_df["TeamId"].notna() & (pit_df["TBF"] >= 25)]
-                       .sort_values(["PlayerId", "Season"]))
-        most_recent = (pit_history.groupby("PlayerId")
-                       .agg(TeamId=("TeamId", "last")).reset_index())
+        # Uses team_context.assign_target_teams — the SAME rule the hitter side
+        # uses, with volume_col="TBF" instead of "PA". The previous code here
+        # was `groupby("PlayerId").agg(TeamId=("TeamId", "last"))` over a frame
+        # sorted only by (PlayerId, Season), which is an unstable tie-break: a
+        # pitcher traded mid-season has two rows in his final season, and which
+        # one won depended on input row order rather than on where he actually
+        # threw. It also wasn't TBF-weighted, so one relief appearance for a new
+        # club could outrank a full season with the old one.
+        from team_context import assign_target_teams
+
+        pit_assign = assign_target_teams(
+            pit_df, target_year, id_col="PlayerId", volume_col="TBF",
+            min_volume=25.0,
+        )
         p_final = p_final.merge(
-            most_recent.rename(columns={"TeamId": "Pred_home_team_id"}),
+            pit_assign.rename(columns={"team_id": "Pred_target_team_id",
+                                       "team_abbr": "Pred_target_team_abbr",
+                                       "assign_source": "team_assign_source"}),
             on="PlayerId", how="left",
         )
+        # Home park follows the target team.
+        p_final["Pred_home_team_id"] = p_final["Pred_target_team_id"]
         p_final = apply_park_factors_to_projections(
             p_final, park_df,
             team_id_col="Pred_home_team_id",

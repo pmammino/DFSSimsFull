@@ -291,13 +291,44 @@ OUT_ADAPTIVE_K_PITCHER = 400   # Bayesian prior strength for pitcher BIP-out
 OUT_POP_PULL_HITTER  = 0.38
 OUT_POP_PULL_PITCHER = 0.58
 
-# The mean/median blend weights for each event (R script's exact recipe)
+# The (mean_weight, median_weight) blend applied to each event's per-BIP
+# probability when aggregating a player's batted balls into a per-BIP outcome
+# distribution (see pa_aggregation._per_season_event_dist):
+#
+#     estimate = mean_weight * mean(prob) + median_weight * median(prob)
+#
+# ALL events use the pure mean (1.0, 0.0). Do not reintroduce a median weight
+# on the extra-base events.
+#
+# History — the ported R recipe used (0.75, 0.25) for double/triple/home_run as
+# an outlier-robustness measure. A median blend only preserves the mean on a
+# roughly SYMMETRIC distribution. The per-BIP extra-base probability
+# distribution is extremely right-skewed, because most batted balls simply
+# cannot become an extra-base hit:
+#
+#     per-BIP HR probability:   mean 0.0457,  MEDIAN 0.0000
+#     per-BIP XBH probability:  mean 0.1139,  median 0.0375
+#
+# Against a zero median, a 0.25 median weight is not robustness — it is a
+# mechanical -25% haircut on home runs. Because "single" and "out" kept the
+# pure mean, the deflated extra-base mass was then reallocated to singles when
+# the BIP events were renormalized, which is exactly the bias measured against
+# real 2025 batted balls (HR 0.81x, 2B 0.83x, 3B 0.84x of their true share of
+# the batted-ball pool, with 1B at 1.07x absorbing it).
+#
+# Regression to the mean on batted-ball quality is the job of the adaptive
+# Bayesian pull above (OUT_ADAPTIVE_K_*), which is sample-size aware and
+# spread-calibrated. The blend should not also be doing it, and should not be
+# doing it asymmetrically across events.
+#
+# Verify with: python deliverables/projection_engine/audit_baselines.py
+# (checks 4 and 5), and tests/test_bip_blend_weights.py.
 EVENT_BLEND_WEIGHTS_HITTER = {
-    "out":      (1.0, 0.0),   # only mean (population pull does the work)
+    "out":      (1.0, 0.0),
     "single":   (1.0, 0.0),
-    "double":   (0.75, 0.25),
-    "triple":   (0.75, 0.25),
-    "home_run": (0.75, 0.25),
+    "double":   (1.0, 0.0),
+    "triple":   (1.0, 0.0),
+    "home_run": (1.0, 0.0),
 }
 EVENT_BLEND_WEIGHTS_PITCHER = EVENT_BLEND_WEIGHTS_HITTER
 

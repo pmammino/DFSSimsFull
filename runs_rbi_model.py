@@ -133,40 +133,26 @@ def _get_team_factor(season: int, team_id, factor_lookup: dict) -> float:
     return float(np.clip(f, 0.5, 2.0))
 
 
-def _projected_target_team_factor(
-    pid: int, target_year: int, hit_df: pd.DataFrame,
-    factor_lookup: dict, games_lookup: dict,
-) -> tuple[int | None, float]:
-    """Best guess at (target team, target team factor) for `target_year`.
+def _blend_team_factor(team_id: int, target_year: int,
+                       factor_lookup: dict, games_lookup: dict) -> float:
+    """Games-weighted blend of ONE team's recent run-environment factors.
 
-    The player's most recent team is used. The team factor blends the team's
-    last few seasons of RPG, games-weighted, so partial-season data (e.g.,
+    Blends the team's last 3 seasons of RPG so partial-season data (e.g.,
     early-2026 with only ~45 games) doesn't dominate. Specifically:
 
         weight(season) = games_in_season × decay^(years_back_from_target)
 
     Uses decay=0.85 to match the rate models — recent seasons matter more.
-    """
-    p = hit_df[(hit_df["PlayerId"] == pid) &
-               (hit_df["Season"] < target_year) &
-               (hit_df["TeamId"].notna()) &
-               (hit_df["PA"] >= 25)]
-    if p.empty:
-        return None, 1.0
-    latest_yr = int(p["Season"].max())
-    p_latest = p[p["Season"] == latest_yr]
-    grp = (p_latest.groupby("TeamId")["PA"].sum()
-           .sort_values(ascending=False))
-    if grp.empty:
-        return None, 1.0
-    team_id = int(grp.index[0])
 
-    # Games-weighted blend of this team's recent factors
+    Split out of `_projected_target_team_factor` so an externally supplied team
+    assignment (a trade or signing from the roster-override file) gets the
+    identical factor computation as an inferred one.
+    """
     decay = 0.85
     relevant = [(s, t) for (s, t) in factor_lookup
                 if t == team_id and s < target_year]
     if not relevant:
-        return team_id, 1.0
+        return 1.0
     relevant.sort(key=lambda x: x[0], reverse=True)
     # Take the last 3 seasons for blending
     relevant = relevant[:3]
@@ -185,9 +171,36 @@ def _projected_target_team_factor(
         num += w * factor_lookup[(season, team_id)]
         den += w
     if den == 0:
-        return team_id, 1.0
-    factor = num / den
-    return team_id, float(np.clip(factor, 0.5, 2.0))
+        return 1.0
+    return float(np.clip(num / den, 0.5, 2.0))
+
+
+def _projected_target_team_factor(
+    pid: int, target_year: int, hit_df: pd.DataFrame,
+    factor_lookup: dict, games_lookup: dict,
+) -> tuple[int | None, float]:
+    """Best guess at (target team, target team factor) for `target_year`.
+
+    Infers the player's most recent team from his own playing time. Prefer
+    passing `team_assignments` to `project_runs_and_rbi` instead — that routes
+    through `team_context.assign_target_teams`, which is shared with the
+    pitcher side and can express offseason moves that history cannot.
+    """
+    p = hit_df[(hit_df["PlayerId"] == pid) &
+               (hit_df["Season"] < target_year) &
+               (hit_df["TeamId"].notna()) &
+               (hit_df["PA"] >= 25)]
+    if p.empty:
+        return None, 1.0
+    latest_yr = int(p["Season"].max())
+    p_latest = p[p["Season"] == latest_yr]
+    grp = (p_latest.groupby("TeamId")["PA"].sum()
+           .sort_values(ascending=False))
+    if grp.empty:
+        return None, 1.0
+    team_id = int(grp.index[0])
+    return team_id, _blend_team_factor(team_id, target_year,
+                                        factor_lookup, games_lookup)
 
 
 def _project_neutral_rate(hit_df: pd.DataFrame, target_year: int,
@@ -244,6 +257,7 @@ def project_runs_and_rbi(hit_df: pd.DataFrame, team_rpg: pd.DataFrame,
                           k_pa: float = 200.0,
                           decay: float = 0.85,
                           max_history_years: int = 5,
+                          team_assignments: pd.DataFrame | None = None,
                           ) -> pd.DataFrame:
     """End-to-end R/PA and RBI/PA projection with team-context detrending.
 
@@ -251,6 +265,22 @@ def project_runs_and_rbi(hit_df: pd.DataFrame, team_rpg: pd.DataFrame,
     PA-weighted recency-decay shrinkage, then re-applies the target team's
     forecast factor (a games-weighted blend of that team's recent seasons,
     so partial-season data doesn't dominate the forecast).
+
+    `team_assignments` optionally supplies the target team per player as a
+    frame with [PlayerId, team_id] — normally from
+    `team_context.assign_target_teams`, which is the same rule the pitcher
+    side uses and which honors the roster-override file. When given, it
+    replaces this module's own "most PA in the latest season" inference, so an
+    offseason signing or trade is reflected here rather than only in the
+    season layer. A player absent from the frame falls back to inference; an
+    explicit null team_id means "no team" and gets neutral context.
+
+    Note that the team factor produced here remains the backward-looking
+    team-RPG blend. It correlates only r = 0.67 with the talent of the roster
+    it is applied to, which is why `team_context.bottom_up_team_factors`
+    rebuilds it from the projected roster for season-long use.
+    `Pred_R_per_PA_neutral` is the team-context-free skill estimate and is the
+    column that layer re-scales.
     """
     factor_lookup, league_rpg_by_yr, games_lookup = _build_team_factor_lookup(team_rpg)
 
@@ -268,14 +298,26 @@ def project_runs_and_rbi(hit_df: pd.DataFrame, team_rpg: pd.DataFrame,
     )
     out = r_proj.merge(rbi_proj, on="PlayerId", how="outer")
 
+    assigned: dict[int, int | None] = {}
+    if team_assignments is not None and not team_assignments.empty:
+        for _, a in team_assignments.iterrows():
+            tid = a.get("team_id")
+            assigned[int(a["PlayerId"])] = (None if pd.isna(tid) else int(tid))
+
     target_teams = []
     factors = []
     slots = []
     for _, row in out.iterrows():
         pid = int(row["PlayerId"])
-        team_id, factor = _projected_target_team_factor(
-            pid, target_year, df, factor_lookup, games_lookup,
-        )
+        if pid in assigned:
+            team_id = assigned[pid]
+            factor = (_blend_team_factor(team_id, target_year, factor_lookup,
+                                         games_lookup)
+                      if team_id is not None else 1.0)
+        else:
+            team_id, factor = _projected_target_team_factor(
+                pid, target_year, df, factor_lookup, games_lookup,
+            )
         target_teams.append(team_id)
         factors.append(float(factor))
 

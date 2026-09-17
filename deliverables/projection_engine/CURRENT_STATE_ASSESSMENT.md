@@ -1,5 +1,13 @@
 # 2027 Season Projection Engine — Current State Assessment
 
+> **Status update.** Phase 0 items 1-3 and 5, and the team half of Phase 2, are
+> now implemented — see "Implementation status" at the bottom. The findings
+> below are preserved as the diagnosis that motivated them, and the figures
+> still describe the committed `out/` CSVs, which **pre-date the fixes**. The
+> pipeline must be re-run to regenerate them (blocked here: statsapi is
+> unreachable from this environment).
+
+
 **Question asked:** what exists today in the pitcher/hitter baseline generation,
 and what is missing before we can turn it into a season-long projection engine
 that aligns players to teams, derives team-level talent (R/RBI, wins), and
@@ -378,3 +386,47 @@ after the Blocker A fix.** Power will rise ~19%, which will move DFS scoring
 distributions and, through them, ownership and the contest sim. That is the
 correct direction, but it is not a no-op for the existing app and should be
 validated against `deliverables/sim_review/` before shipping.
+
+---
+
+## 8. Implementation status
+
+### Done
+
+| Item | Where | Effect |
+|---|---|---|
+| **Blocker A — extra-base blend** | `pipeline_config.EVENT_BLEND_WEIGHTS_*` now `(1.0, 0.0)` for every event | Removes the −25% HR / −17% XBH haircut. Guarded by `tests/test_bip_blend_weights.py`, which fails if a median weight returns or if the weights go asymmetric across events. |
+| **Team string** | `data_acquisition._team_code` resolves id → canonical abbr → full name, never a name slice | All 30 franchises distinct. Also fixes same-name collision drops on the **daily** path, which canonicalizes this column (`matchup.resolve_collisions`). |
+| **Unified team assignment** | `team_context.assign_target_teams`, used by `run_pipeline` for both sides | One PA/TBF-weighted rule with an order-independent tie-break, replacing the pitcher side's unstable `groupby().last()`. |
+| **Team ids in output** | `run_pipeline.TEAM_ID_COLS` | Both CSVs now carry `Pred_target_team_id`, `Pred_target_team_abbr`, `team_assign_source`. |
+| **Players changing teams** | `rosters/team_assignments_<year>.json`, read by `run_pipeline` and `season_engine` | Expresses signings, trades, and unsigned players (`"team": null`) that history cannot. |
+| **Bottom-up team context** | `team_context.bottom_up_team_factors` + `blend_team_factors` | Team run environment derived from the projected roster, blended with the historical prior, normalized so the **volume-weighted mean factor is exactly 1.0**. A team change updates both clubs and conserves league runs. |
+| **Season layer** | `season_engine.py` | CLI producing `out/season_<year>/`, with closure diagnostics. |
+| **Doc drift** | `README_projection_engine.md` | `RATE_HIST_START` corrected to 2022; new team-layer section. |
+
+Verified on the current (pre-fix) artifacts: 30 distinct team contexts,
+volume-weighted mean team factor 1.000000 before and after a roster change,
+and a test move of the two highest-volume hitters to Colorado raising COL
+(+0.110) while dropping NYY (−0.053) and LAD (−0.045). 54 new tests; full
+suite 221 passing.
+
+### Not done, and why
+
+- **`out/` not regenerated.** statsapi is unreachable from this environment
+  (proxy 403), so the pipeline cannot run here. The committed CSVs still show
+  the −19% extra-base suppression and the 26-label `Team` column. Re-run
+  `python run_pipeline.py --target-year 2027 --bip-dir bip_inputs --output-dir out`
+  and re-check with `audit_baselines.py` — the audit now distinguishes "config
+  fixed" from "artifacts stale".
+- **Blend-weight fix not yet propagated to the daily sim.** Expect power to
+  rise ~19% once the pipeline re-runs. Validate against
+  `deliverables/sim_review/` and rebuild sims before trusting DFS output.
+- **`TEAM_CONTEXT_BOTTOM_UP_WEIGHT = 0.60` is a starting point, not a fitted
+  value.** It was deliberately not tuned against the current artifacts, whose
+  compressed talent spread would bias it low. Re-tune after the re-run, with a
+  walk-forward backtest.
+- **Everything in Phases 1, 3, and 4 stands**: aging curve, league anchoring,
+  positions/depth chart, playing time, R/RBI as an allocation of team runs, and
+  the wins model. Playing time remains the keystone — the R/RBI closure ratios
+  (1.07 and 1.03 against targets of 1.00 and 0.88) cannot be fixed without it,
+  which is why no wins column is published yet.

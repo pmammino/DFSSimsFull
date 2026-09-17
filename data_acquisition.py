@@ -30,6 +30,40 @@ from pipeline_config import (
     CACHE_DIR, STATSAPI_TIMEOUT, SAVANT_TIMEOUT, SAVANT_DAYS_PER_CHUNK,
     RATE_HIST_START,
 )
+from slate_config import canonical_team
+from team_context import abbr_for_team_id
+
+
+def _team_code(team: dict) -> str:
+    """Canonical abbreviation for a statsapi team object.
+
+    Resolution order, most reliable first:
+      1. the MLBAM team id (durable across relocations and rebrands)
+      2. the feed's own `abbreviation`, canonicalized
+      3. the full team name, canonicalized
+
+    Previously this was `team.get("abbreviation") or team.get("name", "")[:3]`.
+    When statsapi omitted `abbreviation` — which it does on the stats endpoints
+    used here — the name slice collapsed 30 franchises into 26 labels: "Chi"
+    merged the Cubs and White Sox, "Los" the Dodgers and Angels, "New" the
+    Yankees and Mets, "San" the Padres and Giants, plus junk codes like "St."
+    and "Kan".
+
+    That broke two things at once. Team-level aggregation could not separate
+    two clubs sharing a city, and on the daily side `matchup.resolve_collisions`
+    canonicalizes this column to disambiguate same-name players — "NEW" is not
+    a valid canonical code, so a Yankees/Mets name pair could neither be
+    matched nor eliminated, and got dropped from the slate.
+
+    Returns "" when nothing resolves, so callers can treat it as missing.
+    """
+    abbr = abbr_for_team_id(team.get("id"))
+    if abbr:
+        return abbr
+    return (canonical_team(team.get("abbreviation"))
+            or canonical_team(team.get("name"))
+            or "")
+
 
 # statsapi.mlb.com and baseballsavant return 403 to the default python-requests
 # User-Agent on some networks; present a browser-like UA for every request.
@@ -72,7 +106,7 @@ def _fetch_statsapi_one(year: int, group: str) -> pd.DataFrame:
             "Season":   year,
             "PlayerId": p.get("id"),
             "Name":     p.get("fullName"),
-            "Team":     team.get("abbreviation") or team.get("name", "")[:3],
+            "Team":     _team_code(team),
             "TeamId":   team.get("id"),
             "Age":      st.get("age"),
             "PA":       st.get("plateAppearances", 0),
@@ -226,7 +260,7 @@ def fetch_team_rpg(seasons: list[int], force: bool = False) -> pd.DataFrame:
             rows.append({
                 "Season": year,
                 "TeamId": team.get("id"),
-                "Team":   team.get("abbreviation") or team.get("name", "")[:3],
+                "Team":   _team_code(team),
                 "TeamName": team.get("name"),
                 "G":      g,
                 "R":      r_,

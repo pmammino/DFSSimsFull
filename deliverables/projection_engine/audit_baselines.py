@@ -166,6 +166,16 @@ def check_blend_mechanism(b: pd.DataFrame | None) -> None:
 
     from pipeline_config import EVENT_BLEND_WEIGHTS_HITTER as BLEND
 
+    medians = {ev: w_med for ev, (_, w_med) in BLEND.items() if w_med}
+    if medians:
+        print(f"  !! LIVE BUG: median weight still set on {sorted(medians)}")
+    else:
+        print("  CONFIG OK: every event uses the pure mean (1.0, 0.0).")
+        print("  The figures below are what the OLD (0.75, 0.25) recipe cost,")
+        print("  retained so the fix stays justified. If the CSVs above still")
+        print("  show suppressed extra-base hits, they pre-date the fix —")
+        print("  re-run run_pipeline.py.\n")
+
     b = b.dropna(subset=["launch_speed", "launch_angle"]).copy()
     b["hr"] = (b.events == "home_run").astype(int)
     b["xb"] = b.events.isin(["double", "triple", "home_run"]).astype(int)
@@ -245,19 +255,31 @@ def check_team_level(h: pd.DataFrame, p: pd.DataFrame) -> pd.DataFrame:
     _hdr(7, "TEAM ALIGNMENT, TEAM TALENT, AND CLOSURE")
 
     print("  (a) team identity columns")
-    print(f"      hitter `Team` string uniques : {h.Team.nunique()} "
-          f"(must be 30)  -> {sorted(h.Team.dropna().unique())}")
-    print(f"      pitcher `Team` string uniques: {p.Team.nunique()} "
-          f"(must be 30)")
-    print("      cause: data_acquisition.py takes team['name'][:3] when"
-          " `abbreviation`\n             is missing, so Chi/Los/New/San each"
-          " merge two franchises.")
-    print(f"      hitters carry Pred_target_team_id : "
-          f"{h.Pred_target_team_id.nunique()} teams, "
-          f"{h.Pred_target_team_id.isna().sum()} missing")
-    print(f"      pitchers carry NO Pred_target_team_id — only"
-          f" home_park_team_id\n             (and it is derived by a DIFFERENT"
-          f" rule; see assessment)")
+    n_hit_team, n_pit_team = h.Team.nunique(), p.Team.nunique()
+    print(f"      hitter `Team` string uniques : {n_hit_team} (must be 30)")
+    print(f"      pitcher `Team` string uniques: {n_pit_team} (must be 30)")
+    if n_hit_team < 30 or n_pit_team < 30:
+        print(f"      -> STALE ARTIFACTS: {sorted(h.Team.dropna().unique())}")
+        print("         The old `team['name'][:3]` fallback merged Chi/Los/"
+              "New/San.")
+        print("         Fixed in data_acquisition._team_code — re-run"
+              " run_pipeline.py")
+        print("         to regenerate these CSVs with all 30 franchises.")
+    else:
+        print("      -> all 30 franchises distinct")
+
+    for label, df in (("hitters", h), ("pitchers", p)):
+        if "Pred_target_team_id" in df.columns:
+            print(f"      {label:<9} Pred_target_team_id: "
+                  f"{df.Pred_target_team_id.nunique()} teams, "
+                  f"{int(df.Pred_target_team_id.isna().sum())} missing")
+        else:
+            print(f"      {label:<9} has NO Pred_target_team_id — pre-dates the"
+                  " unified\n                assignment rule; re-run"
+                  " run_pipeline.py")
+        if "team_assign_source" in df.columns:
+            print(f"                sources: "
+                  f"{df.team_assign_source.value_counts().to_dict()}")
 
     rows = []
     for tid, g in h.groupby("Pred_target_team_id"):

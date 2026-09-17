@@ -115,13 +115,15 @@ Each row is one player. Columns are grouped:
 | `park_factors.py` | Statcast 3-yr rolling park factors with handedness-specific factors, applied to each event probability then renormalized via the BIPOut residual |
 | `pitcher_outputs.py` | Linear-weights derivation of RA9 from per-PA events; ERA via role-specific ER/RA ratio (starter 0.934, reliever 0.889); TBF/IP and WP/PA |
 | `splits_model.py` | Per-side (vL/vR) projection with overall-anchored constraint — uses same shrinkage machinery on side-specific history, then rescales so PA-weighted average matches the main projection |
+| `team_context.py` | Canonical team identity (MLBAM id ↔ abbreviation), one shared hitter/pitcher team-assignment rule, roster overrides for players changing teams, and the bottom-up team run environment |
+| `season_engine.py` | Season-long projection layer on top of the per-PA CSVs — team alignment, roster-derived team context, R/RBI rescaling, closure diagnostics |
 | `run_pipeline.py` | Orchestrator — runs all 12 steps in order, prints progress + validation, and writes the final CSVs |
 
 ## Important config knobs (in `pipeline_config.py`)
 
 ```python
 TARGET_YEAR              = 2027     # year to project
-RATE_HIST_START          = 2018     # earliest historical year
+RATE_HIST_START          = 2022     # earliest historical year
 RATE_DECAY               = 0.85     # PA weight decay per year-back
 RATE_MAX_HISTORY_YEARS   = 5
 RATE_SHRINK_K_HITTER     = 100      # PA equivalent of prior weight
@@ -157,6 +159,91 @@ MLE_LOCAL_FEED           = Path("./minors_inputs/minors_<season>.json")
 ```
 
 All other constants are inline-documented at point of use.
+
+## Season-long projections — the team layer (`season_engine.py`)
+
+The per-PA CSVs are a **skill layer**: rates against a league-average opponent.
+Season-long projections need players aligned to teams, and team-level context
+(run environment, and eventually wins) built from those rosters.
+`season_engine.py` adds that as a layer on top, leaving the per-PA CSVs — and
+therefore the daily DFS path — untouched.
+
+```bash
+python season_engine.py --target-year 2027
+# writes out/season_2027/{hitters,pitchers,team_context}.csv
+```
+
+### Team identity
+
+`team_context.TEAM_ABBR_BY_ID` maps all 30 MLBAM team ids to the canonical
+abbreviations `slate_config.canonical_team` produces, so projection rows, slate
+feeds, and Vegas totals share one vocabulary. **Always join on the numeric
+`Pred_target_team_id`** — it survives relocations and rebrands. The `Team`
+string is display-only.
+
+### Team assignment, and players who change teams
+
+One rule serves hitters (`volume_col="PA"`) and pitchers (`volume_col="TBF"`):
+the team a player accumulated the most volume for in his most recent
+qualifying season, with ties broken on the lower team id so the result is
+order-independent. The output records `team_assign_source` —
+`override` / `history` / `unknown`.
+
+History cannot express an offseason move, so put signings and trades in
+`rosters/team_assignments_<year>.json` (copy
+`rosters/team_assignments.example.json`):
+
+```json
+{"target_year": 2027, "assignments": [
+  {"player_id": 592450, "team": "SF",  "note": "signed 2026-12-01"},
+  {"player_id": 660271, "team_id": 147, "note": "traded"},
+  {"player_id": 111111, "team": null,  "note": "unsigned"}
+]}
+```
+
+`team` takes any code or full name `canonical_team` understands. A `null` team
+means *no team* — the player is carried with neutral context rather than
+silently keeping his old club. Overrides are read by both `run_pipeline.py`
+(so R/RBI are projected against the right club) and `season_engine.py`.
+
+### Bottom-up team run environment
+
+`runs_rbi_model` scales a hitter's R/RBI by his team's run environment,
+forecast from that team's own past runs-per-game. That factor correlates only
+**r = 0.67** with the talent of the roster it is applied to, is *more*
+dispersed (SD 0.073) than that talent (SD 0.048), and cannot respond to a
+roster change at all.
+
+`team_context.bottom_up_team_factors` rebuilds it from the players actually
+projected onto each roster, via the same linear weights `pitcher_outputs` uses
+for RA9 — so offense and defense stay on one scale. It is then blended with
+the historical prior (`TEAM_CONTEXT_BOTTOM_UP_WEIGHT`, default 0.60) and
+**normalized so the volume-weighted mean factor is exactly 1.0**.
+
+That normalization is a closure requirement, not a tuning knob: team factors
+scale every hitter's R/RBI, so if they don't average to 1, moving players
+between teams silently creates or destroys league runs. Because context is
+derived from the roster, a team change updates **both** clubs — the player
+leaves one aggregate and joins another — and every teammate on both sides is
+rescaled off the team-context-free `Pred_R_per_PA_neutral`.
+
+Tune the blend with `--bottom-up-weight`; `0.0` reproduces the historical
+prior (but closed), `1.0` ignores it.
+
+### Not built yet
+
+**Playing time** (PA / G / IP / GS) is the keystone and does not exist. Team
+aggregates therefore use a documented volume proxy
+(`team_context.career_pa_weights`, which skews veteran), injected as a
+`PlayingTimeWeights` callable so the real model drops in without touching team
+logic.
+
+Consequently there is **no wins output**. Wins need league-wide runs-scored =
+runs-allowed closure, which needs playing time. `season_engine.py` instead
+reports how far off each identity currently is, so the gap is a number that
+moves. Also still missing: position data (so no depth chart or batting order),
+an aging curve, and league-level anchoring. See
+`deliverables/projection_engine/CURRENT_STATE_ASSESSMENT.md`.
 
 ## Players with no MLB history — minor-league translations (MLE)
 
