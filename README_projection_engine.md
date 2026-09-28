@@ -221,6 +221,17 @@ feeds, and Vegas totals share one vocabulary. **Always join on the numeric
 `Pred_target_team_id`** — it survives relocations and rebrands. The `Team`
 string is display-only.
 
+For MLE-translated players that id comes from `parent_org_id`, a native MLBAM
+org id joined in from `statsapi /teams?sportId=N`. The minor-league `/stats`
+response names only the **affiliate** ("Round Rock Express"), which resolves to
+no MLB club at all, and `_parent_org` originally read a `currentTeam` field
+that only the older RotoWire feed supplied. The cost, measured on the first
+populated run: 1,950 hitters and 2,793 pitchers with no `Pred_target_team_id`
+— no park factor, no team context — and 150 distinct `Team` labels (30 clubs
+plus 120 affiliates), which also failed the refresh gate's club count. Any
+affiliate that still fails to resolve degrades to "no org" rather than guessing
+at an affiliation, and the gate now reports that count instead of failing on it.
+
 ### Team assignment, and players who change teams
 
 One rule serves hitters (`volume_col="PA"`) and pitchers (`volume_col="TBF"`):
@@ -291,11 +302,72 @@ it only ADDS players with no MLB history — these players have some:
 | Long-term injured | two lost seasons pushes them outside the lookback |
 
 `RATE_MIN_PA_ACTIVE` is now 1 and `RATE_ACTIVE_LOOKBACK` is 4: everyone we
-have any evidence for gets a row, and thin evidence is correctly regressed
-almost all the way to the league mean by the existing shrinkage (a 12-PA
-sample carries almost nothing against `RATE_SHRINK_K_HITTER = 100`).
-`MLE_LEVELS` now spans `AAA, AA, A+, A`, with credibility falling steeply
-(0.55 → 0.35 → 0.20 → 0.12) so a Single-A line cannot masquerade as a forecast.
+have any evidence for gets a row. `MLE_LEVELS` spans `AAA, AA, A+, A`, with
+credibility falling steeply (0.55 → 0.35 → 0.20 → 0.12) so a Single-A line
+cannot masquerade as a forecast.
+
+### Thin evidence, and the shrinkage that wasn't there
+
+An earlier version of this section claimed thin evidence was "correctly
+regressed almost all the way to the league mean by the existing shrinkage".
+That was true of players with MLB history and **false for MLE-translated
+players**, and the first refresh run with a working minor-league feed proved
+it. The credibility discount deflated the PA a synthetic row *carried*, but
+the per-BIP profile was handed downstream as a finished distribution and the
+K%/BB% columns as finished rates — neither ever met the shrinkage machinery:
+
+| Player | Level | Effective PA | Shipped |
+|---|---|---|---|
+| Carter Garate | AAA | 2.3 | `P_HR` **0.283** — 170 HR per 600 PA |
+| Ben Hansen | AA | tiny | `RA9` **−0.815**, `ERA` **−0.761** |
+
+A negative ERA is not a physical quantity. It arises because the
+linear-weights runs mapping is affine with a −0.047 intercept and a −0.03
+weight on `P_K`, so a clipped K% with near-zero hits lands below zero —
+`pitcher_outputs.py` says in as many words that the mapping "assumes the
+per-PA probabilities fed in are unbiased" and "is not a correction layer for
+upstream bias". Unshrunk translated rates are precisely that bias.
+
+The fix shrinks at the **translation site**, where credibility is known:
+
+```
+w = pa_eff / (pa_eff + MLE_SHRINK_PA),   pa_eff = observed PA × credibility
+```
+
+applied to the rates, the per-BIP profile and the steal rates together, so all
+three tell the same story. `MLE_SHRINK_PA = 200` (`MLE_SHRINK_TBF = 250`) is
+roughly where per-PA HR rate stabilizes for a real MLB sample, and a
+translated sample deserves no more confidence than that:
+
+| Line | `pa_eff` | `w` | per-BIP HR |
+|---|---|---|---|
+| 4 AAA PA, 1 HR | 2.2 | 0.011 | 0.312 → **0.046** (league 0.043) |
+| 100 AAA PA | 55 | 0.216 | 0.100 → 0.055 |
+| 550 AAA PA, 30 HR | 303 | 0.602 | 0.068 → **0.058** |
+
+Shrinkage must not flatten everyone, and doesn't: a real AAA season still
+projects above league, and a good AAA arm still beats a bad one. What
+collapses is only the part that was never evidence.
+
+Three guards were added alongside it, because the estimate should not be the
+only thing standing between a feed glitch and a projection:
+
+- **`_HRPA_CLIP = (0, 0.12)`** — K% and BB% were already clipped to physical
+  ranges; HR was not, and HR has the widest leverage on every downstream run
+  estimate. 0.12/PA is above the all-time record (~0.108, Bonds 2001), so it
+  cannot clip a real player.
+- **`MIN_RUNS_PER_PA = 0.005`** in `pitcher_outputs.py` — a physical floor, not
+  a calibration, and it **prints a warning naming the row count** when it
+  fires. A silent clip would have hidden this bug instead of surfacing it.
+- **`check_physically_possible`** in the refresh gate — per-player bounds, no
+  weighting. Every other check there is an aggregate, and the PA-weighted ones
+  are blind by construction to a player carrying no weight. That is exactly how
+  0.283 passed.
+
+The lesson worth keeping: a latent defect in a path that processes one record
+is indistinguishable from a correct one. The MLE machinery was described as
+"complete and correct" when it had translated a single player — it wasn't, and
+only volume could show it.
 
 ### The two columns
 

@@ -126,6 +126,13 @@ LINEAR_WEIGHTS_RUNS = {
 # than re-tuning this intercept to absorb it.
 RUNS_INTERCEPT_DEFAULT = -0.047
 
+# Hard floor on runs allowed per PA. The mapping above is affine with a
+# negative intercept, so it is not bounded below by zero on its own; this is a
+# physical bound (a pitcher cannot allow negative runs), deliberately set far
+# under any real pitcher — the worst MLB seasons sit near 0.20 R/PA and the
+# best near 0.07 — so it only ever catches genuinely broken input.
+MIN_RUNS_PER_PA = 0.005
+
 # Empirical calibration factor for TBF/IP. Naive formula 3/(K+BIPOut+SF)
 # over-predicts by ~3% because not every BIPOut consumes exactly one out
 # (GIDPs, CS in non-PA situations). 0.971 brings the mean into alignment.
@@ -234,7 +241,26 @@ def compute_runs_allowed_per_pa(probs_df: pd.DataFrame,
         col = ev_col + suffix
         if col in probs_df.columns:
             out += w * probs_df[col].fillna(0)
-    return out + intercept
+    out = out + intercept
+
+    # A physical floor, not a calibration. This mapping is affine with a
+    # negative intercept and a negative weight on P_K, so a sufficiently
+    # extreme event vector drives it below zero — which happened for real: the
+    # first run with a populated minor-league feed produced RA9 -0.815 and
+    # ERA -0.761 for translated prospects whose rates had never been shrunk.
+    # Runs allowed cannot be negative, so clip; but say so, because a silent
+    # clip here would hide exactly the upstream miscalibration the comment on
+    # RUNS_INTERCEPT_DEFAULT warns this mapping passes straight through. The
+    # fix for a nonzero count is always upstream, never a bigger intercept.
+    n_clipped = int((out < MIN_RUNS_PER_PA).sum())
+    if n_clipped:
+        share = n_clipped / max(1, len(out))
+        print(f"  WARNING: runs-allowed mapping went below zero for "
+              f"{n_clipped} rows ({share:.1%}) and was clipped to "
+              f"{MIN_RUNS_PER_PA}. Negative runs are impossible, so these "
+              f"event vectors are out of the mapping's fitted domain — look "
+              f"upstream at the rates feeding them, not at the intercept.")
+    return out.clip(lower=MIN_RUNS_PER_PA)
 
 
 def compute_tbf_per_ip(probs_df: pd.DataFrame, suffix: str = "",
