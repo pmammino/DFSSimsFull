@@ -210,7 +210,11 @@ jobs:
           # that refreshed data is the whole point of a scraping run — without
           # committing it the next non-scraping run falls back to the partial
           # season again.
-          git add -A out rosters/player_roles_*.xlsx bip_inputs
+          # Explicit paths, not `-A out`: the pipeline drops debug parquet
+          # intermediates in out/debug/ and a blanket add swept them into the
+          # repo on the first run. They are gitignored now, but naming what we
+          # want is the durable fix.
+          git add out/*.csv rosters/player_roles_*.xlsx bip_inputs/*.csv
           if git diff --cached --quiet; then
             echo "::notice title=No changes::the rebuild produced identical files"
             exit 0

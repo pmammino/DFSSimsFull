@@ -450,6 +450,110 @@ Walk-forward: project 2025 playing time from data through 2024 only.
 - AUC on the binary "did he play at all" — this is where most systems fail, and
   it is the metric the floor tier exists to serve
 
+## Market odds as a team-talent prior (`market_odds.py`)
+
+The betting market is the best single forward-looking read on team talent
+available, and it knows things a roster aggregate cannot: front-office intent,
+depth behind the starters, managerial quality, spring injuries, and every
+signing that hasn't produced a stat line yet.
+
+```bash
+cp rosters/market_odds.example.json rosters/market_odds_2027.json   # then edit
+python season_engine.py --target-year 2027 --market-weight 0.5
+```
+
+Absent the file, the projection stays purely bottom-up.
+
+### What it feeds, and what it can't
+
+```
+market → expected wins → save & hold opportunity pools
+                       → run differential → RS/RA magnitude
+```
+
+**The market constrains the run differential, not the RS/RA split.** A 95-win
+club could be 5.2 RS / 4.2 RA or 4.3 / 3.3 and the futures price is identical.
+So the market supplies the magnitude and the roster supplies the split:
+`apply_market_to_run_environment` inverts Pythagenpat to find the RS/RA *ratio*
+the blended win total requires, then rotates the team's existing RS and RA to
+that ratio while **holding their sum fixed** — which keeps a good pitching staff
+in its own low-scoring environment instead of handing it a generic one.
+
+### Which market — WS odds are the weakest of the three
+
+| Market | Quality |
+|---|---|
+| `win_total` | **Best.** A direct read on expected wins, no inference. Read straight off the board. |
+| `pennant` / `division` | Good. One playoff round removed. |
+| `world_series` | Usable, and the loosest. |
+
+A championship is four short series deep, so playoff randomness compresses the
+board: even the best team in baseball wins the title only 15–20% of the time.
+The top of the odds board therefore **saturates** and carries less talent
+information than the middle does. Inverting an assumed odds→wins curve would
+invent precision the prices don't contain.
+
+So futures are used for what they're reliably good at — the **ordering and
+relative spacing** of teams — with the absolute scale taken from MLB's own
+long-run win distribution (mean exactly 81, SD ≈ 11.5):
+
+```
+score = ln(fair_prob)  →  standardize  →  wins = 81 + z × 11.5
+```
+
+League wins total 2,430 by construction, and the result is insensitive to the
+board's absolute level. `win_total` markets skip all of this.
+
+### De-vigging, and the longshot bias
+
+A WS futures board carries a 15–35% margin (the example board comes in at
+24.2%). Two methods:
+
+- **`power`** (default) — solves `Σ pᵢ^k = 1`. Since every `p < 1`, raising to
+  `k > 1` shrinks small probabilities harder than large ones, which corrects
+  the **favorite-longshot bias**: longshots are systematically overbet, so their
+  raw implied probability overstates their real chance.
+- **`proportional`** — divide by the sum. Simpler, but preserves that bias.
+
+One bias is **not** corrected: large-market clubs carry shorter prices than
+talent alone justifies, so read a big-market team's market-implied wins as a
+mild over-estimate.
+
+### Blending
+
+`MARKET_WEIGHT` defaults to **0.50** — a deliberate even split, not a fitted
+value. The market is a real forecast with money behind it and sees what the
+roster can't; the bottom-up estimate is built from the actual projected players
+and isn't subject to public-team bias. Re-tune against a walk-forward backtest,
+and weight the market higher if you switch to win-total lines.
+
+Teams absent from the board keep their bottom-up value (and the loader warns,
+because a partial board mixes two scales). The blend is re-centred so league
+wins stay at exactly 2,430, and `roster_wins` is preserved alongside
+`blended_wins` so the market's effect stays auditable.
+
+## Season category projections
+
+`deliverables/projection_engine/SEASON_CATEGORIES.md` maps all 54 requested
+hitter/pitcher/fielding categories to the machinery each needs. The short
+version:
+
+| Group | Count | Blocker |
+|---|---|---|
+| rate × playing time | 26 | Playing time only |
+| needs a new rate model | 6 | Small; history already fetched for 3 |
+| needs game-state simulation | 13 | Cannot come from marginal rates |
+| needs team context | 5 | **Done** (`team_wins` + `market_odds`) |
+| needs data we don't fetch | 8 | Fielding: no call, no positions |
+
+Two things worth knowing before building any of it. **Playing time gates 26
+categories on its own** and is far the biggest unlock. And a third of the list
+is not rate × volume at any level of rate quality — grand slams, cycles,
+quality starts, no-hitters and the rest depend on base-out state, score, or
+event sequence within a game. `P(QS) ≠ P(IP≥6) × P(ER≤3)`, because those are
+strongly negatively correlated within a start. Those route through the existing
+game simulator, which already computes `win`, `qs`, `cg` and `nh` per game.
+
 ## Designing the role taxonomy
 
 Not built. This is the plan, and the two workbooks in `rosters/` are its input
