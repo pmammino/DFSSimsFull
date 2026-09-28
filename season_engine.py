@@ -302,7 +302,7 @@ def run(target_year: int, out_dir: Path, *, override_path: Path | None = None,
         bottom_up_weight: float = TEAM_CONTEXT_BOTTOM_UP_WEIGHT,
         league_rs_per_game: float = 4.45,
         market_odds_path: Path | None = None,
-        market_weight: float = 0.50,
+        market_weight: float | None = None,
         write: bool = True) -> dict[str, pd.DataFrame]:
     """Build the season layer. Returns {"hitters","pitchers","teams"}."""
     print("=" * 74)
@@ -373,8 +373,8 @@ def run(target_year: int, out_dir: Path, *, override_path: Path | None = None,
     )
 
     from market_odds import (
-        MARKET_ODDS_PATH, MARKET_WEIGHT, apply_market_to_run_environment,
-        blend_market_wins, load_market_odds, market_expected_wins,
+        MARKET_ODDS_PATH, apply_market_to_run_environment, blend_market_wins,
+        default_market_weight, load_market_odds, market_expected_wins,
         market_report,
     )
 
@@ -391,13 +391,23 @@ def run(target_year: int, out_dir: Path, *, override_path: Path | None = None,
         market = odds
     else:
         market = market_expected_wins(odds)
+        # An unset weight resolves from the market type: a win total is a
+        # direct estimate of wins and deserves to dominate, a championship
+        # future is four playoff rounds removed and does not.
+        weight = (default_market_weight(odds.attrs.get("market"))
+                  if market_weight is None else market_weight)
         wins = blend_market_wins(wins, market, team_col="team_id",
-                                 market_weight=market_weight)
+                                 market_weight=weight)
         wins = apply_market_to_run_environment(wins, team_col="team_id")
+        priced = market.attrs.get("priced")
         print(f"  market: {odds.attrs.get('market')} from "
               f"{odds.attrs.get('book') or 'unknown book'} "
               f"as of {odds.attrs.get('as_of') or 'unknown date'}, "
-              f"weight {market_weight:.2f}")
+              f"weight {weight:.2f}"
+              + ("" if priced is None else
+                 ", over/under prices applied" if priced else
+                 ", LINES ONLY (no prices — up to ~1.5 wins of information "
+                 "left on the table)"))
         print("  " + market_report(market, wins).replace("\n", "\n  "))
         print()
 
@@ -443,9 +453,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="market-odds JSON (default: "
                          "rosters/market_odds_<year>.json). Absent means the "
                          "projection stays purely bottom-up.")
-    ap.add_argument("--market-weight", type=float, default=0.50,
+    ap.add_argument("--market-weight", type=float, default=None,
                     help="weight on market-implied wins vs the bottom-up "
-                         "Pythagenpat")
+                         "Pythagenpat. Unset resolves from the market type "
+                         "(win_total 0.70, world_series 0.40).")
     ap.add_argument("--no-write", action="store_true",
                     help="report only; don't write season_<year>/")
     args = ap.parse_args(argv)

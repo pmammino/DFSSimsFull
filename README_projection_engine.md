@@ -479,19 +479,42 @@ the blended win total requires, then rotates the team's existing RS and RA to
 that ratio while **holding their sum fixed** — which keeps a good pitching staff
 in its own low-scoring environment instead of handing it a generic one.
 
-### Which market — WS odds are the weakest of the three
+### Which market — use win totals
 
-| Market | Quality |
-|---|---|
-| `win_total` | **Best.** A direct read on expected wins, no inference. Read straight off the board. |
-| `pennant` / `division` | Good. One playoff round removed. |
-| `world_series` | Usable, and the loosest. |
+`win_total` is the **default** market and the one to use.
 
-A championship is four short series deep, so playoff randomness compresses the
-board: even the best team in baseball wins the title only 15–20% of the time.
-The top of the odds board therefore **saturates** and carries less talent
-information than the middle does. Inverting an assumed odds→wins curve would
-invent precision the prices don't contain.
+| Market | Default blend weight | Quality |
+|---|---|---|
+| `win_total` | **0.70** | A direct read on expected wins, no inference |
+| `division` | 0.55 | One playoff round removed |
+| `pennant` | 0.50 | Two rounds removed |
+| `world_series` | 0.40 | Usable, and the loosest |
+
+The weight is market-specific because the markets aren't equally informative
+about wins, and `--market-weight` overrides it.
+
+### Give the prices, not just the line
+
+A posted total is **not** the market's expectation — the price tells you which
+side of it the expectation sits on. "88.5, over −130 / under +105" means the
+market thinks 88.5 is low, and taking the line at face value discards that.
+Wins are Binomial(162, p), so with an outcome SD of ≈6.35:
+
+```
+true_mean = line + 6.35 × Φ⁻¹( P(over), de-vigged )
+```
+
+Both sides are needed to de-vig properly. A bare line still works and is read
+as-is — the honest fallback when the juice is unknown — and the engine says so
+on the run (`LINES ONLY (no prices — up to ~1.5 wins of information left on the
+table)`). `posted_line` is kept alongside `market_wins` so the adjustment stays
+auditable.
+
+If you only have futures: a championship is four short series deep, so playoff
+randomness compresses the board — even the best team in baseball wins the title
+only 15–20% of the time. The top of the odds board **saturates** and carries
+less talent information than the middle does. Inverting an assumed odds→wins
+curve would invent precision the prices don't contain.
 
 So futures are used for what they're reliably good at — the **ordering and
 relative spacing** of teams — with the absolute scale taken from MLB's own
@@ -521,16 +544,64 @@ mild over-estimate.
 
 ### Blending
 
-`MARKET_WEIGHT` defaults to **0.50** — a deliberate even split, not a fitted
-value. The market is a real forecast with money behind it and sees what the
-roster can't; the bottom-up estimate is built from the actual projected players
-and isn't subject to public-team bias. Re-tune against a walk-forward backtest,
-and weight the market higher if you switch to win-total lines.
+Weights are **not fitted**. The market is a real forecast with money behind it
+and sees what the roster can't; the bottom-up estimate is built from the actual
+projected players and isn't subject to public-team bias. Re-tune against a
+walk-forward backtest.
+
+Observed on the refreshed projections: win totals move teams by a mean 2.5 wins
+(max 7.2), where the futures inversion moved them 3.0 (max 7.7) — the tighter
+market agreeing more closely with the bottom-up estimate is the expected sign.
 
 Teams absent from the board keep their bottom-up value (and the loader warns,
 because a partial board mixes two scales). The blend is re-centred so league
 wins stay at exactly 2,430, and `roster_wins` is preserved alongside
 `blended_wins` so the market's effect stays auditable.
+
+## Fielding (`fielding_model.py`)
+
+Putouts, assists, errors, double plays, chances, passed balls, catcher's
+interference, and catcher caught-stealing.
+
+Fielding counting stats are **mostly position and exposure, with a small skill
+term on top** — a shortstop and a first baseman have different assist *jobs*,
+not different assist skill:
+
+```
+stat = (innings at position / 9) × rate_per_9(position) × skill × team
+```
+
+Three identities are enforced rather than hoped for:
+
+1. **Putouts close to 27 per 9 team innings** — every out is one putout, so the
+   baselines must sum to 27 across an alignment. Normalized on load, so a
+   hand-edit to the table can't break it.
+2. **Chances = PO + A + E**, derived and never projected independently.
+3. **Catcher putouts move *opposite* to everyone else** with the staff's
+   strikeout rate. A catcher gets a putout on every strikeout, so a high-K
+   staff gives him more (1.22× at 10.5 K/9) while leaving the fielders fewer
+   balls (0.90×).
+
+Two modelling choices: errors are shrunk **per chance**, not per inning (a
+chance is the real opportunity, and it's what fielding percentage measures);
+and the error prior is **per position, derived from the baseline table**, so a
+wrong baseline surfaces as a wrong fielding percentage. `EXPECTED_FIELDING_PCT`
+guards all nine positions to ±.004 — 1B .995, SS .975, 3B .962, P .962.
+
+Shrinkage tracks how much real signal each stat carries: PO/A hardest (900
+innings — a shortstop's assist total says more about his staff's groundball
+rate than about him), catcher CS lightest (250 — a genuinely stable skill).
+
+**Still needed:** a live run to validate the fetch against statsapi (written
+against the documented shape, unreachable from the dev sandbox), and **innings
+at position**, which needs playing time plus a position assignment.
+`project_fielding` takes innings as an argument rather than inventing one. Watch
+the unit trap: summing innings across positions counts each team inning nine
+times (~13,122, not ~1,458). `fit_position_baselines` replaces the whole
+provisional table once history is cached.
+
+**Positions come free with this fetch** — the fielding group returns one row per
+(player, position), supplying the `Pos` field the pipeline has never had.
 
 ## Season category projections
 

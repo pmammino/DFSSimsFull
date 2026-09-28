@@ -413,3 +413,123 @@ def test_differential_is_monotone_in_win_pct_at_a_fixed_run_environment():
 
 def test_run_environment_handles_an_empty_frame():
     assert apply_market_to_run_environment(pd.DataFrame()).empty
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Win totals — the market worth using
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_a_bare_line_is_returned_unchanged():
+    """With no prices, the line IS the best available estimate."""
+    from market_odds import win_total_expectation
+    assert win_total_expectation(88.5) == pytest.approx(88.5)
+
+
+def test_an_even_priced_total_sits_on_the_line():
+    """-110 / -110 de-vigs to a coin flip, so the expectation is the line."""
+    from market_odds import win_total_expectation
+    assert win_total_expectation(88.5, -110, -110) == pytest.approx(88.5,
+                                                                    abs=1e-6)
+
+
+def test_a_juiced_over_pushes_the_expectation_up():
+    """'88.5, over -130' means the market thinks 88.5 is LOW. Reading the line
+    at face value throws that information away."""
+    from market_odds import win_total_expectation
+    mu = win_total_expectation(88.5, -130, 110)
+    assert mu > 88.5
+    assert mu - 88.5 < 2.0, "a single price should not move it more than ~2 wins"
+
+
+def test_a_juiced_under_pushes_the_expectation_down():
+    from market_odds import win_total_expectation
+    assert win_total_expectation(88.5, 110, -130) < 88.5
+
+
+def test_the_price_adjustment_is_symmetric():
+    from market_odds import win_total_expectation
+    up = win_total_expectation(88.5, -130, 110) - 88.5
+    down = 88.5 - win_total_expectation(88.5, 110, -130)
+    assert up == pytest.approx(down, abs=1e-9)
+
+
+def test_the_price_adjustment_matches_the_normal_model():
+    """mu = L + sigma * Phi^-1(P(over)), de-vigged."""
+    from market_odds import WIN_OUTCOME_SD, _norm_ppf, win_total_expectation
+    over, under = -130, 110
+    p_o = american_to_probability(over)
+    p_u = american_to_probability(under)
+    expect = 88.5 + WIN_OUTCOME_SD * _norm_ppf(p_o / (p_o + p_u))
+    assert win_total_expectation(88.5, over, under) == pytest.approx(expect,
+                                                                     abs=1e-9)
+
+
+def test_norm_ppf_matches_known_quantiles():
+    from market_odds import _norm_ppf
+    assert _norm_ppf(0.5) == pytest.approx(0.0, abs=1e-9)
+    assert _norm_ppf(0.975) == pytest.approx(1.959964, abs=1e-5)
+    assert _norm_ppf(0.025) == pytest.approx(-1.959964, abs=1e-5)
+    assert _norm_ppf(0.01) == pytest.approx(-2.326348, abs=1e-4)
+
+
+def test_win_total_entries_accept_a_line_with_prices(tmp_path):
+    p = _write(tmp_path, {"market": "win_total", "teams": {
+        TEAM_ABBR_BY_ID[t]: {"line": 81.0, "over": -110, "under": -110}
+        for t in ALL_TEAMS}})
+    df = load_market_odds(p)
+    assert df["over"].notna().all() and df["under"].notna().all()
+    m = market_expected_wins(df)
+    assert m.attrs["priced"] is True
+
+
+def test_win_total_entries_accept_a_bare_number(tmp_path):
+    p = _write(tmp_path, {"market": "win_total",
+                          "teams": {TEAM_ABBR_BY_ID[t]: 81.0
+                                    for t in ALL_TEAMS}})
+    m = market_expected_wins(load_market_odds(p))
+    assert m.attrs["priced"] is False
+    assert m["market_wins"].mean() == pytest.approx(LEAGUE_MEAN_WINS, abs=1e-9)
+
+
+def test_an_entry_with_no_line_warns_and_skips(tmp_path):
+    p = _write(tmp_path, {"market": "win_total", "teams": {
+        "LAD": {"over": -110}, "NYY": 90.5}})
+    with pytest.warns(UserWarning):
+        df = load_market_odds(p)
+    assert list(df["team_id"]) == [NYY]
+
+
+def test_the_posted_line_is_preserved_alongside_the_expectation(tmp_path):
+    """So the price adjustment stays auditable."""
+    p = _write(tmp_path, {"market": "win_total", "teams": {
+        TEAM_ABBR_BY_ID[t]: {"line": 81.0, "over": -140, "under": 120}
+        for t in ALL_TEAMS}})
+    m = market_expected_wins(load_market_odds(p))
+    assert "posted_line" in m.columns
+    assert (m["posted_line"] == 81.0).all()
+
+
+def test_win_total_is_the_default_market(tmp_path):
+    """No `market` key means win totals, because that is the one to use."""
+    p = _write(tmp_path, {"teams": {TEAM_ABBR_BY_ID[t]: 81.0
+                                   for t in ALL_TEAMS}})
+    assert load_market_odds(p).attrs["market"] == "win_total"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Market-specific blend weight
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_win_totals_outweigh_futures():
+    """A win total is a direct estimate of the quantity we want; a title
+    future is four playoff rounds removed from it."""
+    from market_odds import default_market_weight
+    assert default_market_weight("win_total") > default_market_weight("pennant")
+    assert default_market_weight("pennant") > default_market_weight("world_series")
+
+
+def test_an_unknown_market_falls_back_to_the_most_cautious_weight():
+    from market_odds import MARKET_WEIGHT_BY_MARKET, default_market_weight
+    assert default_market_weight("something_new") == \
+        MARKET_WEIGHT_BY_MARKET["world_series"]
+    assert default_market_weight(None) == MARKET_WEIGHT_BY_MARKET["world_series"]

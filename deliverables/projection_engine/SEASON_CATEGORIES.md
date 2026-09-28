@@ -13,7 +13,7 @@ time however good the rates get.
 | **B** — needs a new rate model | 6 | Small models; history is already fetched for 3 |
 | **C** — needs game-state simulation | 13 | Cannot come from marginal rates. Sim exists |
 | **D** — needs team context | 5 | **Done** (`team_wins.py` + `market_odds.py`) |
-| **E** — needs data we don't fetch | 8 | Fielding: no statsapi call, no positions |
+| **E** — fielding | 8 | Model built; needs a live fetch + innings at position |
 
 **The single biggest unlock is playing time.** 26 categories are waiting only on
 it, and it gates the season totals for most of group C too.
@@ -158,36 +158,87 @@ documented priors, not fitted values. `fit_opportunity_rates` replaces them once
 
 ---
 
-## Group E — needs data we don't fetch
+## Group E — fielding
 
-**No fielding data enters the pipeline at all.** `data_acquisition` requests the
-`hitting` and `pitching` stat groups only; there is no `fielding` call, and zero
-references to assists, putouts, errors or double plays anywhere in the repo.
+**Model built** (`fielding_model.py`), **fetch added** (`fetch_fielding_data`),
+**exposure still missing**.
 
 Assists · OF assists · Putouts · DP turned · Chances · Catcher's interference ·
 Errors · Catcher caught-stealing
 
-Three things are needed, in order:
+### The governing fact
 
-1. **A `fielding` stat-group fetch.** statsapi exposes all of these
-   (`assists`, `putOuts`, `errors`, `doublePlays`, `chances`, `passedBall`,
-   `catcherInterference`, `caughtStealing`) through the same endpoint already in
-   use — add `"fielding"` alongside `"hitting"` and `"pitching"`.
-2. **Positions.** Fielding stats are meaningless without them: a shortstop's
-   assist rate and a first baseman's are different quantities, and putouts are
-   dominated by position (a 1B records a putout on nearly every infield
-   groundout). `primaryPosition` is a statsapi field the fetch simply doesn't
-   request — the same gap that blocks depth charts and role assignment.
-3. **Innings at position.** The exposure denominator. A rate per *team defensive
-   inning at that position* is the only stable way to project these; per-game
-   rates confound playing time with position changes.
+Fielding counting stats are **mostly position and exposure, with a small skill
+term on top**. A shortstop and a first baseman don't have different assist
+*skill* so much as different assist *jobs*: a first baseman records a putout on
+nearly every infield groundout and almost never an assist, and no amount of
+talent changes that. So:
 
-Catcher caught-stealing is the exception worth separating: it's a genuine,
-reasonably stable catcher skill, and the opportunity side is already partly
-modelled — `sb_model.py` projects attempt rates against the league. Pairing the
-two gives catcher CS without the full fielding build.
+```
+stat = (innings at position / 9) × rate_per_9(position) × skill × team
+```
 
----
+### Three identities enforced rather than hoped for
+
+1. **Putouts close to 27 per 9 team innings.** Every out is a putout credited
+   to exactly one fielder, so the position baselines must sum to 27 across an
+   alignment. The table is normalized on load so a hand-edit can't break it.
+2. **Chances = PO + A + E**, definitionally. Derived, never projected.
+3. **Catcher putouts move *opposite* to everyone else** with the staff's
+   strikeout rate. A catcher is credited with a putout on every strikeout, so
+   ~8.6 of his ~9.0 putouts per 9 are Ks — while a high-K staff leaves fewer
+   balls for the fielders. At 10.5 K/9 the catcher gets 1.22× and the fielders
+   0.90×. This is the one team effect large enough to matter here, and it's
+   why the catcher is handled separately.
+
+### Two modelling choices worth knowing
+
+**Errors are shrunk per *chance*, not per inning.** A chance is the actual
+opportunity for an error, and it's what fielding percentage measures. Shrinking
+in rate space let three errors in thirty innings move a projection 45% off
+baseline on what is almost pure noise.
+
+**The error prior is per position, derived from the baseline table.** A flat
+league 0.016 (fielding ~.984) is the all-positions average, dominated by first
+basemen and outfielders; a shortstop's rate per chance is nearer 0.025. Using
+the flat value alongside position-specific baselines made the two contradict
+each other, and a shortstop with a terrible error history came out *below* his
+own position's baseline. Deriving it from the table means a wrong error
+baseline surfaces as a wrong fielding percentage instead of hiding —
+`EXPECTED_FIELDING_PCT` guards all nine positions to ±.004.
+
+### Shrinkage, by how much real signal each stat carries
+
+| Stat | Strength | Why |
+|---|---|---|
+| PO / A | 900 innings | Almost pure position and opportunity. A shortstop's assist total says more about his staff's groundball rate than about him. |
+| DP | 700 innings | Needs a partner and a runner on first; mostly context. |
+| E | 700 chances | The genuine skill term, but noisy season to season. |
+| PB | 1200 innings | Rare enough to be mostly noise. |
+| CI | 2000 innings | ~2 per league season. Effectively all prior. |
+| **CS** | **250** | A real, reasonably stable catcher skill — the lightest shrinkage, and why catcher CS is worth projecting individually. |
+
+### What's still needed
+
+1. **A live fetch.** `fetch_fielding_data` is written against the documented
+   statsapi shape but **not yet exercised against the live API** — statsapi is
+   unreachable from the dev sandbox. Every field is read defensively and a
+   missing one degrades to 0 rather than raising. The refresh workflow will
+   validate it on the next run.
+2. **Innings at position** — the exposure term, and the real blocker. Needs the
+   playing-time model *and* a position assignment. `project_fielding` takes
+   innings as an argument rather than inventing one, so the assumption stays
+   visible. Note the unit trap: summing innings across positions counts each
+   team inning nine times (~13,122, not ~1,458), and getting it wrong makes the
+   putout identity read 3.0 instead of 27.0.
+3. **Refit the baselines.** `fit_position_baselines` replaces the whole table
+   from real history once the cache is populated. The cross-position ordering
+   is the trustworthy part today; the absolute levels are provisional.
+
+**Positions come free with this fetch.** The fielding group returns one row per
+(player, position), so it supplies the `Pos` field the pipeline has never had —
+the same gap that blocks depth charts and role assignment. It's the cheapest
+place to pick positions up, since it arrives with a fetch we want anyway.
 
 ## Recommended order
 
@@ -204,6 +255,8 @@ two gives catcher CS without the full fielding build.
    CG, which matter most and are already computed per game; leave cycles and
    perfect games last, since they're rare enough that the sim needs many
    iterations for a stable estimate.
-6. **Positions, then the fielding fetch** — group E. Positions are one field and
-   unlock depth charts too, so they're worth doing early even though the
-   fielding build behind them is the largest single item on this list.
+6. **Run the fielding fetch and refit the baselines** — group E. The model and
+   the fetch exist; what's missing is a live run to validate the response shape
+   and populate history, then `fit_position_baselines` to replace the
+   provisional table. Positions arrive free with that same fetch, which also
+   unblocks depth charts and role assignment.

@@ -83,14 +83,36 @@ MAX_PROJECTED_WINS = 110.0
 
 # Default weight on the market when blending with the bottom-up Pythagenpat.
 #
-# 0.5 is a deliberate even split, not a fitted value. The case for weighting
-# the market higher: it is a real forecast with money behind it and it sees
-# things the roster aggregate cannot. The case for weighting it lower: our
-# bottom-up estimate is built from the actual projected players and is not
-# subject to public-team bias, and WS futures are a lossy proxy. Re-tune
-# against a walk-forward backtest once one exists; prefer a higher weight if
-# you switch to win-total lines, which are a much tighter read.
-MARKET_WEIGHT = 0.50
+# Market-specific, because the markets are not equally informative about wins.
+# A win total is a direct estimate of the quantity we want, so it deserves to
+# dominate. A championship future is four short series removed from it and is
+# mostly useful for ordering teams, so it deserves less.
+#
+# None of these are fitted. The case for weighting the market higher generally:
+# it is a real forecast with money behind it and sees things a roster aggregate
+# cannot. The case for weighting it lower: the bottom-up estimate is built from
+# the actual projected players and is not subject to public-team bias. Re-tune
+# against a walk-forward backtest once one exists.
+MARKET_WEIGHT_BY_MARKET = {
+    "win_total":    0.70,   # a direct read on expected wins
+    "division":     0.55,
+    "pennant":      0.50,
+    "world_series": 0.40,   # loosest; see implied_wins_from_probabilities
+}
+MARKET_WEIGHT = MARKET_WEIGHT_BY_MARKET["win_total"]
+
+
+def default_market_weight(market: str | None) -> float:
+    """Blend weight appropriate to the market type."""
+    return MARKET_WEIGHT_BY_MARKET.get(
+        str(market or "").lower(), MARKET_WEIGHT_BY_MARKET["world_series"])
+
+
+# Standard deviation of a team's ACTUAL win total around its true expectation.
+# Wins are Binomial(162, p), so the SD is sqrt(162 p (1-p)): 6.36 at p = .500
+# and 6.23 at p = .600, i.e. essentially flat across the realistic range. Used
+# to convert an over/under price into a shift off the posted line.
+WIN_OUTCOME_SD = 6.35
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -252,6 +274,89 @@ def implied_wins_from_probabilities(
 # Loading
 # ─────────────────────────────────────────────────────────────────────────────
 
+def win_total_expectation(line: float, over: float | None = None,
+                          under: float | None = None,
+                          *, odds_format: str = "american",
+                          outcome_sd: float = WIN_OUTCOME_SD) -> float:
+    """True expected wins implied by a win-total line AND its prices.
+
+    A posted total is not the market's expectation — the PRICE tells you which
+    side of the line the expectation sits on. "88.5, over -130 / under +105"
+    means the market thinks 88.5 is low; taking the line at face value throws
+    that away, and the discarded information is worth up to a win and a half.
+
+    A team's actual win total is Binomial(162, p) around its true mean, so with
+    outcome SD sigma:
+
+        P(over L) = P(W > L) = Phi((mu - L) / sigma)
+        =>  mu = L + sigma * Phi^-1(P(over))
+
+    The two prices are de-vigged against each other first, since a two-way
+    market's raw probabilities sum to well over 1.
+
+    With no prices this returns the line unchanged, which is the honest
+    fallback: a bare line IS the best available estimate when the juice is
+    unknown.
+    """
+    L = float(line)
+    if over is None and under is None:
+        return L
+
+    # De-vig the two-way market.
+    p_over = to_probability(over, odds_format) if over is not None else None
+    p_under = to_probability(under, odds_format) if under is not None else None
+    if p_over is not None and p_under is not None:
+        total = p_over + p_under
+        if total <= 0:
+            return L
+        p_over = p_over / total
+    elif p_over is None:
+        # Only the under was given; the fair over is its complement, but with
+        # no pair to de-vig against the margin is still baked in. Strip a
+        # typical half-margin so a one-sided price is not read as if it were
+        # fair. Crude, and the file format asks for both sides for this reason.
+        p_over = 1.0 - p_under / max(p_under + (1 - p_under) * 1.045, 1e-9)
+    else:
+        p_over = p_over / max(p_over + (1 - p_over) * 1.045, 1e-9)
+
+    p_over = float(np.clip(p_over, 1e-4, 1 - 1e-4))
+    # Inverse normal CDF without pulling in scipy: Acklam's rational
+    # approximation, accurate to ~1e-9 over the range that matters here.
+    z = _norm_ppf(p_over)
+    return L + outcome_sd * z
+
+
+def _norm_ppf(p: float) -> float:
+    """Inverse standard-normal CDF (Acklam's rational approximation).
+
+    Hand-rolled to keep this module free of a scipy import for one function;
+    scipy is a project dependency but market odds should stay importable in a
+    minimal environment.
+    """
+    a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+         1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00]
+    b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+         6.680131188771972e+01, -1.328068155288572e+01]
+    c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+         -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00]
+    d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+         3.754408661907416e+00]
+    p_low, p_high = 0.02425, 1 - 0.02425
+    if p < p_low:
+        q = np.sqrt(-2 * np.log(p))
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q
+                + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+    if p > p_high:
+        q = np.sqrt(-2 * np.log(1 - p))
+        return -((((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q
+                  + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1))
+    q = p - 0.5
+    r = q * q
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r
+            + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r
+                            + b[4]) * r + 1)
+
+
 def MARKET_ODDS_PATH(target_year: int) -> Path:
     """Conventional location of the market-odds file for a target year."""
     return ROSTER_DIR / f"market_odds_{int(target_year)}.json"
@@ -284,7 +389,9 @@ def load_market_odds(path: str | Path) -> pd.DataFrame:
     payload = json.loads(p.read_text())
     teams = payload.get("teams", {})
     fmt = payload.get("odds_format", "american")
-    market = str(payload.get("market", "world_series")).lower()
+    # win_total is the default because it is the market worth using: a direct
+    # read on expected wins rather than something four playoff rounds removed.
+    market = str(payload.get("market", "win_total")).lower()
 
     rows = []
     for raw_team, value in teams.items():
@@ -294,8 +401,21 @@ def load_market_odds(path: str | Path) -> pd.DataFrame:
             continue
         if value is None:
             continue
+        # A team entry is either a bare number, or an object carrying the line
+        # plus its over/under prices. The prices are what let the posted line
+        # be corrected to a true expectation.
+        over = under = None
+        if isinstance(value, dict):
+            line = value.get("line", value.get("value"))
+            if line is None:
+                warnings.warn(f"market entry for {raw_team!r} has no line; skipped")
+                continue
+            over, under = value.get("over"), value.get("under")
+            value = line
         rows.append({"team_id": tid, "team_abbr": abbr_for_team_id(tid),
-                     "value": float(value)})
+                     "value": float(value),
+                     "over": None if over is None else float(over),
+                     "under": None if under is None else float(under)})
 
     out = pd.DataFrame(rows)
     out.attrs["market"] = market
@@ -340,18 +460,34 @@ def market_expected_wins(
     out = odds[["team_id", "team_abbr"]].copy()
 
     if market == "win_total":
-        # A direct read. Nothing to infer, and nothing to de-vig: the line is
-        # already an expected-wins estimate (modulo a small juice asymmetry
-        # that is not worth modelling here).
+        # A direct read — no championship-probability inference needed. The
+        # only work is correcting each posted line to a true expectation using
+        # its over/under price, which is where the remaining information is.
+        has_price = ("over" in odds.columns
+                     and odds["over"].notna().any()) or (
+                     "under" in odds.columns and odds["under"].notna().any())
         out["market_prob"] = np.nan
-        out["market_wins"] = odds["value"].to_numpy(float)
+        out["market_wins"] = [
+            win_total_expectation(
+                r.value,
+                getattr(r, "over", None) if pd.notna(getattr(r, "over", np.nan)) else None,
+                getattr(r, "under", None) if pd.notna(getattr(r, "under", np.nan)) else None,
+                odds_format=fmt,
+            )
+            for r in odds.itertuples()
+        ]
+        out["posted_line"] = odds["value"].to_numpy(float)
         out["market_source"] = "win_total"
-        # Win-total boards are usually set a touch under the true league mean
-        # so the book balances action; re-centre to 81 to keep closure.
+        out.attrs["priced"] = bool(has_price)
+
+        # Books shade totals so the book balances action, and the shading is
+        # not symmetric across a board, so the league mean drifts off 81.
+        # Re-centre to keep closure — every game has one winner.
         shift = LEAGUE_MEAN_WINS - float(out["market_wins"].mean())
         if abs(shift) > 0.05 and len(out) >= 25:
             out["market_wins"] = out["market_wins"] + shift
-        return out
+            out.attrs["recentre_shift"] = shift
+        return out.sort_values("market_wins", ascending=False).reset_index(drop=True)
 
     vigged = {int(r.team_id): to_probability(r.value, fmt)
               for r in odds.itertuples()}
