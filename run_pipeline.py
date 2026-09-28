@@ -124,22 +124,60 @@ def step1b_inject_mle(hit_df: pd.DataFrame, pit_df: pd.DataFrame,
     print("\n" + "═" * 70)
     print("STEP 1b: Minor-league translations (MLE) for no-MLB-history players")
     print("═" * 70)
-    from data_acquisition import fetch_chadwick_lookup, fetch_minors
+    from data_acquisition import (
+        fetch_chadwick_lookup, fetch_minors, fetch_minors_statsapi,
+    )
     from mle_translations import build_name_to_mlbam, build_synthetic_rows
 
+    def _count(f):
+        return sum(len((f.get(lv, {}) or {}).get(role, []) or [])
+                   for lv in f for role in ("hitters", "pitchers"))
+
     feed_season = target_year - MLE_SEASON_OFFSET
-    feed = fetch_minors(feed_season, levels=MLE_LEVELS,
-                        local_feed=MLE_LOCAL_FEED, force=force)
-    n_records = sum(len((feed.get(lv, {}) or {}).get(role, []) or [])
-                    for lv in feed for role in ("hitters", "pitchers"))
+
+    # statsapi FIRST. It is the same endpoint the rate fetch already uses, and
+    # it returns MLBAM player ids natively — which skips the Chadwick name
+    # lookup that is the single biggest source of MLE coverage loss, since a
+    # prospect's name is exactly the kind most likely to be unmatched or
+    # ambiguous. The RotoWire scrape is the fallback.
+    feed = fetch_minors_statsapi(feed_season, levels=MLE_LEVELS, force=force)
+    n_records = _count(feed)
+    if n_records:
+        print(f"  Source: statsapi minor leagues ({n_records} records, "
+              f"native MLBAM ids)")
+    else:
+        print("  statsapi minors returned nothing — falling back to the "
+              "RotoWire scrape")
+        feed = fetch_minors(feed_season, levels=MLE_LEVELS,
+                            local_feed=MLE_LOCAL_FEED, force=force)
+        n_records = _count(feed)
+        if n_records:
+            print(f"  Source: RotoWire minors scrape ({n_records} records)")
+
     if n_records == 0:
-        print("  No minors data available (live blocked + no local feed) — skipping MLE")
+        # Loud, because the consequence is invisible in the output: every
+        # debut rookie and every prospect simply will not appear, and the
+        # projection set looks complete.
+        print("  " + "!" * 66)
+        print("  NO MINOR-LEAGUE DATA from either source.")
+        print("  Every player with no MLB history will be DROPPED — debut")
+        print("  rookies and prospects get no baseline at all. The projection")
+        print("  set will look complete while silently missing them.")
+        print("  " + "!" * 66)
         return hit_df, pit_df, empty[0], empty[1], set(), set()
 
     chadwick = fetch_chadwick_lookup(force=force)
     name_idx = build_name_to_mlbam(chadwick)
-    if not name_idx:
-        print("  Chadwick lookup empty — cannot resolve RotoWire ids to MLBAM; skipping MLE")
+    # Only needed for feeds without native ids. A statsapi feed carries its own,
+    # so an empty Chadwick table is no longer fatal.
+    native_ids = any(
+        r.get("mlbam_id") is not None
+        for lv in feed for role in ("hitters", "pitchers")
+        for r in ((feed.get(lv, {}) or {}).get(role, []) or [])
+    )
+    if not name_idx and not native_ids:
+        print("  Chadwick lookup empty and the feed has no native ids — "
+              "cannot resolve players to MLBAM; skipping MLE")
         return hit_df, pit_df, empty[0], empty[1], set(), set()
 
     hit_ids = set(pd.to_numeric(hit_df["PlayerId"], errors="coerce").dropna().astype(int))
@@ -757,12 +795,18 @@ def step9_project_runs_rbi(h_final: pd.DataFrame, hit_df: pd.DataFrame,
           .to_string(index=False, float_format=lambda x: f"{x:.4f}"))
 
     # Merge into final frame
+    # An explicit allowlist, so a column added to `proj` upstream must be added
+    # here too or it is silently dropped — which is what happened to
+    # Pred_target_team_abbr and team_assign_source: pitchers carried them and
+    # hitters did not, for no reason anyone would guess from the output.
     merge_cols = ["PlayerId", "Pred_R_per_PA_neutral", "Pred_RBI_per_PA_neutral",
                   "Pred_R_per_PA", "Pred_RBI_per_PA",
                   "Pred_target_team_factor", "Pred_target_team_id",
+                  "Pred_target_team_abbr", "team_assign_source",
                   "Pred_lineup_slot",
                   "n_eff_R_per_PA", "n_eff_RBI_per_PA",
                   "SD_R_per_PA", "SD_RBI_per_PA"]
+    merge_cols = [c for c in merge_cols if c in proj.columns]
     h_final = h_final.merge(
         proj[merge_cols].rename(columns={
             "Pred_R_per_PA":   "P_R",
@@ -1205,6 +1249,45 @@ def main():
     # `projected`-tier players carry NaN volume marked "unmodeled" — a
     # plausible-looking guess there would make every downstream total quietly
     # wrong, where a NaN fails loudly at the point of use.
+    # Step 12b — Fielding history.
+    #
+    # Fetched here so a pipeline run exercises it, and written out so the
+    # response shape is INSPECTABLE: the fetch was written against the
+    # documented statsapi shape but could not be tested from the dev sandbox,
+    # where statsapi is unreachable. Dumping the frame to out/ means the first
+    # real run validates it.
+    #
+    # Deliberately non-fatal. Fielding is additive to the projection, so a
+    # blocked or changed endpoint should cost the fielding categories and
+    # nothing else — unlike the rate fetch, which raises.
+    print("\n" + "═" * 70)
+    print("STEP 12b: Fielding history (positions + defensive counting stats)")
+    print("═" * 70)
+    try:
+        from data_acquisition import fetch_fielding_data
+
+        fld = fetch_fielding_data(target, force=args.force)
+        if fld.empty:
+            print("  no fielding data — the fielding categories will fall back "
+                  "to position baselines only")
+        else:
+            print(f"  {len(fld):,} (player, season, position) rows, "
+                  f"seasons {sorted(fld['Season'].unique())}")
+            pos_counts = fld["Pos"].value_counts()
+            print(f"  positions seen: {pos_counts.to_dict()}")
+            nonzero = (pd.to_numeric(fld['Innings'], errors='coerce')
+                       .fillna(0) > 0).sum()
+            print(f"  rows with innings > 0: {nonzero:,} / {len(fld):,}")
+            for c in ("PO", "A", "E", "DP", "Chances", "CS"):
+                if c in fld.columns:
+                    print(f"    {c:<8} total {pd.to_numeric(fld[c], errors='coerce').fillna(0).sum():>10,.0f}")
+            fpath = out_dir / f"fielding_history_{target}.csv"
+            fld.to_csv(fpath, index=False)
+            print(f"  wrote {fpath} (for response-shape validation)")
+    except Exception as e:
+        print(f"  fielding fetch FAILED ({type(e).__name__}: {e}) — "
+              f"continuing without it")
+
     print("\n" + "═" * 70)
     print("STEP 13: Playing-time tiers (1 PA / 1 IP floor for depth players)")
     print("═" * 70)

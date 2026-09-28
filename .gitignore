@@ -15,3 +15,7 @@ deliverables/.ownership_pool_sig.json
 # season-layer outputs: derived from the committed per-PA CSVs in seconds
 # via `python season_engine.py --target-year <year>`
 out/season_*/
+
+# pipeline debug intermediates (regenerated every run; the refresh workflow's
+# `git add -A out` was sweeping these into the repo)
+out/debug/

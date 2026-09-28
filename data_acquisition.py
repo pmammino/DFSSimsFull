@@ -153,6 +153,285 @@ def _fetch_statsapi_one(year: int, group: str) -> pd.DataFrame:
     return df
 
 
+# Minor-league sportIds on statsapi. The same /stats endpoint the MLB rate
+# fetch already uses serves every affiliated level — only sportId changes.
+MINORS_SPORT_IDS = {
+    "AAA": 11,   # Triple-A
+    "AA":  12,   # Double-A
+    "A+":  13,   # High-A
+    "A":   14,   # Single-A
+    "R":   16,   # Rookie / complex
+}
+
+
+def fetch_minors_statsapi(season: int, levels: tuple[str, ...] = ("AAA", "AA"),
+                          force: bool = False) -> dict:
+    """Minor-league stat tables from statsapi, in the feed shape MLE parses.
+
+    A better source than the RotoWire scrape `fetch_minors` uses, for three
+    reasons:
+
+    1. **It returns MLBAM player ids natively.** The RotoWire path keys players
+       by a RotoWire id and has to resolve them to MLBAM through a Chadwick
+       name lookup, which silently drops every ambiguous or unmatched name.
+       Carrying `mlbam_id` skips that entirely — the biggest source of MLE
+       coverage loss.
+    2. **It is the endpoint already working in this pipeline**, so it needs no
+       new host to be reachable and no HTML/JSON scraping contract to hold.
+    3. **Every level is uniform**, including rookie ball, by changing one id.
+
+    Returns ``{level: {"hitters": [...], "pitchers": [...]}}`` with keys
+    matching the RotoWire record shape (`ab`, `walks`, `strikes`, `hits`,
+    `doubles`, `triples`, `hr`, `steals`, `caught`, `runs`, `rbi`, `games`,
+    `player`, `currentTeam`) plus `mlbam_id` and `position`, so
+    `mle_translations` consumes it unchanged.
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = CACHE_DIR / f"minors_statsapi_{season}.json"
+    if cache_path.exists() and not force:
+        try:
+            return json.loads(cache_path.read_text())
+        except Exception:
+            pass
+
+    feed: dict = {}
+    for level in levels:
+        sport_id = MINORS_SPORT_IDS.get(level)
+        if sport_id is None:
+            print(f"  minors {season} {level}: no sportId mapping; skipped")
+            continue
+        feed[level] = {"hitters": [], "pitchers": []}
+        for role, group in (("hitters", "hitting"), ("pitchers", "pitching")):
+            try:
+                recs = _fetch_minors_statsapi_one(season, sport_id, group)
+                feed[level][role] = recs
+                print(f"  minors {season} {level} {role}: {len(recs)}")
+            except Exception as e:
+                print(f"  minors {season} {level} {role}: "
+                      f"FAILED ({type(e).__name__})")
+            time.sleep(0.4)
+
+    total = sum(len(v.get("hitters", [])) + len(v.get("pitchers", []))
+                for v in feed.values())
+    if total == 0:
+        print(f"  WARNING: statsapi returned no minor-league data for {season}. "
+              "Every no-MLB-history player will be dropped, so debut rookies "
+              "and prospects get NO baseline.")
+        return {}
+    cache_path.write_text(json.dumps(feed))
+    return feed
+
+
+def _fetch_minors_statsapi_one(season: int, sport_id: int,
+                               group: str) -> list[dict]:
+    """One (level, role) minor-league table, mapped to the MLE feed shape."""
+    url = "https://statsapi.mlb.com/api/v1/stats"
+    params = {
+        "stats":      "season",
+        "season":     season,
+        "group":      group,
+        "playerPool": "ALL",
+        "sportId":    sport_id,
+        "limit":      5000,
+    }
+    r = requests.get(url, params=params, timeout=STATSAPI_TIMEOUT,
+                     headers=HEADERS)
+    r.raise_for_status()
+    data = r.json()
+    if not data.get("stats"):
+        return []
+
+    out = []
+    for s in data["stats"][0].get("splits", []):
+        p = s.get("player", {}) or {}
+        st = s.get("stat", {}) or {}
+        team = s.get("team", {}) or {}
+        pos = p.get("primaryPosition", {}) or {}
+        rec = {
+            # The whole point: a native MLBAM id, so no name resolution.
+            "mlbam_id":    p.get("id"),
+            "player":      p.get("fullName"),
+            "position":    pos.get("abbreviation"),
+            # The affiliate, not the parent org. statsapi does not give the
+            # parent club on this endpoint, so `currentTeam` is left unset and
+            # mle_translations._parent_org falls back to "no team" rather than
+            # guessing — better than attaching a prospect to the wrong org.
+            "team":        team.get("name"),
+            "games":       st.get("gamesPlayed", 0),
+        }
+        if group == "hitting":
+            rec.update({
+                "ab":       st.get("atBats", 0),
+                "walks":    st.get("baseOnBalls", 0),
+                "strikes":  st.get("strikeOuts", 0),
+                "hits":     st.get("hits", 0),
+                "doubles":  st.get("doubles", 0),
+                "triples":  st.get("triples", 0),
+                "hr":       st.get("homeRuns", 0),
+                "steals":   st.get("stolenBases", 0),
+                "caught":   st.get("caughtStealing", 0),
+                "runs":     st.get("runs", 0),
+                "rbi":      st.get("rbi", 0),
+            })
+        else:
+            rec.update({
+                "ip":       st.get("inningsPitched"),
+                "walks":    st.get("baseOnBalls", 0),
+                "strikes":  st.get("strikeOuts", 0),
+                "hits":     st.get("hits", 0),
+                "hr":       st.get("homeRuns", 0),
+                "er":       st.get("earnedRuns", 0),
+                "bf":       st.get("battersFaced", 0),
+                "starts":   st.get("gamesStarted", 0),
+            })
+        out.append(rec)
+    return out
+
+
+def _fetch_fielding_one(year: int) -> pd.DataFrame:
+    """Pull one season of FIELDING stats from statsapi.
+
+    Same endpoint and response shape as `_fetch_statsapi_one`, with
+    ``group=fielding``. The important difference: the fielding group returns
+    one row per (player, POSITION), so a player who logged time at shortstop
+    and second base appears twice with separate innings and separate counting
+    stats. That is exactly the granularity a fielding projection needs, because
+    an assist at shortstop and an assist at first base are different events
+    with different rates.
+
+    It also carries ``position`` — the field the rest of the pipeline has never
+    had, and which blocks depth charts, role assignment, and any per-position
+    rate. Fielding is the cheapest place to pick it up, since it comes free
+    with a fetch we want anyway.
+
+    ``innings`` is the exposure denominator and the reason per-position rows
+    matter: a rate per defensive inning AT THE POSITION is stable, whereas a
+    per-game rate confounds playing time with position changes.
+
+    NOTE: written against the documented statsapi shape but NOT yet exercised
+    against the live API from this machine (statsapi is unreachable here), so
+    every field is read defensively and a missing one degrades to 0 rather
+    than raising. `scripts/verify_fielding.py` checks the result once a run
+    with network access has populated the cache.
+    """
+    url = "https://statsapi.mlb.com/api/v1/stats"
+    params = {
+        "stats":      "season",
+        "season":     year,
+        "group":      "fielding",
+        "playerPool": "ALL",
+        "sportId":    1,
+        "limit":      5000,
+    }
+    r = requests.get(url, params=params, timeout=STATSAPI_TIMEOUT,
+                     headers=HEADERS)
+    r.raise_for_status()
+    data = r.json()
+    if not data.get("stats"):
+        return pd.DataFrame()
+
+    rows = []
+    for s in data["stats"][0].get("splits", []):
+        p = s.get("player", {}) or {}
+        st = s.get("stat", {}) or {}
+        team = s.get("team", {}) or {}
+        # statsapi reports the position on the split; fall back to the
+        # player's primary position when a split omits it.
+        pos = (st.get("position") or s.get("position")
+               or p.get("primaryPosition") or {})
+        rows.append({
+            "Season":    year,
+            "PlayerId":  p.get("id"),
+            "Name":      p.get("fullName"),
+            "Team":      _team_code(team),
+            "TeamId":    team.get("id"),
+            "Pos":       (pos.get("abbreviation") if isinstance(pos, dict)
+                          else pos),
+            "PosCode":   (pos.get("code") if isinstance(pos, dict) else None),
+            "G":         st.get("games", 0),
+            "GS":        st.get("gamesStarted", 0),
+            "Innings":   _innings_to_float(st.get("innings")),
+            "PO":        st.get("putOuts", 0),
+            "A":         st.get("assists", 0),
+            "E":         st.get("errors", 0),
+            "DP":        st.get("doublePlays", 0),
+            "TP":        st.get("triplePlays", 0),
+            "Chances":   st.get("chances", 0),
+            "PB":        st.get("passedBall", 0),
+            "CI":        st.get("catcherInterference", 0),
+            "SB_allowed": st.get("stolenBases", 0),
+            "CS":        st.get("caughtStealing", 0),
+            "FldPct":    st.get("fielding"),
+        })
+    return pd.DataFrame(rows)
+
+
+def _innings_to_float(value) -> float:
+    """Convert MLB's 'X.Y' innings notation (Y = outs past X) to a real float.
+
+    Shared shape with the pitching IP parse: "187.2" is 187 + 2/3, not 187.2.
+    Reimplemented here rather than reused because the pitching version is a
+    closure inside `_fetch_statsapi_one`.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return 0.0
+    try:
+        s = str(value)
+        if "." in s:
+            whole, frac = s.split(".", 1)
+            return float(whole) + (int(frac[:1]) if frac else 0) / 3.0
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def fetch_fielding_data(target_year: int, start_year: int = RATE_HIST_START,
+                        force: bool = False) -> pd.DataFrame:
+    """Fielding history for [start_year, target_year-1], cached as parquet.
+
+    One row per (player, season, position). Returns an EMPTY frame rather than
+    raising when every request fails: fielding is additive to the projection,
+    so a blocked fetch should cost the fielding categories and nothing else.
+    That is deliberately unlike `fetch_rate_data`, which raises, because
+    without rates there is no projection at all.
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = (CACHE_DIR
+                / f"statsapi_fielding_{start_year}_to_{target_year - 1}.parquet")
+    if out_path.exists() and not force:
+        return pd.read_parquet(out_path)
+
+    frames = []
+    for y in range(start_year, target_year):
+        print(f"  statsapi {y}: fielding", end="", flush=True)
+        try:
+            fd = _fetch_fielding_one(y)
+            frames.append(fd)
+            print(f" ({len(fd)})", flush=True)
+        except Exception as e:
+            print(f" FAILED: {type(e).__name__}", flush=True)
+        time.sleep(0.5)
+
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if df.empty or "PlayerId" not in df.columns:
+        print("  WARNING: no fielding data fetched — the fielding categories "
+              "will fall back to position baselines only.")
+        return pd.DataFrame()
+
+    df = df[df["PlayerId"].notna()].copy()
+    df["PlayerId"] = df["PlayerId"].astype("Int64")
+    for c in ("PO", "A", "E", "DP", "TP", "Chances", "PB", "CI",
+              "SB_allowed", "CS", "G", "GS"):
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    # statsapi's `chances` is occasionally absent or inconsistent; the identity
+    # PO + A + E is definitional, so prefer it and keep the reported value only
+    # where it is at least as large (some feeds include additional chances).
+    derived = df["PO"] + df["A"] + df["E"]
+    df["Chances"] = np.maximum(df["Chances"], derived)
+    df.to_parquet(out_path)
+    return df
+
+
 def fetch_rate_data(target_year: int, start_year: int = RATE_HIST_START,
                     force: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return (hitting_df, pitching_df) for [start_year, target_year-1].

@@ -98,6 +98,40 @@ jobs:
           pip install -r requirements.txt
           pip install pytest          # dev-only; not a runtime dependency
 
+      - name: Report which ref this run is using
+        run: |
+          # `workflow_dispatch` defaults the ref to the DEFAULT BRANCH, and the
+          # "Use workflow from" dropdown is easy to overlook — which already
+          # cost one refresh run, dispatched from main against code that only
+          # existed on a branch. Printing the ref and its capabilities up front
+          # makes that visible before the six-minute pipeline rather than after.
+          {
+            echo "## Run configuration"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| ref | \`${{ github.ref_name }}\` (\`${{ github.sha }}\`) |"
+            echo "| target year | ${{ inputs.target_year }} |"
+            echo "| scrape BIP | ${{ inputs.scrape_bip }} |"
+            echo "| commit | ${{ inputs.commit }} |"
+            echo "| publish | ${{ inputs.publish }} |"
+            echo ""
+            echo "Capabilities present on this ref:"
+            echo ""
+            for mod in "data_acquisition.py:fetch_fielding_data:fielding fetch" \
+                       "data_acquisition.py:fetch_minors_statsapi:statsapi minor leagues" \
+                       "fielding_model.py:ensure_rate_coverage:fielding coverage for no-history players" \
+                       "market_odds.py:win_total_expectation:market win totals"; do
+              f="${mod%%:*}"; rest="${mod#*:}"; sym="${rest%%:*}"; label="${rest#*:}"
+              if [ -f "$f" ] && grep -q "$sym" "$f"; then
+                echo "- [x] $label"
+              else
+                echo "- [ ] **$label — NOT on this ref**"
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+
       - name: Run the test suite first
         run: |
           # Cheap (~10s) relative to a 6-minute pipeline run, and it catches a
@@ -210,7 +244,11 @@ jobs:
           # that refreshed data is the whole point of a scraping run — without
           # committing it the next non-scraping run falls back to the partial
           # season again.
-          git add -A out rosters/player_roles_*.xlsx bip_inputs
+          # Explicit paths, not `-A out`: the pipeline drops debug parquet
+          # intermediates in out/debug/ and a blanket add swept them into the
+          # repo on the first run. They are gitignored now, but naming what we
+          # want is the durable fix.
+          git add out/*.csv rosters/player_roles_*.xlsx bip_inputs/*.csv
           if git diff --cached --quiet; then
             echo "::notice title=No changes::the rebuild produced identical files"
             exit 0

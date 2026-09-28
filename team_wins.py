@@ -324,17 +324,33 @@ def fit_opportunity_rates(team_seasons: pd.DataFrame) -> dict[str, float]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def wins_report(wins: pd.DataFrame, *, top: int = 10) -> str:
-    """Readable table of the win and opportunity projections."""
+    """Readable table of the win and opportunity projections.
+
+    When a market prior has been applied, this prints the market-adjusted
+    RS/RA rather than the pre-blend roster values. Printing the originals
+    alongside blended wins made the table self-contradictory — a club could
+    show a +7 run differential next to 88 wins, which reads as a broken model
+    rather than as two columns from different stages. The originals are still
+    on the frame (`rs_per_game`, `ra_per_game`) for auditing.
+    """
     if wins.empty:
         return "no teams to report"
+    market = "rs_per_game_market" in wins.columns
+    rs_col = "rs_per_game_market" if market else "rs_per_game"
+    ra_col = "ra_per_game_market" if market else "ra_per_game"
+    rd_col = "run_diff_market" if market else "run_diff"
+
     head = (f"{'team':<6}{'RS/G':>7}{'RA/G':>7}{'RD':>7}{'W%':>7}{'W':>7}"
             f"{'SVO':>7}{'SV':>6}{'HLD':>6}")
     lines = [head]
+    if market:
+        lines.append("  (RS/RA are market-adjusted: the blended win total sets "
+                     "the differential,\n   the roster sets the split)")
     for _, r in wins.head(top).iterrows():
         lines.append(
             f"{str(r.get('team_abbr') or r.iloc[0]):<6}"
-            f"{r['rs_per_game']:>7.2f}{r['ra_per_game']:>7.2f}"
-            f"{r['run_diff']:>+7.0f}{r['win_pct']:>7.3f}"
+            f"{r[rs_col]:>7.2f}{r[ra_col]:>7.2f}"
+            f"{r[rd_col]:>+7.0f}{r['win_pct']:>7.3f}"
             f"{r['expected_wins']:>7.1f}"
             f"{r.get('save_opportunities', float('nan')):>7.1f}"
             f"{r.get('expected_saves', float('nan')):>6.1f}"
