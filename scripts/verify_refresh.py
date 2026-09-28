@@ -71,17 +71,52 @@ def check_team_identity(checks: Checks, h: pd.DataFrame,
     merging Chi/Los/New/San. This also broke same-name resolution on the daily
     path, so it is not a cosmetic check.
     """
+    from team_context import TEAM_ABBR_BY_ID
+
+    mlb = set(TEAM_ABBR_BY_ID.values())
     for label, df in (("hitters", h), ("pitchers", p)):
-        n = df["Team"].nunique() if "Team" in df.columns else 0
-        checks.add(PASS if n == 30 else FAIL, f"team labels ({label})",
-                   f"{n} distinct, expected 30"
-                   + ("" if n == 30 else " — data_acquisition._team_code "
-                                        "fallback regressed?"))
+        labels = (set(df["Team"].dropna().unique()) if "Team" in df.columns
+                  else set())
+        found = labels & mlb
+        other = labels - mlb
+        # Count the 30 MLB clubs, not the distinct label total. Once the
+        # minor-league feed works, the output legitimately contains affiliates
+        # too, so a bare `nunique() == 30` fails on a CORRECT refresh — it read
+        # 150 (30 clubs + 120 affiliates) and blamed _team_code. What the
+        # original defect actually broke was clubs COLLAPSING into each other
+        # (Chi/Los/New/San merging 30 into 26), and that is what this asserts.
+        checks.add(PASS if len(found) == 30 else FAIL,
+                   f"MLB team labels ({label})",
+                   f"{len(found)}/30 clubs present"
+                   + ("" if len(found) == 30
+                      else f", missing {sorted(mlb - found)} — "
+                           "data_acquisition._team_code fallback regressed?"))
+        # Non-MLB labels are reported, never failed on: with the minor-league
+        # feed alive they are mostly affiliates, which is a sign of health.
+        # Only worth reporting once the 30 clubs are actually present — when
+        # they are not, the FAIL above already says what is wrong and these
+        # labels are the same defect counted twice. No cause is asserted here,
+        # because the same symptom has had two different causes: collapsed
+        # `name[:3]` codes, and unresolved parent orgs.
+        if other and len(found) == 30:
+            ex = ", ".join(sorted(map(str, other))[:3])
+            checks.add(WARN, f"non-MLB labels ({label})",
+                       f"{len(other)} non-MLB labels (e.g. {ex}) — expected "
+                       "for MiLB affiliates; each means no parent org resolved")
+
         has_id = "Pred_target_team_id" in df.columns
         missing = (int(df["Pred_target_team_id"].isna().sum()) if has_id
                    else len(df))
-        checks.add(PASS if has_id else FAIL, f"team ids ({label})",
-                   f"Pred_target_team_id present, {missing} missing"
+        share = missing / max(1, len(df))
+        # Present-but-empty is not a pass. A missing team id costs the player
+        # park factors AND team context, so >25% missing is a defect even
+        # though the column exists.
+        ok = has_id and share <= 0.25
+        checks.add(PASS if ok else FAIL, f"team ids ({label})",
+                   (f"Pred_target_team_id present, {missing} missing "
+                    f"({share:.0%})"
+                    + ("" if share <= 0.25
+                       else " — these get no park factor and no team context"))
                    if has_id else "Pred_target_team_id ABSENT")
 
 
@@ -231,6 +266,53 @@ def check_fielding(checks: Checks, out_dir, target_year: int) -> None:
                    + ("" if ok else " — innings or putout field misread?"))
 
 
+def check_physically_possible(checks: Checks, h: pd.DataFrame,
+                              p: pd.DataFrame) -> None:
+    """Per-player sanity bounds — no aggregate, no weighting, no excuses.
+
+    Every other check here is an AGGREGATE, and the weighted ones are blind by
+    construction to a player carrying almost no weight. That is how a run
+    shipped with a 0.283 per-BIP home-run rate (170 HR per 600 PA) and a
+    NEGATIVE ERA: the extra-base checks passed because they are PA-weighted and
+    the offending players had ~2 effective PA, and the only check that noticed
+    reported an 8% offense/defense gap, which names the symptom and not the
+    cause. These bounds are per-row and generous — they cannot flag a merely
+    optimistic projection, only an impossible one — so anything they catch is a
+    genuine defect and the message says where to look.
+    """
+    worst = []
+    if "P_HR" in h.columns:
+        hr = pd.to_numeric(h["P_HR"], errors="coerce")
+        # The all-time single-season per-PA HR record is ~0.11 (Bonds 2001).
+        bad = h[hr > 0.12]
+        checks.add(PASS if bad.empty else FAIL, "P_HR plausible",
+                   f"max {float(hr.max()):.4f}" + ("" if bad.empty else
+                   f" — {len(bad)} above 0.12/PA, worst "
+                   f"{bad.assign(_v=hr).nlargest(1, '_v')['Name'].iloc[0]}"
+                   " (unshrunk MLE translation?)"))
+    for col, lo in (("RA9", 0.0), ("ERA", 0.0), ("R_per_PA", 0.0)):
+        if col not in p.columns:
+            continue
+        v = pd.to_numeric(p[col], errors="coerce")
+        n_neg = int((v < lo).sum())
+        if n_neg:
+            worst.append(f"{col} min {float(v.min()):.3f} ({n_neg} rows)")
+        checks.add(PASS if not n_neg else FAIL, f"{col} non-negative",
+                   f"min {float(v.min()):.3f}" + ("" if not n_neg else
+                   f" — {n_neg} NEGATIVE; the linear-weights runs mapping "
+                   "left its fitted domain (see MIN_RUNS_PER_PA)"))
+    # League RA9 is the one aggregate worth a hard bound: it is the number a
+    # season engine multiplies by innings, so a mean of 2.15 against a real
+    # ~4.40 is a 50% error in every pitcher's run total.
+    if "RA9" in p.columns:
+        ra9 = pd.to_numeric(p["RA9"], errors="coerce")
+        w = pd.to_numeric(p.get("Career_PA"), errors="coerce").fillna(0)
+        m = (float(np.average(ra9.fillna(0), weights=w)) if w.sum() > 0
+             else float(ra9.mean()))
+        checks.add(PASS if 3.5 <= m <= 5.5 else FAIL, "league RA9",
+                   f"{m:.2f} (MLB ~4.20-4.60)")
+
+
 def check_league_calibration(checks: Checks, h: pd.DataFrame,
                              p: pd.DataFrame) -> None:
     """Offense and defense must still agree with each other.
@@ -252,9 +334,18 @@ def check_league_calibration(checks: Checks, h: pd.DataFrame,
     if "R_per_PA" not in p.columns:
         checks.add(WARN, "offense/defense", "pitcher R_per_PA absent")
         return
-    wp = weights(p)
-    rpa_p = float(np.average(pd.to_numeric(p["R_per_PA"], errors="coerce")
-                             .fillna(0), weights=wp))
+    # Drop rows with no rate instead of .fillna(0) on the VALUE, which counted
+    # every such pitcher as allowing ZERO runs per PA at full weight — a
+    # fabricated defect in one direction and a mask for a real one in the other.
+    rp = pd.to_numeric(p["R_per_PA"], errors="coerce")
+    ok = rp.notna().to_numpy()
+    wp = np.asarray(weights(p), dtype=float)[ok]
+    if wp.sum() <= 0:
+        checks.add(WARN, "offense/defense",
+                   f"no weighted pitcher R_per_PA ({int(ok.sum())} of "
+                   f"{len(p)} rows have a rate)")
+        return
+    rpa_p = float(np.average(rp.to_numpy()[ok], weights=wp))
     gap = abs(rpa_h - rpa_p) / max(rpa_p, 1e-9)
     checks.add(PASS if gap <= 0.05 else FAIL, "offense/defense",
                f"hitter R/PA {rpa_h:.4f} vs pitcher {rpa_p:.4f} "
@@ -287,6 +378,7 @@ def main(argv=None) -> int:
     check_team_identity(checks, h, p)
     check_extra_base_hits(checks, h)
     check_playing_time(checks, h, p)
+    check_physically_possible(checks, h, p)
     check_league_calibration(checks, h, p)
     check_fielding(checks, a.out_dir, a.target_year)
     print(checks.report())

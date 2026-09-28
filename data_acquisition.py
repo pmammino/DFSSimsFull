@@ -190,7 +190,15 @@ def fetch_minors_statsapi(season: int, levels: tuple[str, ...] = ("AAA", "AA"),
     cache_path = CACHE_DIR / f"minors_statsapi_{season}.json"
     if cache_path.exists() and not force:
         try:
-            return json.loads(cache_path.read_text())
+            cached = json.loads(cache_path.read_text())
+            # A cache written before parent-org resolution existed is
+            # structurally valid JSON, so nothing downstream would notice it:
+            # the run would just quietly go back to unresolved organizations,
+            # which is the exact failure `parent_org_id` was added to fix.
+            # Treat it as stale instead of serving it.
+            if _feed_has_parent_orgs(cached):
+                return cached
+            print("  minors cache predates parent-org resolution; refetching")
         except Exception:
             pass
 
@@ -201,11 +209,15 @@ def fetch_minors_statsapi(season: int, levels: tuple[str, ...] = ("AAA", "AA"),
             print(f"  minors {season} {level}: no sportId mapping; skipped")
             continue
         feed[level] = {"hitters": [], "pitchers": []}
+        parent_map = _fetch_affiliate_parent_map(sport_id)
         for role, group in (("hitters", "hitting"), ("pitchers", "pitching")):
             try:
-                recs = _fetch_minors_statsapi_one(season, sport_id, group)
+                recs = _fetch_minors_statsapi_one(season, sport_id, group,
+                                                  parent_map)
                 feed[level][role] = recs
-                print(f"  minors {season} {level} {role}: {len(recs)}")
+                resolved = sum(1 for r in recs if r.get("parent_org_id"))
+                print(f"  minors {season} {level} {role}: {len(recs)}"
+                      f" ({resolved} with a parent org)")
             except Exception as e:
                 print(f"  minors {season} {level} {role}: "
                       f"FAILED ({type(e).__name__})")
@@ -222,8 +234,67 @@ def fetch_minors_statsapi(season: int, levels: tuple[str, ...] = ("AAA", "AA"),
     return feed
 
 
-def _fetch_minors_statsapi_one(season: int, sport_id: int,
-                               group: str) -> list[dict]:
+def _feed_has_parent_orgs(feed: dict) -> bool:
+    """Does a cached minors feed carry the parent-org key at all?
+
+    Only the KEY's presence is checked, not whether it resolved: statsapi can
+    legitimately return an affiliate with no parent club, and refetching would
+    not change that. An absent key means the cache was written by an older
+    build of this module.
+    """
+    if not isinstance(feed, dict) or not feed:
+        return False
+    for level in feed.values():
+        if not isinstance(level, dict):
+            continue
+        for role in ("hitters", "pitchers"):
+            for rec in (level.get(role) or []):
+                if isinstance(rec, dict):
+                    return "parent_org_id" in rec
+    return False
+
+
+def _fetch_affiliate_parent_map(sport_id: int) -> dict:
+    """{affiliate team id: (parent org id, parent org name)} for one level.
+
+    The /stats endpoint names only the AFFILIATE ("Round Rock Express"), and an
+    affiliate name resolves to no MLB team id at all. The first populated-feed
+    run showed the cost of leaving it at that: 1,950 hitters and 2,793 pitchers
+    carried no `Pred_target_team_id`, so they got no park factor and no team
+    context, and the affiliate names pushed the distinct-team-label count to
+    150 (30 clubs + 120 affiliates).
+
+    /teams?sportId=N does carry the parent club, so one extra request per level
+    recovers the organization. Best-effort by design: on any failure or a
+    response without the field this returns {} and the caller degrades to the
+    previous "no org" behavior rather than guessing at an affiliation.
+    """
+    url = "https://statsapi.mlb.com/api/v1/teams"
+    try:
+        r = requests.get(url, params={"sportId": sport_id},
+                         timeout=STATSAPI_TIMEOUT, headers=HEADERS)
+        r.raise_for_status()
+        teams = r.json().get("teams", []) or []
+    except Exception as e:
+        print(f"  affiliate->parent map for sportId {sport_id}: "
+              f"FAILED ({type(e).__name__}); orgs will be unresolved")
+        return {}
+
+    out = {}
+    for t in teams:
+        tid = t.get("id")
+        parent = t.get("parentOrgId")
+        if tid is None or parent is None:
+            continue
+        out[int(tid)] = (int(parent), t.get("parentOrgName"))
+    if not out:
+        print(f"  affiliate->parent map for sportId {sport_id}: "
+              "no parentOrgId in response; orgs will be unresolved")
+    return out
+
+
+def _fetch_minors_statsapi_one(season: int, sport_id: int, group: str,
+                               parent_map: dict | None = None) -> list[dict]:
     """One (level, role) minor-league table, mapped to the MLE feed shape."""
     url = "https://statsapi.mlb.com/api/v1/stats"
     params = {
@@ -247,17 +318,24 @@ def _fetch_minors_statsapi_one(season: int, sport_id: int,
         st = s.get("stat", {}) or {}
         team = s.get("team", {}) or {}
         pos = p.get("primaryPosition", {}) or {}
+        # `team` here is the AFFILIATE. The parent organization comes from the
+        # /teams?sportId=N map, which is the only place this endpoint's response
+        # can be joined to an MLB club. `parent_org_id` is a native MLBAM team
+        # id, so mle_translations._parent_org resolves it without a name lookup;
+        # when the map is empty the record simply carries no parent and falls
+        # back to the previous "no org" behavior.
+        parent_id, parent_name = (parent_map or {}).get(team.get("id"),
+                                                        (None, None))
         rec = {
             # The whole point: a native MLBAM id, so no name resolution.
-            "mlbam_id":    p.get("id"),
-            "player":      p.get("fullName"),
-            "position":    pos.get("abbreviation"),
-            # The affiliate, not the parent org. statsapi does not give the
-            # parent club on this endpoint, so `currentTeam` is left unset and
-            # mle_translations._parent_org falls back to "no team" rather than
-            # guessing — better than attaching a prospect to the wrong org.
-            "team":        team.get("name"),
-            "games":       st.get("gamesPlayed", 0),
+            "mlbam_id":      p.get("id"),
+            "player":        p.get("fullName"),
+            "position":      pos.get("abbreviation"),
+            "team":          team.get("name"),
+            "affiliate_id":  team.get("id"),
+            "parent_org_id": parent_id,
+            "currentTeam":   parent_name,
+            "games":         st.get("gamesPlayed", 0),
         }
         if group == "hitting":
             rec.update({

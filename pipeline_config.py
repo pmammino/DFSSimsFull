@@ -156,6 +156,59 @@ MLE_PITCHER_FACTORS = {
 # organizational completeness, not because we claim to know their MLB rates.
 MLE_PA_CREDIBILITY = {"AAA": 0.55, "AA": 0.35, "A+": 0.20, "A": 0.12}
 
+# Shrinkage applied to the TRANSLATED rates themselves, in effective-PA space.
+#
+# The credibility discount above deflates the PA the synthetic row carries, and
+# the comment there says the point is to let "the shrinkage machinery pull these
+# players harder toward the league mean". That was true of the count columns and
+# FALSE of everything else: the per-BIP profile was handed downstream as a
+# finished distribution, and the explicit K%/BB% columns as finished rates, so
+# neither ever met the machinery.
+#
+# The first run with a populated minor-league feed showed what that costs. A
+# prospect with a handful of PA produced rates straight off that sample:
+#
+#   Carter Garate (Round Rock, 2.3 effective PA)   P_HR = 0.283
+#   Ben Hansen    (Midland,    tiny TBF)           RA9  = -0.815, ERA = -0.761
+#
+# 0.283 is 170 home runs per 600 PA, and a negative ERA is not a physical
+# quantity at all. The pitcher side goes negative because the linear-weights
+# runs mapping carries a -0.047 intercept and a -0.03 weight on P_K, so an
+# extreme K% with near-zero hits lands below zero — pitcher_outputs.py says in
+# so many words that the mapping "assumes the per-PA probabilities fed in are
+# unbiased" and "is not a correction layer for upstream bias".
+#
+# So shrink at the translation site, where the credibility is known, toward the
+# league prior with weight
+#
+#     w = pa_eff / (pa_eff + MLE_SHRINK_PA),    pa_eff = observed PA x cred
+#
+# which makes the row rates, the per-BIP profile and the count columns all tell
+# the same story. Magnitudes:
+#
+#   500 AAA PA  -> pa_eff 275 -> w 0.58   most of the player's own signal kept
+#     4 AAA PA  -> pa_eff 2.2 -> w 0.01   essentially the league prior
+#   500 A   PA  -> pa_eff  60 -> w 0.23   a Single-A line stays a whisper
+#
+# ~200 PA is roughly where per-PA HR rate stabilizes for a real MLB sample, and
+# a translated sample deserves no more confidence than that. Tune against
+# players who graduated, alongside MLE_HITTER_FACTORS.
+MLE_SHRINK_PA  = 200.0
+MLE_SHRINK_TBF = 250.0
+
+# League per-BIP outcome distribution — the prior the profiles above shrink
+# toward. These are the REAL shares measured off bip_inputs/ (the same ground
+# truth scripts/verify_refresh.py checks the projections against), not
+# remembered league rates. Re-derive from that file if the source data moves;
+# it is normalized on use, so it does not have to sum to exactly 1.
+LEAGUE_BIP_PROFILE = {
+    "out":       0.6818,
+    "single":    0.2077,
+    "double":    0.0620,
+    "triple":    0.0052,
+    "home_run":  0.0432,
+}
+
 # Default age for a translated player when the Chadwick lookup has no birth year
 # (prospects skew young; this only affects display + the unused ML rate path).
 MLE_DEFAULT_AGE     = 24

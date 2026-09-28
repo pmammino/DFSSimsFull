@@ -44,9 +44,10 @@ import numpy as np
 import pandas as pd
 
 from pipeline_config import (
-    DEFAULT_LEAGUE_RATES,
+    DEFAULT_LEAGUE_RATES, LEAGUE_BIP_PROFILE,
     MLE_HITTER_FACTORS, MLE_PITCHER_FACTORS,
     MLE_PA_CREDIBILITY, MLE_DEFAULT_AGE,
+    MLE_SHRINK_PA, MLE_SHRINK_TBF,
 )
 
 # League split of NON-home-run hits into 1B / 2B / 3B, used when a feed gives
@@ -56,6 +57,13 @@ _NONHR_HIT_SPLIT = {"1B": 0.760, "2B": 0.218, "3B": 0.022}
 # Physical / sanity clips on translated per-PA rates.
 _KPCT_CLIP  = (0.05, 0.55)
 _BBPCT_CLIP = (0.01, 0.30)
+# Per-PA home-run ceiling. The all-time single-season record is ~0.108/PA
+# (Bonds, 2001), so 0.12 cannot clip a real player at any level — it exists to
+# stop a malformed feed value (a cumulative total landing in a per-season
+# field, a mis-mapped column) from becoming a projection. K% and BB% were
+# already clipped this way; HR was not, and HR is the event with the widest
+# leverage on every downstream run estimate.
+_HRPA_CLIP  = (0.0, 0.12)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -99,6 +107,37 @@ def _ip_to_float(s) -> float:
 
 def _clip(v: float, lo_hi: tuple[float, float]) -> float:
     return float(min(max(v, lo_hi[0]), lo_hi[1]))
+
+
+def credibility_weight(pa_eff: float, shrink: float) -> float:
+    """How much of a translated player's OWN signal survives: pa_eff/(pa_eff+k).
+
+    Separate and public because it is the number that decides whether a
+    translated line is a forecast or a formality, and both the hitter and
+    pitcher paths must use the same one. See MLE_SHRINK_PA in pipeline_config
+    for why ~200 PA and what the resulting weights look like.
+    """
+    pa_eff = max(0.0, float(pa_eff))
+    return pa_eff / (pa_eff + max(1e-9, float(shrink)))
+
+
+def _shrink(obs_rate: float, league_rate: float, w: float) -> float:
+    """Blend an observed/translated rate toward the league prior."""
+    return float(w * obs_rate + (1.0 - w) * league_rate)
+
+
+def _shrink_bip(profile: dict, w: float) -> dict:
+    """Blend a per-BIP distribution toward the league per-BIP distribution.
+
+    Shrinking the five outcomes independently and renormalizing is safe here
+    because both inputs are already normalized distributions, so a convex
+    combination of them is one too — the renormalize only absorbs float error.
+    """
+    tot = sum(LEAGUE_BIP_PROFILE.values())
+    league = {k: v / tot for k, v in LEAGUE_BIP_PROFILE.items()}
+    out = {k: _shrink(profile.get(k, 0.0), league[k], w) for k in league}
+    s = sum(out.values())
+    return {k: v / s for k, v in out.items()} if s > 0 else league
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -252,47 +291,75 @@ def _bip_profile_from_rates(p_k, p_bb, p_hbp, p_sf, hr_pa, dbl_pa, trp_pa,
             "triple": vec[3], "home_run": vec[4]}
 
 
-def translate_hitter(obs: dict, level: str) -> dict:
-    """Observed hitter line → MLB-equivalent rates + per-BIP profile."""
+def translate_hitter(obs: dict, level: str, pa_eff: float | None = None) -> dict:
+    """Observed hitter line → MLB-equivalent rates + per-BIP profile.
+
+    `pa_eff` is the credibility-deflated sample (observed PA x the level's
+    MLE_PA_CREDIBILITY). It sets how much of the player's own translated signal
+    survives shrinkage toward the league prior; omit it only in tests that want
+    the raw translation, since an unshrunk profile off a handful of PA is what
+    produced a 0.283 per-BIP home-run rate in the first populated-feed run.
+    """
     fac = MLE_HITTER_FACTORS[level]
     pa = obs["PA"]
     if pa <= 0:
         return {}
+    w = 1.0 if pa_eff is None else credibility_weight(pa_eff, MLE_SHRINK_PA)
     p_k   = _clip((obs["K"]  / pa) * fac["K%"],  _KPCT_CLIP)
     p_bb  = _clip((obs["BB"] / pa) * fac["BB%"], _BBPCT_CLIP)
+    p_k   = _shrink(p_k,  DEFAULT_LEAGUE_RATES["K%"],  w)
+    p_bb  = _shrink(p_bb, DEFAULT_LEAGUE_RATES["BB%"], w)
     p_hbp = DEFAULT_LEAGUE_RATES["HBP%"]
     p_sf  = DEFAULT_LEAGUE_RATES["SF%"]
-    hr_pa  = (obs["HR"] / pa) * fac["HR"]
+    hr_pa  = _clip((obs["HR"] / pa) * fac["HR"], _HRPA_CLIP)
     dbl_pa = (obs["2B"] / pa) * fac["2B"]
     trp_pa = (obs["3B"] / pa) * fac["3B"]
     sng_pa = (obs["1B"] / pa) * fac["BABIP"]
     bip = _bip_profile_from_rates(p_k, p_bb, p_hbp, p_sf, hr_pa, dbl_pa, trp_pa, sng_pa)
+    bip = _shrink_bip(bip, w)
+    # Steal rates shrink to the league attempt environment too. A 3-PA line
+    # with one steal is a 0.33 SB rate, which would otherwise survive intact.
+    lg_sb = 0.0139   # mean P_SB the pipeline itself reports across hitters
     return {
         "K%": p_k, "BB%": p_bb, "HBP%": p_hbp, "SF%": p_sf,
-        "SB_rate": (obs["SB"] / pa) * fac["SB"],
-        "CS_rate": (obs["CS"] / pa) * fac["SB"],
+        "SB_rate": _shrink((obs["SB"] / pa) * fac["SB"], lg_sb, w),
+        "CS_rate": _shrink((obs["CS"] / pa) * fac["SB"], lg_sb * 0.28, w),
         "bip": bip,
+        "cred_weight": w,
     }
 
 
-def translate_pitcher(obs: dict, level: str) -> dict:
-    """Observed pitcher line allowed → MLB-equivalent rates + per-BIP profile."""
+def translate_pitcher(obs: dict, level: str, pa_eff: float | None = None) -> dict:
+    """Observed pitcher line allowed → MLB-equivalent rates + per-BIP profile.
+
+    `pa_eff` is the credibility-deflated batters-faced count. Shrinking against
+    it is what keeps the linear-weights runs mapping inside its domain: that
+    mapping carries a -0.047 intercept and a -0.03 weight on P_K, so a clipped
+    K% with near-zero hits produces a NEGATIVE runs-allowed rate (observed:
+    RA9 -0.815). Unshrunk translated rates are exactly the "upstream bias"
+    pitcher_outputs.py warns it will pass straight through.
+    """
     fac = MLE_PITCHER_FACTORS[level]
     tbf = obs["TBF"]
     if tbf <= 0:
         return {}
+    w = 1.0 if pa_eff is None else credibility_weight(pa_eff, MLE_SHRINK_TBF)
     p_k   = _clip((obs["K"]  / tbf) * fac["K%"],  _KPCT_CLIP)
     p_bb  = _clip((obs["BB"] / tbf) * fac["BB%"], _BBPCT_CLIP)
+    p_k   = _shrink(p_k,  DEFAULT_LEAGUE_RATES["K%"],  w)
+    p_bb  = _shrink(p_bb, DEFAULT_LEAGUE_RATES["BB%"], w)
     p_hbp = DEFAULT_LEAGUE_RATES["HBP%"]
     p_sf  = DEFAULT_LEAGUE_RATES["SF%"]
-    hr_pa = (obs["HR"] / tbf) * fac["HR"]
+    hr_pa = _clip((obs["HR"] / tbf) * fac["HR"], _HRPA_CLIP)
     nonhr_hits = max(0.0, obs["H"] - obs["HR"])
     nonhr_pa = (nonhr_hits / tbf) * fac["BABIP"]
     sng_pa = nonhr_pa * _NONHR_HIT_SPLIT["1B"]
     dbl_pa = nonhr_pa * _NONHR_HIT_SPLIT["2B"]
     trp_pa = nonhr_pa * _NONHR_HIT_SPLIT["3B"]
     bip = _bip_profile_from_rates(p_k, p_bb, p_hbp, p_sf, hr_pa, dbl_pa, trp_pa, sng_pa)
-    return {"K%": p_k, "BB%": p_bb, "HBP%": p_hbp, "SF%": p_sf, "bip": bip}
+    bip = _shrink_bip(bip, w)
+    return {"K%": p_k, "BB%": p_bb, "HBP%": p_hbp, "SF%": p_sf, "bip": bip,
+            "cred_weight": w}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -357,21 +424,25 @@ def build_synthetic_rows(feed: dict, role: str, target_year: int,
             if mlbam in seen_ids:
                 continue  # already taken from a higher-priority level
             obs = parse(rec)
-            tr = translate(obs, level)
+            # pa_eff must be known BEFORE translating: it is what sets the
+            # shrinkage weight, so computing it afterwards (as this did) left
+            # the rates and the per-BIP profile unshrunk no matter how small
+            # the sample was.
+            cred = MLE_PA_CREDIBILITY.get(level, 0.4)
+            raw_sample = obs["PA"] if role == "hitter" else obs["TBF"]
+            pa_eff = max(1.0, raw_sample * cred)
+            tr = translate(obs, level, pa_eff)
             if not tr:
                 continue
             seen_ids.add(mlbam)
             stats["used"] += 1
 
-            cred = MLE_PA_CREDIBILITY.get(level, 0.4)
             name = rec.get("player") or f"{rec.get('firstname','')} {rec.get('lastname','')}".strip()
             age = _age_from_chadwick(chadwick, mlbam, season)
 
             if role == "hitter":
-                pa_eff = max(1.0, obs["PA"] * cred)
                 row = _hitter_row(mlbam, name, rec, season, age, pa_eff, tr)
             else:
-                pa_eff = max(1.0, obs["TBF"] * cred)
                 row = _pitcher_row(mlbam, name, rec, season, age, pa_eff, tr, obs)
             rows.append(row)
             b = {"PlayerId": mlbam}
@@ -424,6 +495,14 @@ def _parent_org(rec: dict) -> tuple[str | None, float]:
     organization has to attach a Double-A catcher to the club that controls
     him, and affiliate names do not resolve to an MLB team id at all.
 
+    `parent_org_id` is preferred over both: it is a native MLBAM team id from
+    statsapi's /teams?sportId=N response, so it needs no name resolution and
+    cannot be defeated by a nickname. The statsapi feed supplies no
+    `currentTeam` of its own, which is why every translated player used to land
+    with the AFFILIATE as its team and `TeamId: np.nan` — no organization, no
+    park factor, neutral team context, and 150 distinct team labels in the
+    verified output.
+
     This previously set `TeamId: np.nan` for every translated player — so MLE
     players had no organization, got no park factors, and fell into neutral
     team context. Worse, hitters used `currentTeam` while pitchers used the
@@ -433,6 +512,15 @@ def _parent_org(rec: dict) -> tuple[str | None, float]:
     context rather than guessing an org.
     """
     from team_context import abbr_for_team_id, team_id_for_abbr
+
+    pid = rec.get("parent_org_id")
+    if pid is not None and not pd.isna(pid):
+        try:
+            abbr = abbr_for_team_id(int(pid))
+        except (TypeError, ValueError):
+            abbr = None
+        if abbr:
+            return abbr, float(int(pid))
 
     raw = rec.get("currentTeam") or rec.get("team")
     team_id = team_id_for_abbr(raw)
