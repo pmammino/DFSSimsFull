@@ -165,9 +165,29 @@ def check_fielding(checks: Checks, out_dir, target_year: int) -> None:
     """
     path = out_dir / f"fielding_history_{target_year}.csv"
     if not path.exists():
-        checks.add(WARN, "fielding fetch",
-                   f"{path.name} absent — fetch did not run or returned "
-                   "nothing; fielding falls back to position baselines")
+        # Distinguish "this ref has no fielding fetch" from "it has one and it
+        # failed". Those need opposite responses, and conflating them cost a
+        # whole refresh run: the workflow was dispatched from the default
+        # branch, which did not yet carry the fielding code, so the fetch never
+        # ran and a plain WARN read as if the endpoint had merely come back
+        # empty.
+        try:
+            from data_acquisition import fetch_fielding_data  # noqa: F401
+            has_fetch = True
+        except Exception:
+            has_fetch = False
+
+        if has_fetch:
+            checks.add(FAIL, "fielding fetch",
+                       f"{path.name} absent although fetch_fielding_data "
+                       "EXISTS on this ref — the fetch ran and produced "
+                       "nothing, or the pipeline step did not execute")
+        else:
+            checks.add(WARN, "fielding fetch",
+                       f"{path.name} absent and fetch_fielding_data is not on "
+                       "this ref — nothing to validate. Re-run the workflow "
+                       "with 'Use workflow from' set to the branch carrying "
+                       "the fielding code.")
         return
 
     f = pd.read_csv(path)
