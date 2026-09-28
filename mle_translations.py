@@ -131,7 +131,21 @@ def build_name_to_mlbam(chadwick: pd.DataFrame) -> dict[str, list[int]]:
 
 
 def _resolve_mlbam(rec: dict, name_idx: dict[str, list[int]]) -> Optional[int]:
-    """Resolve one feed record to a single MLBAM id, or None if unresolved."""
+    """Resolve one feed record to a single MLBAM id, or None if unresolved.
+
+    A native `mlbam_id` on the record wins outright and skips the name lookup
+    entirely. That matters a lot: name matching is where MLE loses most of its
+    coverage — a name that is unmatched OR ambiguous in the Chadwick table is
+    dropped, and prospect names are exactly the ones most likely to be either.
+    `data_acquisition.fetch_minors_statsapi` supplies the id natively, which is
+    the main reason to prefer it over the RotoWire scrape.
+    """
+    native = rec.get("mlbam_id")
+    if native is not None:
+        try:
+            return int(native)
+        except (TypeError, ValueError):
+            pass
     name = rec.get("player") or f"{rec.get('firstname', '')} {rec.get('lastname', '')}"
     cands = name_idx.get(_norm_name(name), [])
     if len(cands) == 1:

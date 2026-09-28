@@ -153,6 +153,141 @@ def _fetch_statsapi_one(year: int, group: str) -> pd.DataFrame:
     return df
 
 
+# Minor-league sportIds on statsapi. The same /stats endpoint the MLB rate
+# fetch already uses serves every affiliated level — only sportId changes.
+MINORS_SPORT_IDS = {
+    "AAA": 11,   # Triple-A
+    "AA":  12,   # Double-A
+    "A+":  13,   # High-A
+    "A":   14,   # Single-A
+    "R":   16,   # Rookie / complex
+}
+
+
+def fetch_minors_statsapi(season: int, levels: tuple[str, ...] = ("AAA", "AA"),
+                          force: bool = False) -> dict:
+    """Minor-league stat tables from statsapi, in the feed shape MLE parses.
+
+    A better source than the RotoWire scrape `fetch_minors` uses, for three
+    reasons:
+
+    1. **It returns MLBAM player ids natively.** The RotoWire path keys players
+       by a RotoWire id and has to resolve them to MLBAM through a Chadwick
+       name lookup, which silently drops every ambiguous or unmatched name.
+       Carrying `mlbam_id` skips that entirely — the biggest source of MLE
+       coverage loss.
+    2. **It is the endpoint already working in this pipeline**, so it needs no
+       new host to be reachable and no HTML/JSON scraping contract to hold.
+    3. **Every level is uniform**, including rookie ball, by changing one id.
+
+    Returns ``{level: {"hitters": [...], "pitchers": [...]}}`` with keys
+    matching the RotoWire record shape (`ab`, `walks`, `strikes`, `hits`,
+    `doubles`, `triples`, `hr`, `steals`, `caught`, `runs`, `rbi`, `games`,
+    `player`, `currentTeam`) plus `mlbam_id` and `position`, so
+    `mle_translations` consumes it unchanged.
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = CACHE_DIR / f"minors_statsapi_{season}.json"
+    if cache_path.exists() and not force:
+        try:
+            return json.loads(cache_path.read_text())
+        except Exception:
+            pass
+
+    feed: dict = {}
+    for level in levels:
+        sport_id = MINORS_SPORT_IDS.get(level)
+        if sport_id is None:
+            print(f"  minors {season} {level}: no sportId mapping; skipped")
+            continue
+        feed[level] = {"hitters": [], "pitchers": []}
+        for role, group in (("hitters", "hitting"), ("pitchers", "pitching")):
+            try:
+                recs = _fetch_minors_statsapi_one(season, sport_id, group)
+                feed[level][role] = recs
+                print(f"  minors {season} {level} {role}: {len(recs)}")
+            except Exception as e:
+                print(f"  minors {season} {level} {role}: "
+                      f"FAILED ({type(e).__name__})")
+            time.sleep(0.4)
+
+    total = sum(len(v.get("hitters", [])) + len(v.get("pitchers", []))
+                for v in feed.values())
+    if total == 0:
+        print(f"  WARNING: statsapi returned no minor-league data for {season}. "
+              "Every no-MLB-history player will be dropped, so debut rookies "
+              "and prospects get NO baseline.")
+        return {}
+    cache_path.write_text(json.dumps(feed))
+    return feed
+
+
+def _fetch_minors_statsapi_one(season: int, sport_id: int,
+                               group: str) -> list[dict]:
+    """One (level, role) minor-league table, mapped to the MLE feed shape."""
+    url = "https://statsapi.mlb.com/api/v1/stats"
+    params = {
+        "stats":      "season",
+        "season":     season,
+        "group":      group,
+        "playerPool": "ALL",
+        "sportId":    sport_id,
+        "limit":      5000,
+    }
+    r = requests.get(url, params=params, timeout=STATSAPI_TIMEOUT,
+                     headers=HEADERS)
+    r.raise_for_status()
+    data = r.json()
+    if not data.get("stats"):
+        return []
+
+    out = []
+    for s in data["stats"][0].get("splits", []):
+        p = s.get("player", {}) or {}
+        st = s.get("stat", {}) or {}
+        team = s.get("team", {}) or {}
+        pos = p.get("primaryPosition", {}) or {}
+        rec = {
+            # The whole point: a native MLBAM id, so no name resolution.
+            "mlbam_id":    p.get("id"),
+            "player":      p.get("fullName"),
+            "position":    pos.get("abbreviation"),
+            # The affiliate, not the parent org. statsapi does not give the
+            # parent club on this endpoint, so `currentTeam` is left unset and
+            # mle_translations._parent_org falls back to "no team" rather than
+            # guessing — better than attaching a prospect to the wrong org.
+            "team":        team.get("name"),
+            "games":       st.get("gamesPlayed", 0),
+        }
+        if group == "hitting":
+            rec.update({
+                "ab":       st.get("atBats", 0),
+                "walks":    st.get("baseOnBalls", 0),
+                "strikes":  st.get("strikeOuts", 0),
+                "hits":     st.get("hits", 0),
+                "doubles":  st.get("doubles", 0),
+                "triples":  st.get("triples", 0),
+                "hr":       st.get("homeRuns", 0),
+                "steals":   st.get("stolenBases", 0),
+                "caught":   st.get("caughtStealing", 0),
+                "runs":     st.get("runs", 0),
+                "rbi":      st.get("rbi", 0),
+            })
+        else:
+            rec.update({
+                "ip":       st.get("inningsPitched"),
+                "walks":    st.get("baseOnBalls", 0),
+                "strikes":  st.get("strikeOuts", 0),
+                "hits":     st.get("hits", 0),
+                "hr":       st.get("homeRuns", 0),
+                "er":       st.get("earnedRuns", 0),
+                "bf":       st.get("battersFaced", 0),
+                "starts":   st.get("gamesStarted", 0),
+            })
+        out.append(rec)
+    return out
+
+
 def _fetch_fielding_one(year: int) -> pd.DataFrame:
     """Pull one season of FIELDING stats from statsapi.
 

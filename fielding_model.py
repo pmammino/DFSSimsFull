@@ -335,6 +335,94 @@ def project_fielding_rates(
     return pd.DataFrame(rows)
 
 
+def ensure_rate_coverage(
+    rates: pd.DataFrame,
+    roster: pd.DataFrame,
+    *,
+    id_col: str = "PlayerId",
+    pos_col: str = "Pos",
+) -> pd.DataFrame:
+    """Guarantee every (player, position) on `roster` has a fielding rate row.
+
+    Without this, fielding silently drops **every debut player and every minor
+    leaguer**: `project_fielding_rates` only emits rows for players present in
+    the MLB fielding history, so a rookie with innings assigned to him produced
+    no fielding projection at all. That is the same failure the rate models had
+    before the roster-coverage widening — a player with no history vanishing
+    rather than being regressed to a prior.
+
+    A player with no history at his assigned position falls back to the
+    position baseline, which is the correct answer: an unknown second baseman
+    should be projected as an average second baseman.
+
+    **Glove skill transfers across positions; the job does not.** A player with
+    history at shortstop who is assigned to second base gets second base's
+    putout, assist and double-play rates — those are the job — but keeps his
+    own error skill relative to his old position, because a sure-handed
+    shortstop is a sure-handed second baseman. That is carried as a ratio
+    against his old position's baseline rather than as an absolute rate, since
+    the absolute error rate per chance differs hugely by position (1B .995,
+    3B .962).
+
+    Adds `fielding_source`: "history" (own history at this position),
+    "transfer" (error skill carried from another position), or "baseline"
+    (position prior only).
+    """
+    required = {id_col, pos_col}
+    missing = required - set(roster.columns)
+    if missing:
+        raise KeyError(f"roster missing columns: {sorted(missing)}")
+
+    have = set()
+    if not rates.empty and {id_col, pos_col} <= set(rates.columns):
+        have = {(int(r[id_col]), str(r[pos_col]).upper())
+                for _, r in rates.iterrows()}
+
+    # Best available error skill per player, expressed as a ratio to the
+    # baseline of the position it was measured at, weighted toward the
+    # position he played most.
+    skill: dict[int, float] = {}
+    if not rates.empty and "e_per_chance" in rates.columns:
+        for pid, g in rates.groupby(id_col):
+            g = g.sort_values("innings_history", ascending=False) \
+                if "innings_history" in g.columns else g
+            top = g.iloc[0]
+            prior = baseline_e_per_chance(str(top[pos_col]))
+            if prior > 0 and pd.notna(top.get("e_per_chance")):
+                skill[int(pid)] = float(top["e_per_chance"]) / prior
+
+    out = list(rates.to_dict("records")) if not rates.empty else []
+    for rec in out:
+        rec.setdefault("fielding_source", "history")
+
+    carry = [c for c in ("team_id",) if c in roster.columns]
+    for _, r in roster.iterrows():
+        pid = r.get(id_col)
+        pos = str(r.get(pos_col) or "").upper()
+        if pd.isna(pid) or pos not in BASELINES:
+            continue                       # DH and anything unrecognized
+        pid = int(pid)
+        if (pid, pos) in have:
+            continue
+        rec = {id_col: pid, pos_col: pos, "innings_history": 0.0}
+        rec.update(baseline_rates(pos))
+        if pid in skill:
+            # Transfer the glove, not the job.
+            ratio = float(np.clip(skill[pid], 0.3, 3.0))
+            rec["e_per_chance"] = baseline_e_per_chance(pos) * ratio
+            rec["rate_e"] = ((rec["rate_po"] + rec["rate_a"])
+                             * rec["e_per_chance"]
+                             / max(1.0 - rec["e_per_chance"], 1e-6))
+            rec["fielding_source"] = "transfer"
+        else:
+            rec["fielding_source"] = "baseline"
+        for c in carry:
+            if pd.notna(r.get(c)):
+                rec[c] = int(r[c])
+        out.append(rec)
+    return pd.DataFrame(out)
+
+
 def baseline_rates(pos: str) -> dict[str, float]:
     """Baseline rates for a position, for a player with no history there."""
     base = BASELINES.get(str(pos).upper())

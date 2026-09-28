@@ -154,6 +154,63 @@ def check_playing_time(checks: Checks, h: pd.DataFrame,
                    f"{len(floor_rows)} floor-tier rows, {bad} not at {floor}")
 
 
+def check_fielding(checks: Checks, out_dir, target_year: int) -> None:
+    """Validate the fielding fetch's response shape.
+
+    This check exists because the fielding fetch was written against the
+    documented statsapi shape but could not be exercised from the dev sandbox.
+    It reports WARN rather than FAIL for a missing file, since fielding is
+    additive to the projection — but FAILS on a file that is present and
+    malformed, because a silently-wrong shape is worse than an absent one.
+    """
+    path = out_dir / f"fielding_history_{target_year}.csv"
+    if not path.exists():
+        checks.add(WARN, "fielding fetch",
+                   f"{path.name} absent — fetch did not run or returned "
+                   "nothing; fielding falls back to position baselines")
+        return
+
+    f = pd.read_csv(path)
+    checks.add(PASS if len(f) else FAIL, "fielding rows",
+               f"{len(f):,} (player, season, position) rows")
+    if f.empty:
+        return
+
+    expected = {"PlayerId", "Season", "Pos", "Innings", "PO", "A", "E", "DP"}
+    absent = expected - set(f.columns)
+    checks.add(PASS if not absent else FAIL, "fielding columns",
+               "all present" if not absent else f"MISSING {sorted(absent)}")
+    if absent:
+        return
+
+    # Positions are the field the pipeline has never had; they arrive free with
+    # this fetch, so confirm they actually came through.
+    from fielding_model import ALIGNMENT
+    seen = {str(p).upper() for p in f["Pos"].dropna().unique()}
+    covered = set(ALIGNMENT) & seen
+    checks.add(PASS if len(covered) >= 9 else FAIL, "positions",
+               f"{len(covered)}/9 alignment positions present"
+               + ("" if len(covered) >= 9 else f" — saw {sorted(seen)}"))
+
+    innings = pd.to_numeric(f["Innings"], errors="coerce").fillna(0)
+    checks.add(PASS if (innings > 0).any() else FAIL, "fielding innings",
+               f"{int((innings > 0).sum()):,} rows with innings > 0"
+               + ("" if (innings > 0).any() else
+                  " — the 'X.Y' innings parse may have failed"))
+
+    # The 27-putout identity, measured on real data. A league-wide PO per 9
+    # defensive innings far from 27 means the innings parse or the putout field
+    # is being read wrong.
+    if (innings > 0).any():
+        po = pd.to_numeric(f["PO"], errors="coerce").fillna(0).sum()
+        team_innings = innings.sum() / len(ALIGNMENT)
+        po_per_9 = po / (team_innings / 9.0)
+        ok = 24.0 <= po_per_9 <= 30.0
+        checks.add(PASS if ok else FAIL, "PO per 9",
+                   f"{po_per_9:.2f} (expect ~27)"
+                   + ("" if ok else " — innings or putout field misread?"))
+
+
 def check_league_calibration(checks: Checks, h: pd.DataFrame,
                              p: pd.DataFrame) -> None:
     """Offense and defense must still agree with each other.
@@ -211,6 +268,7 @@ def main(argv=None) -> int:
     check_extra_base_hits(checks, h)
     check_playing_time(checks, h, p)
     check_league_calibration(checks, h, p)
+    check_fielding(checks, a.out_dir, a.target_year)
     print(checks.report())
 
     if checks.failed:
