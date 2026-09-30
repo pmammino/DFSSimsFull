@@ -283,13 +283,26 @@ def _fetch_affiliate_parent_map(sport_id: int) -> dict:
     out = {}
     for t in teams:
         tid = t.get("id")
-        parent = t.get("parentOrgId")
-        if tid is None or parent is None:
+        if tid is None:
             continue
-        out[int(tid)] = (int(parent), t.get("parentOrgName"))
+        pid, pname = t.get("parentOrgId"), t.get("parentOrgName")
+        # Keep the row if EITHER field is present. The id is preferred (it
+        # needs no name resolution), but team_context.team_id_for_abbr also
+        # resolves full club names — "Texas Rangers" -> 140 — so the name is a
+        # working second path if this response carries only that. Skipping
+        # unless both existed would have thrown away a usable answer.
+        if pid is None and not pname:
+            continue
+        try:
+            pid = int(pid) if pid is not None else None
+        except (TypeError, ValueError):
+            pid = None
+        # int key: the /stats splits carry a numeric team id, and coercing both
+        # sides means a stringified id still joins.
+        out[int(tid)] = (pid, pname)
     if not out:
         print(f"  affiliate->parent map for sportId {sport_id}: "
-              "no parentOrgId in response; orgs will be unresolved")
+              "no parentOrgId/parentOrgName in response; orgs unresolved")
     return out
 
 
@@ -324,8 +337,17 @@ def _fetch_minors_statsapi_one(season: int, sport_id: int, group: str,
         # id, so mle_translations._parent_org resolves it without a name lookup;
         # when the map is empty the record simply carries no parent and falls
         # back to the previous "no org" behavior.
-        parent_id, parent_name = (parent_map or {}).get(team.get("id"),
-                                                        (None, None))
+        # Prefer the split's own team object when it carries the parent — it
+        # costs nothing and removes the dependency on the /teams call entirely
+        # for any level where statsapi inlines it. Fall back to the map.
+        try:
+            _tid = int(team.get("id")) if team.get("id") is not None else None
+        except (TypeError, ValueError):
+            _tid = None
+        parent_id = team.get("parentOrgId")
+        parent_name = team.get("parentOrgName")
+        if parent_id is None and not parent_name:
+            parent_id, parent_name = (parent_map or {}).get(_tid, (None, None))
         rec = {
             # The whole point: a native MLBAM id, so no name resolution.
             "mlbam_id":      p.get("id"),

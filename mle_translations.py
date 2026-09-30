@@ -473,10 +473,25 @@ def _hitter_row(mlbam, name, rec, season, age, pa_eff, tr) -> dict:
         "Season": season, "PlayerId": mlbam, "Name": name,
         "Team": org, "TeamId": org_id,
         "Age": age, "PA": pa_eff, "AB": ab,
-        "K": k, "BB": bb, "IBB": 0.0, "HBP": hbp, "SF": sf, "SH": 0.0,
+        # NaN, not 0.0, for everything this translation does not produce.
+        # A zero here is not "none of those happened" — it is "we don't know",
+        # and the downstream projectors read it as an observation. They divide
+        # the count by PA to get an observed rate, so a row with 0.0 and a
+        # credibility-deflated PA of 275 became a genuine 0.000 season carrying
+        # n_eff=275 against k_pa=200: a projection at ~42% of league average,
+        # AND a deflated league_rate, since that is sum(count)/sum(PA) over the
+        # same pool — which biased real MLB hitters low too (measured: -5.0%).
+        # IBB and SH are not in the statsapi minors feed at all.
+        "K": k, "BB": bb, "IBB": np.nan, "HBP": hbp, "SF": sf, "SH": np.nan,
         "H": h, "HR": hr, "2B": db, "3B": tp,
         "SB": tr["SB_rate"] * pa_eff, "CS": tr["CS_rate"] * pa_eff,
-        "R": 0.0, "RBI": 0.0, "G": _f(rec.get("games")),
+        # Runs and RBI depend on the lineup around a player rather than on his
+        # own rates, so there is no defensible per-PA translation of them and
+        # they are left unknown. The feed DOES carry raw minor-league runs/rbi
+        # (`_parse_hitter` reads them), so a future model could translate and
+        # shrink them like the rest — but the plan of record is to re-derive
+        # R/RBI as an allocation of projected team runs, which needs neither.
+        "R": np.nan, "RBI": np.nan, "G": _f(rec.get("games")),
         "TBF": 0.0, "WP": 0.0, "BK": 0.0, "ER": 0.0, "RA": 0.0, "IP": 0.0,
         "K%": tr["K%"], "BB%": tr["BB%"], "HBP%": tr["HBP%"], "SF%": tr["SF%"],
         "mle_source": "MiLB",
@@ -544,11 +559,24 @@ def _pitcher_row(mlbam, name, rec, season, age, tbf_eff, tr, obs) -> dict:
         "Season": season, "PlayerId": mlbam, "Name": name,
         "Team": org, "TeamId": org_id, "Age": age,
         "PA": 0.0, "AB": 0.0,
-        "K": k, "BB": bb, "IBB": 0.0, "HBP": hbp, "SF": sf, "SH": 0.0,
+        # NaN, not 0.0, for what the minors feed does not carry — see the note
+        # in _hitter_row. WP matters most here because it has a live model:
+        # project_wild_pitches filters TBF >= 25 (a deflated AAA season
+        # qualifies) and builds league_rate as sum(WP)/sum(TBF), so zeros
+        # deflated the league wild-pitch rate for every pitcher. IBB, SH, WP
+        # and BK are all absent from the statsapi minors response.
+        "K": k, "BB": bb, "IBB": np.nan, "HBP": hbp, "SF": sf, "SH": np.nan,
         "H": h, "HR": hr, "2B": bip["double"] * bip_mass,
         "3B": bip["triple"] * bip_mass,
         "SB": 0.0, "CS": 0.0, "R": 0.0, "RBI": 0.0, "G": _f(rec.get("games")),
-        "TBF": tbf_eff, "WP": 0.0, "BK": 0.0,
+        "TBF": tbf_eff, "WP": np.nan, "BK": np.nan,
+        # DELIBERATELY RAW, not deflated like TBF. `role_from_ip_per_g` reads
+        # IP/G to decide starter vs reliever, and usage is not a talent claim:
+        # a AAA starter starts games. Scaling IP by credibility would turn a
+        # 5.0 IP/G starter into 2.75 and misclassify him as a reliever. Nothing
+        # consumes history TBF/IP (compute_tbf_per_ip derives it from projected
+        # probabilities), so the mismatch with tbf_eff is inert — don't
+        # "fix" it into a role regression.
         "ER": obs["ER"], "RA": obs["ER"], "IP": obs["IP"],
         "K%": tr["K%"], "BB%": tr["BB%"], "HBP%": tr["HBP%"], "SF%": tr["SF%"],
         "mle_source": "MiLB",

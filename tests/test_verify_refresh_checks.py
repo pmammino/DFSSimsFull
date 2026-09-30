@@ -33,7 +33,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from team_context import TEAM_ABBR_BY_ID
 from verify_refresh import (  # noqa: E402
-    FAIL, PASS, WARN, Checks, check_physically_possible, check_team_identity,
+    FAIL, PASS, WARN, Checks, check_physically_possible,
+    check_pool_composition, check_team_identity, volume_weights,
 )
 
 MLB = sorted(TEAM_ABBR_BY_ID.values())
@@ -213,6 +214,125 @@ def test_missing_columns_are_skipped_not_failed():
     check_physically_possible(c, pd.DataFrame({"Name": ["x"]}),
                               pd.DataFrame({"Career_PA": [1.0]}))
     assert FAIL not in _rows(c).values()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# the gate must not crash — a dead verifier reads as a broken run
+# ─────────────────────────────────────────────────────────────────────────────
+
+DEGENERATE = {
+    # Career_PA absent was a live AttributeError: pd.to_numeric(df.get(col))
+    # returns a SCALAR nan, and .fillna(0) on a numpy float raises.
+    "no Career_PA": (pd.DataFrame({"P_HR": [0.03], "Name": ["a"]}),
+                     pd.DataFrame({"RA9": [4.3], "ERA": [4.0],
+                                   "R_per_PA": [0.115]})),
+    "all-NaN P_HR": (pd.DataFrame({"P_HR": [np.nan], "Name": ["a"]}),
+                     pd.DataFrame({"RA9": [4.3], "Career_PA": [10.0]})),
+    "no Name":      (pd.DataFrame({"P_HR": [0.30]}),
+                     pd.DataFrame({"RA9": [4.3], "Career_PA": [10.0]})),
+    "all-NaN RA9":  (pd.DataFrame({"P_HR": [0.03], "Name": ["a"]}),
+                     pd.DataFrame({"RA9": [np.nan], "Career_PA": [10.0]})),
+    "empty":        (pd.DataFrame(), pd.DataFrame()),
+}
+
+
+@pytest.mark.parametrize("tag", sorted(DEGENERATE))
+def test_checks_survive_degenerate_frames(tag):
+    from verify_refresh import check_league_calibration
+    h, p = DEGENERATE[tag]
+    for fn in (check_physically_possible, check_league_calibration):
+        fn(Checks(), h, p)      # must not raise
+
+
+def test_a_flagged_row_without_a_name_still_fails():
+    """Naming the worst player is a convenience, not a precondition."""
+    c = Checks()
+    check_physically_possible(c, pd.DataFrame({"P_HR": [0.30]}),
+                              pd.DataFrame({"RA9": [4.3]}))
+    assert _rows(c)["P_HR plausible"] == FAIL
+
+
+def test_absent_ra9_data_warns_rather_than_fails():
+    """No data is not a calibration failure."""
+    c = Checks()
+    check_physically_possible(c, pd.DataFrame({"P_HR": [0.03], "Name": ["a"]}),
+                              pd.DataFrame({"RA9": [np.nan]}))
+    assert _rows(c)["league RA9"] == WARN
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# league-aggregate weighting: the floor tier must not steer it
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _mixed_pool():
+    """700 active regulars, 20 retired stars, 280 fringe, 1,875 MLE."""
+    rows = [{"Career_PA": 3000.0, "pt_tier": "projected"} for _ in range(700)]
+    rows += [{"Career_PA": 9000.0, "pt_tier": "floor"} for _ in range(20)]
+    rows += [{"Career_PA": 400.0, "pt_tier": "floor"} for _ in range(280)]
+    rows += [{"Career_PA": 0.0, "pt_tier": "floor"} for _ in range(1875)]
+    return pd.DataFrame(rows)
+
+
+def test_floor_tier_carries_no_aggregate_weight():
+    """Miguel Cabrera's 11,000 career PA must not vote on league R/PA."""
+    df = _mixed_pool()
+    w = volume_weights(df)
+    floor = df.pt_tier == "floor"
+    assert w[floor].sum() == 0.0
+    assert w[~floor].sum() > 0
+
+
+def test_the_bias_being_removed_is_real():
+    """Guard: the fixture must exercise the problem, or this proves nothing."""
+    df = _mixed_pool()
+    career = df.Career_PA
+    floor = (df.pt_tier == "floor").to_numpy()
+    rate = np.where(floor, 0.095, 0.1150)      # stale rates vs real
+    biased = np.average(rate, weights=career)
+    fixed = np.average(rate, weights=volume_weights(df))
+    assert biased < 0.1150 * 0.99, "fixture no longer shows the bias"
+    assert fixed == pytest.approx(0.1150)
+
+
+def test_projected_players_keep_their_career_weight():
+    """This is not a switch to Proj_PA — that is NaN until the PT model lands,
+    and 1.0 only for the floor tier, so using it would invert the bias."""
+    df = pd.DataFrame({"Career_PA": [1000.0, 4000.0],
+                       "pt_tier": ["projected", "projected"]})
+    assert list(volume_weights(df)) == [1000.0, 4000.0]
+
+
+def test_weights_degrade_without_pt_tier():
+    df = pd.DataFrame({"Career_PA": [10.0, 20.0]})
+    assert list(volume_weights(df)) == [10.0, 20.0]
+
+
+def test_weights_degrade_without_career_pa():
+    assert list(volume_weights(pd.DataFrame({"x": [1, 2, 3]}))) == [1.0, 1.0, 1.0]
+
+
+def test_an_all_floor_pool_does_not_produce_zero_weights():
+    """Every weight zero would make np.average raise, killing the gate."""
+    df = pd.DataFrame({"Career_PA": [500.0, 900.0],
+                       "pt_tier": ["floor", "floor"]})
+    w = volume_weights(df)
+    assert w.sum() > 0
+
+
+def test_pool_composition_reports_the_share_without_failing():
+    df = _mixed_pool()
+    c = Checks()
+    check_pool_composition(c, df, df)
+    r = _rows(c)
+    assert r["floor-tier weight (hitters)"] == PASS
+    assert "12.2%" in _detail(c, "floor-tier weight (hitters)")
+
+
+def test_pool_composition_is_skipped_without_tiers():
+    c = Checks()
+    check_pool_composition(c, pd.DataFrame({"Career_PA": [1.0]}),
+                           pd.DataFrame({"Career_PA": [1.0]}))
+    assert not c.rows
 
 
 if __name__ == "__main__":

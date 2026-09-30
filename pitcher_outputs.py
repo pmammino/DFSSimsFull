@@ -336,17 +336,35 @@ def project_wp_per_pa(pit_df: pd.DataFrame, target_year: int,
     if prior.empty:
         return pd.DataFrame(columns=["PlayerId", "Pred_WP_per_PA", "n_eff_WP"])
 
-    league_rate = (float(prior["WP"].sum())
-                   / max(float(prior["TBF"].sum()), 1.0))
+    # Rows with no WP count are not evidence of zero wild pitches. The
+    # statsapi minors feed carries no `wildPitches`, so MLE-translated rows
+    # arrive unknown; counting them as 0.0 put their TBF in the league-rate
+    # denominator with nothing in the numerator (deflating it for everyone)
+    # and read as a real 0.000 rate for the player himself. `.fillna(0)` below
+    # did the same thing to any other missing value — a rate is never zero
+    # just because it is absent.
+    known = prior[prior["WP"].notna() & prior["WP_per_PA"].notna()]
+    if known.empty:
+        print("  WARNING: no usable WP history in the prior pool; "
+              "WP_per_PA cannot be projected")
+        return pd.DataFrame(columns=["PlayerId", "Pred_WP_per_PA", "n_eff_WP"])
+    league_rate = (float(known["WP"].sum())
+                   / max(float(known["TBF"].sum()), 1.0))
 
     rows = []
-    for pid, g in prior.groupby("PlayerId"):
+    # Present but with no WP history: the league rate, not a fabricated zero
+    # and not a missing row, so org depth still gets a usable baseline.
+    for pid in sorted(set(prior["PlayerId"]) - set(known["PlayerId"])):
+        rows.append({"PlayerId": int(pid),
+                     "Pred_WP_per_PA": float(np.clip(league_rate, 0.0, 1.0)),
+                     "n_eff_WP": 0.0})
+    for pid, g in known.groupby("PlayerId"):
         g = g.sort_values("Season").copy()
         g["yb"] = target_year - g["Season"].astype(int)
         w = g["TBF"].astype(float).values * (decay ** g["yb"].values)
         if w.sum() == 0:
             continue
-        weighted = (float(np.sum(g["WP_per_PA"].astype(float).fillna(0).values * w))
+        weighted = (float(np.sum(g["WP_per_PA"].astype(float).values * w))
                     / float(w.sum()))
         n_eff = float(w.sum())
         pred = (n_eff * weighted + k_pa * league_rate) / (n_eff + k_pa)
