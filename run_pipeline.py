@@ -1061,11 +1061,24 @@ def step12_project_splits(h_final: pd.DataFrame, p_final: pd.DataFrame,
         print(f"  Mean vL_share among hitters: "
               f"{h_split_proj['vL_share'].mean():.3f}")
         # Sanity: implied avg should match overall
-        sample = h_final.dropna(subset=["P_K_vL", "P_K_vR", "P_K"]).head(5)
+        # Show the players this projection is ABOUT. `.head(5)` took whoever
+        # sat at the top of the frame, which after the active-player bar
+        # dropped to 1 PA meant five retired players (Cabrera, Cruz, Peralta,
+        # Piña) and Adam Wainwright — a pitcher — fronting the hitter
+        # diagnostic. All five are correctly floor-tier and get 1 PA, so
+        # nothing was actually wrong, but a sanity check that displays the
+        # least relevant rows in the file costs real time to rule out.
+        pool = h_final.dropna(subset=["P_K_vL", "P_K_vR", "P_K"])
+        if "pt_tier" in pool.columns:
+            projected = pool[pool["pt_tier"].astype(str) == "projected"]
+            if len(projected):
+                pool = projected
+        sort_col = next((c for c in ("Career_PA", "Last_PA")
+                         if c in pool.columns), None)
+        sample = (pool.nlargest(5, sort_col) if sort_col else pool.head(5))
         if len(sample):
-            implied = (sample["vL_share"] * sample["P_K_vL"]
-                       + sample["vR_share"] * sample["P_K_vR"])
-            print(f"  Sanity check (implied K% vs P_K, first 5 hitters):")
+            print(f"  Sanity check (implied K% vs P_K, 5 highest-volume "
+                  f"projected hitters):")
             for _, r in sample.iterrows():
                 imp = r["vL_share"] * r["P_K_vL"] + r["vR_share"] * r["P_K_vR"]
                 print(f"    {r['Name']:25s} P_K={r['P_K']:.4f}, implied={imp:.4f}, "

@@ -279,6 +279,60 @@ def _num(df: pd.DataFrame, col: str) -> pd.Series:
     return pd.to_numeric(df[col], errors="coerce")
 
 
+def volume_weights(df: pd.DataFrame) -> pd.Series:
+    """Career-PA weights with FLOOR-TIER players zeroed out.
+
+    League aggregates should describe the players who will actually play. The
+    floor tier is everyone with no real MLB evidence inside
+    PT_PROJECTED_LOOKBACK (2) years of the target, and it is where three
+    populations land:
+
+      - the retired. Widening RATE_ACTIVE_LOOKBACK to 4 admitted anyone with
+        >= 1 PA since 2023, so Miguel Cabrera and Nelson Cruz re-entered the
+        hitter pool carrying ~11,000 career PA apiece — the same aggregate
+        weight as an active star, on decline-phase rates from three years ago.
+      - pitchers in the HITTER pool. Adam Wainwright appeared among the
+        hitters for the same reason: a pitcher with a handful of plate
+        appearances clears a 1-PA bar.
+      - MLE-translated minor leaguers, always floor by construction.
+
+    Career_PA is still the weight for everyone projected, because Proj_PA is
+    NaN until the playing-time model exists — it is 1.0 ONLY for the floor
+    tier, so weighting by it directly would invert the bias and count nobody
+    but the floor. Zeroing the floor tier gets the same answer without waiting
+    for that model. With no pt_tier column this degrades to plain Career_PA,
+    which is what it always was.
+    """
+    w = _num(df, "Career_PA").fillna(0)
+    if "pt_tier" in df.columns:
+        w = w.where(df["pt_tier"].astype(str) != "floor", 0.0)
+    if w.sum() > 0:
+        return w
+    return pd.Series(np.ones(len(df)), index=df.index)
+
+
+def check_pool_composition(checks: Checks, h: pd.DataFrame,
+                           p: pd.DataFrame) -> None:
+    """How much aggregate weight sits on players who will not play.
+
+    Reported, never failed on: the floor tier existing is correct and
+    intended — it is how organizational depth gets a baseline. What this makes
+    visible is the SHARE, because that is what silently moved the league
+    aggregates when the active-player bar dropped to 1 PA.
+    """
+    for label, df in (("hitters", h), ("pitchers", p)):
+        if "pt_tier" not in df.columns or "Career_PA" not in df.columns:
+            continue
+        career = _num(df, "Career_PA").fillna(0)
+        floor = df["pt_tier"].astype(str) == "floor"
+        tot = float(career.sum())
+        share = float(career[floor].sum()) / tot if tot > 0 else 0.0
+        checks.add(PASS, f"floor-tier weight ({label})",
+                   f"{share:.1%} of career volume is floor tier "
+                   f"({int(floor.sum())} rows) — excluded from league "
+                   "aggregates")
+
+
 def check_physically_possible(checks: Checks, h: pd.DataFrame,
                               p: pd.DataFrame) -> None:
     """Per-player sanity bounds — no aggregate, no weighting, no excuses.
@@ -327,7 +381,9 @@ def check_physically_possible(checks: Checks, h: pd.DataFrame,
             # absent column indistinguishable from a broken run environment.
             checks.add(WARN, "league RA9", "no RA9 values to average")
         else:
-            wv = _num(p, "Career_PA").fillna(0).to_numpy()[ok]
+            # Same basis as the offense/defense check: a retired pitcher's
+            # career volume must not steer the league number.
+            wv = np.asarray(volume_weights(p), dtype=float)[ok]
             vals = ra9.to_numpy()[ok]
             m = (float(np.average(vals, weights=wv)) if wv.sum() > 0
                  else float(vals.mean()))
@@ -346,14 +402,7 @@ def check_league_calibration(checks: Checks, h: pd.DataFrame,
     from pitcher_outputs import LINEAR_WEIGHTS_RUNS as LW
     from pitcher_outputs import RUNS_INTERCEPT_DEFAULT as ICPT
 
-    def weights(df):
-        # _num, not pd.to_numeric(df.get(...)): the latter returns a scalar nan
-        # for an absent column and the .fillna(0) then raises AttributeError,
-        # taking the whole gate down.
-        w = _num(df, "Career_PA").fillna(0)
-        return w if w.sum() > 0 else pd.Series(np.ones(len(df)), index=df.index)
-
-    wh = weights(h)
+    wh = volume_weights(h)
     rpa_h = sum(lw * np.average(h[c], weights=wh)
                 for c, lw in LW.items() if c in h.columns) + ICPT
     if "R_per_PA" not in p.columns:
@@ -364,7 +413,7 @@ def check_league_calibration(checks: Checks, h: pd.DataFrame,
     # fabricated defect in one direction and a mask for a real one in the other.
     rp = pd.to_numeric(p["R_per_PA"], errors="coerce")
     ok = rp.notna().to_numpy()
-    wp = np.asarray(weights(p), dtype=float)[ok]
+    wp = np.asarray(volume_weights(p), dtype=float)[ok]
     if wp.sum() <= 0:
         checks.add(WARN, "offense/defense",
                    f"no weighted pitcher R_per_PA ({int(ok.sum())} of "
@@ -403,6 +452,7 @@ def main(argv=None) -> int:
     check_team_identity(checks, h, p)
     check_extra_base_hits(checks, h)
     check_playing_time(checks, h, p)
+    check_pool_composition(checks, h, p)
     check_physically_possible(checks, h, p)
     check_league_calibration(checks, h, p)
     check_fielding(checks, a.out_dir, a.target_year)
