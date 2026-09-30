@@ -188,6 +188,33 @@ def check_playing_time(checks: Checks, h: pd.DataFrame,
         checks.add(PASS if bad == 0 else FAIL, f"{col} floor",
                    f"{len(floor_rows)} floor-tier rows, {bad} not at {floor}")
 
+        # Every projected-tier player must now carry a volume. Before the
+        # playing-time model these were deliberately NaN; a NaN here now means
+        # the model did not run, and a NaN volume silently zeroes every
+        # rate-times-volume counting stat for that player.
+        proj = df[df["pt_tier"].astype(str) == "projected"]
+        missing = int(pd.to_numeric(proj[col], errors="coerce").isna().sum()) \
+            if len(proj) else 0
+        checks.add(PASS if missing == 0 else FAIL, f"{col} coverage",
+                   f"{len(proj)} projected rows, {missing} without a volume"
+                   + ("" if missing == 0 else
+                      " — the playing-time model did not run"))
+
+        # Team closure. A club cannot bat 7,000 times, and the league totals
+        # are what let runs scored equal runs allowed.
+        tcol = "Pred_target_team_id"
+        if tcol in df.columns:
+            budget = 162.0 * 38.0 if col == "Proj_PA" else 162.0 * 9.0
+            v = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+            per = v.groupby(df[tcol]).sum()
+            per = per[per.index.notna() & (per.index > 0)]
+            if len(per):
+                worst = float((per - budget).abs().max())
+                checks.add(PASS if worst <= budget * 0.02 else FAIL,
+                           f"{col} team closure",
+                           f"{len(per)} clubs, worst off budget by "
+                           f"{worst:,.1f} of {budget:,.0f}")
+
 
 def check_fielding(checks: Checks, out_dir, target_year: int) -> None:
     """Validate the fielding fetch's response shape.

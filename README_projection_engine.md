@@ -407,10 +407,92 @@ them available for a direct match so a just-promoted player still gets his own
 baseline. Files without `pt_tier` default to `projected`, making the filter a
 no-op on legacy output.
 
-## Designing the playing-time model
+## The baseline playing-time model (`playing_time_model.py`)
 
-Not built. This is the intended design, and it is the keystone: every remaining
-closure identity and the wins model depend on it.
+**Built.** Stage 1 and 2 of the design below are implemented; the design text
+after them is retained because it is still the plan for what comes next.
+
+Every player gets a role, and the role becomes volume:
+
+```
+raw = anchor x timing_share x availability x evidence_factor x depth_factor
+```
+
+then each team's raw volumes are **scaled to close** on its real budget
+(`162 x 38` PA, `162 x 9` IP). Closure is the point: a team bats ~6,156 times
+whatever we think of its players, and without that constraint the league scores
+more runs than it allows and the wins model has nothing to stand on.
+
+| term | what it is |
+|---|---|
+| `anchor` | the playing time the JOB carries over a full season (`role_taxonomy.py`) |
+| `timing_share` | when he takes the job — Opening Day 1.00 .. Late Season 0.20 |
+| `availability` | share of the season healthy and on an MLB roster |
+| `evidence_factor` | his own volume history, relative to the anchor, clipped to [0.45, 1.30] |
+| `depth_factor` | discount past `ROSTER_DEPTH_CORE` (13) on his club |
+
+**Everything is a default.** Role, Role Start and Availability are each
+overridable per player from
+`rosters/player_roles_{hitters,pitchers}_{year}.csv` — see the `.example.csv`
+files, or edit the generated workbook. Unknown role names are reported by name
+rather than silently benching the player, and an override file that matches
+nobody (the usual failure: wrong id column, wrong year) is reported as a count.
+
+### Three things this got wrong first, and why they are worth knowing
+
+**All 30 "closers" were minor leaguers.** Staff ranking is by RA9 within a
+club, and it included the floor tier — whose MLE-translated, heavily shrunk
+RA9 beats every real reliever. A Double-A arm took rank 1 on all 30 staffs and
+the actual bullpen was pushed past rank 6 into the depth role. Ranking is a
+standing among players who will pitch.
+
+**Every player in a role got an identical number.** With only the anchor as
+input, Aaron Judge, Ben Rice, Ryan McMahon, Trent Grisham and Heliot Ramos all
+projected exactly 418.1 PA. The role has to set the TIER and the player's own
+evidence his position within it — which is what `evidence_factor` does.
+
+**Concentrating the allocation does not fix the compression.** The projected
+tier admits 23.8 hitters and 31.5 pitchers per club against a 26-man roster, so
+nominal jobs over-subscribe the budget by about a third and closure compresses
+everyone. Scaling by `raw^gamma` was the obvious fix and is the wrong one: at
+the exponent that reproduces a real top-nine share (77%), the bench falls to 9
+PA and **the closer to 22 innings** — because bullpen anchors are deliberately
+flat across roles, so an exponent on volume punishes precisely the roles that
+should not scale with it. The shortfall belongs where the over-subscription is,
+which is the players beyond roster depth, so it goes there instead.
+
+### What it produces
+
+Team and league closure are exact. A representative staff:
+
+```
+Max Fried         Ace (SP1)                        161 IP
+Carlos Rodon      Mid-Rotation Starter (SP2-3)     156
+Cam Schlittler    Mid-Rotation Starter (SP2-3)     154
+Will Warren       End-of-Rotation Starter (SP4-5)  136
+David Bednar      Closer                            57
+... bullpen tail  20 / 16 / 12 / 10 / 6
+```
+
+The residual is reported, never hidden: the run prints the mean **anchor
+scale** (~0.88), which measures how far the anchors had to be stretched to fit
+a real roster. That number is a property of the anchors, not of the teams, and
+it is what `fit_role_anchors` should correct once there is a season of
+assignments to fit against.
+
+### Still not done
+
+* **Typed slots.** A team's nine lineup spots have positions; this allocates
+  one undifferentiated pool, so two first basemen can both be Full Time. The
+  position data now exists (the fielding fetch), so this is a modelling step.
+* **Injury coupling.** "Injury Replacement" volume is conditional on OTHER
+  players getting hurt — a point estimate cannot express that.
+* **Fitted anchors.** As above.
+
+## The original design (retained: still the plan beyond the baseline)
+
+This is the intended full design. Stages 1-2 are now built; the closure
+identities and the wins model depend on the rest.
 
 ### The framing that matters
 

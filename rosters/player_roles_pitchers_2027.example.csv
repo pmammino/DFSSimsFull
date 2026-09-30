@@ -1,0 +1,7 @@
+PlayerId,Name,Role,Role Start,Availability,Note
+543037,Gerrit Cole,Ace (SP1),Early Season (~May),0.85,returning from injury
+621111,Devin Williams,Closer,Opening Day,1.00,ninth inning
+694297,Paul Skenes,Innings-Limited Starter,Opening Day,1.00,workload cap
+,,,,,"Only the columns you fill are applied. Leave a cell blank to keep the model's default."
+,,,,,"A Rehab / Injury Return role already discounts the anchor — pair it with a"
+,,,,,"Role Start of Opening Day rather than discounting twice."

@@ -1,0 +1,8 @@
+PlayerId,Name,Role,Role Start,Availability,Note
+592450,Aaron Judge,Full Time,Opening Day,1.00,everyday RF
+660271,Shohei Ohtani,Everyday DH / 1B-DH,Opening Day,1.00,DH only in 2027
+665489,Vladimir Guerrero Jr.,Full Time,Opening Day,0.92,minor injury history
+,,,,,"Only the columns you fill are applied. Leave a cell blank to keep the model's default."
+,,,,,"Role must match a name from the Roles sheet of the workbook exactly."
+,,,,,"Role Start: Opening Day / Early Season (~May) / Mid Season (~July) / Late Season (~Sept)"
+,,,,,"Availability: 0..1, share of the season healthy and on an MLB roster."

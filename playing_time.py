@@ -269,6 +269,11 @@ def tier_report(df: pd.DataFrame, *, role: str = "hitter") -> str:
         floored = int(df[vol_col].eq(PT_FLOOR_PA if role == "hitter"
                                      else PT_FLOOR_IP).sum())
         unmodeled = int(df[vol_col].isna().sum())
-        lines.append(f"  {vol_col}: {floored} at floor, "
-                     f"{unmodeled} awaiting a playing-time model")
+        # `unmodeled` is now expected to be 0: playing_time_model runs right
+        # after this step and fills every projected-tier player. A nonzero
+        # count means that model did not run, which is worth saying plainly
+        # rather than describing as the normal state of affairs.
+        tail = (f"{unmodeled} awaiting the playing-time model" if unmodeled
+                else "the rest allocated by the playing-time model")
+        lines.append(f"  {vol_col}: {floored} at floor, {tail}")
     return "\n".join(lines)
