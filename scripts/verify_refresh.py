@@ -266,6 +266,19 @@ def check_fielding(checks: Checks, out_dir, target_year: int) -> None:
                    + ("" if ok else " — innings or putout field misread?"))
 
 
+def _num(df: pd.DataFrame, col: str) -> pd.Series:
+    """Always a numeric Series aligned to `df`, even for an absent column.
+
+    `pd.to_numeric(df.get(col))` returns a SCALAR nan when the column is
+    missing, and the next `.fillna(0)` raises AttributeError on a numpy float —
+    crashing the gate, which reads as a broken verifier rather than as the
+    clean run it actually is.
+    """
+    if col not in df.columns:
+        return pd.Series(np.nan, index=df.index, dtype="float64")
+    return pd.to_numeric(df[col], errors="coerce")
+
+
 def check_physically_possible(checks: Checks, h: pd.DataFrame,
                               p: pd.DataFrame) -> None:
     """Per-player sanity bounds — no aggregate, no weighting, no excuses.
@@ -280,23 +293,25 @@ def check_physically_possible(checks: Checks, h: pd.DataFrame,
     optimistic projection, only an impossible one — so anything they catch is a
     genuine defect and the message says where to look.
     """
-    worst = []
     if "P_HR" in h.columns:
-        hr = pd.to_numeric(h["P_HR"], errors="coerce")
-        # The all-time single-season per-PA HR record is ~0.11 (Bonds 2001).
-        bad = h[hr > 0.12]
-        checks.add(PASS if bad.empty else FAIL, "P_HR plausible",
-                   f"max {float(hr.max()):.4f}" + ("" if bad.empty else
-                   f" — {len(bad)} above 0.12/PA, worst "
-                   f"{bad.assign(_v=hr).nlargest(1, '_v')['Name'].iloc[0]}"
+        hr = _num(h, "P_HR")
+        # The all-time single-season per-PA HR record is ~0.11 (Bonds 2001:
+        # 73 HR in 664 PA = 0.110). P_HR is per-PA, so 0.12 is above anything
+        # a real hitter has ever done and cannot flag a good projection.
+        bad = hr > 0.12
+        worst_name = ""
+        if bad.any() and "Name" in h.columns:
+            worst_name = f", worst {h.loc[hr.idxmax(), 'Name']}"
+        mx = float(hr.max()) if hr.notna().any() else float("nan")
+        checks.add(PASS if not bad.any() else FAIL, "P_HR plausible",
+                   f"max {mx:.4f}" + ("" if not bad.any() else
+                   f" — {int(bad.sum())} above 0.12/PA{worst_name}"
                    " (unshrunk MLE translation?)"))
     for col, lo in (("RA9", 0.0), ("ERA", 0.0), ("R_per_PA", 0.0)):
         if col not in p.columns:
             continue
-        v = pd.to_numeric(p[col], errors="coerce")
+        v = _num(p, col)
         n_neg = int((v < lo).sum())
-        if n_neg:
-            worst.append(f"{col} min {float(v.min()):.3f} ({n_neg} rows)")
         checks.add(PASS if not n_neg else FAIL, f"{col} non-negative",
                    f"min {float(v.min()):.3f}" + ("" if not n_neg else
                    f" — {n_neg} NEGATIVE; the linear-weights runs mapping "
@@ -305,12 +320,19 @@ def check_physically_possible(checks: Checks, h: pd.DataFrame,
     # season engine multiplies by innings, so a mean of 2.15 against a real
     # ~4.40 is a 50% error in every pitcher's run total.
     if "RA9" in p.columns:
-        ra9 = pd.to_numeric(p["RA9"], errors="coerce")
-        w = pd.to_numeric(p.get("Career_PA"), errors="coerce").fillna(0)
-        m = (float(np.average(ra9.fillna(0), weights=w)) if w.sum() > 0
-             else float(ra9.mean()))
-        checks.add(PASS if 3.5 <= m <= 5.5 else FAIL, "league RA9",
-                   f"{m:.2f} (MLB ~4.20-4.60)")
+        ra9 = _num(p, "RA9")
+        ok = ra9.notna().to_numpy()
+        if not ok.any():
+            # No data is not a calibration failure. FAILing here would make an
+            # absent column indistinguishable from a broken run environment.
+            checks.add(WARN, "league RA9", "no RA9 values to average")
+        else:
+            wv = _num(p, "Career_PA").fillna(0).to_numpy()[ok]
+            vals = ra9.to_numpy()[ok]
+            m = (float(np.average(vals, weights=wv)) if wv.sum() > 0
+                 else float(vals.mean()))
+            checks.add(PASS if 3.5 <= m <= 5.5 else FAIL, "league RA9",
+                       f"{m:.2f} (MLB ~4.20-4.60)")
 
 
 def check_league_calibration(checks: Checks, h: pd.DataFrame,
@@ -325,8 +347,11 @@ def check_league_calibration(checks: Checks, h: pd.DataFrame,
     from pitcher_outputs import RUNS_INTERCEPT_DEFAULT as ICPT
 
     def weights(df):
-        w = pd.to_numeric(df.get("Career_PA"), errors="coerce").fillna(0)
-        return w if w.sum() > 0 else pd.Series(np.ones(len(df)))
+        # _num, not pd.to_numeric(df.get(...)): the latter returns a scalar nan
+        # for an absent column and the .fillna(0) then raises AttributeError,
+        # taking the whole gate down.
+        w = _num(df, "Career_PA").fillna(0)
+        return w if w.sum() > 0 else pd.Series(np.ones(len(df)), index=df.index)
 
     wh = weights(h)
     rpa_h = sum(lw * np.average(h[c], weights=wh)

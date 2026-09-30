@@ -215,5 +215,49 @@ def test_missing_columns_are_skipped_not_failed():
     assert FAIL not in _rows(c).values()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# the gate must not crash — a dead verifier reads as a broken run
+# ─────────────────────────────────────────────────────────────────────────────
+
+DEGENERATE = {
+    # Career_PA absent was a live AttributeError: pd.to_numeric(df.get(col))
+    # returns a SCALAR nan, and .fillna(0) on a numpy float raises.
+    "no Career_PA": (pd.DataFrame({"P_HR": [0.03], "Name": ["a"]}),
+                     pd.DataFrame({"RA9": [4.3], "ERA": [4.0],
+                                   "R_per_PA": [0.115]})),
+    "all-NaN P_HR": (pd.DataFrame({"P_HR": [np.nan], "Name": ["a"]}),
+                     pd.DataFrame({"RA9": [4.3], "Career_PA": [10.0]})),
+    "no Name":      (pd.DataFrame({"P_HR": [0.30]}),
+                     pd.DataFrame({"RA9": [4.3], "Career_PA": [10.0]})),
+    "all-NaN RA9":  (pd.DataFrame({"P_HR": [0.03], "Name": ["a"]}),
+                     pd.DataFrame({"RA9": [np.nan], "Career_PA": [10.0]})),
+    "empty":        (pd.DataFrame(), pd.DataFrame()),
+}
+
+
+@pytest.mark.parametrize("tag", sorted(DEGENERATE))
+def test_checks_survive_degenerate_frames(tag):
+    from verify_refresh import check_league_calibration
+    h, p = DEGENERATE[tag]
+    for fn in (check_physically_possible, check_league_calibration):
+        fn(Checks(), h, p)      # must not raise
+
+
+def test_a_flagged_row_without_a_name_still_fails():
+    """Naming the worst player is a convenience, not a precondition."""
+    c = Checks()
+    check_physically_possible(c, pd.DataFrame({"P_HR": [0.30]}),
+                              pd.DataFrame({"RA9": [4.3]}))
+    assert _rows(c)["P_HR plausible"] == FAIL
+
+
+def test_absent_ra9_data_warns_rather_than_fails():
+    """No data is not a calibration failure."""
+    c = Checks()
+    check_physically_possible(c, pd.DataFrame({"P_HR": [0.03], "Name": ["a"]}),
+                              pd.DataFrame({"RA9": [np.nan]}))
+    assert _rows(c)["league RA9"] == WARN
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

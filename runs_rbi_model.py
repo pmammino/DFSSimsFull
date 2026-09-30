@@ -221,9 +221,10 @@ def _project_neutral_rate(hit_df: pd.DataFrame, target_year: int,
     prior = hit_df[(hit_df["Season"] < target_year) &
                    (hit_df["Season"] >= target_year - max_history_years) &
                    (hit_df["PA"] >= 25)].copy()
+    empty = pd.DataFrame(columns=["PlayerId", f"Pred_{rate_col}_neutral",
+                                  f"n_eff_{rate_col}"])
     if prior.empty:
-        return pd.DataFrame(columns=["PlayerId", f"Pred_{rate_col}_neutral",
-                                     f"n_eff_{rate_col}"])
+        return empty, np.nan
 
     prior["_factor"] = prior.apply(
         lambda r: _get_team_factor(r["Season"], r.get("TeamId"), factor_lookup),
@@ -231,11 +232,39 @@ def _project_neutral_rate(hit_df: pd.DataFrame, target_year: int,
     )
     prior[f"_neutral"] = prior[rate_col] / prior["_factor"]
 
-    league_rate = (float(prior[count_col].sum())
-                   / max(float(prior["PA"].sum()), 1.0))
+    # Rows where the COUNT is unknown are not evidence. MLE-translated rows
+    # carry no R/RBI (those depend on the lineup around a player, not on his
+    # own rates), and counting them as observations was wrong twice over:
+    #   - sum(count)/sum(PA) put their PA in the denominator with nothing in
+    #     the numerator, deflating league_rate for everybody;
+    #   - their _neutral read as a real 0.000 rate, so a translated player with
+    #     a 500-PA AAA season projected at ~42% of league average, and the MORE
+    #     minor-league data he had, the harder his own zero outweighed the prior.
+    # Splitting evidence from mere presence fixes both. Real history rows are
+    # unaffected: they all carry a count.
+    known = prior[prior[count_col].notna() & prior["_neutral"].notna()]
+    if known.empty:
+        # No anchor to shrink toward. Returning early beats handing every
+        # player a league_rate of 0.0, which is what sum()/max(sum(),1) would
+        # produce here and which would look like a finished projection.
+        print(f"  WARNING: no usable {count_col} history in the prior pool; "
+              f"{rate_col} cannot be projected")
+        return empty, np.nan
+    league_rate = (float(known[count_col].sum())
+                   / max(float(known["PA"].sum()), 1.0))
 
     rows = []
-    for pid, g in prior.groupby("PlayerId"):
+    # Players present but with no usable rate get the league prior, not a
+    # fabricated zero and not a missing row — coverage for the whole
+    # organization is the point, and league average is the honest estimate for
+    # a player we have no run data for.
+    for pid in sorted(set(prior["PlayerId"]) - set(known["PlayerId"])):
+        rows.append({
+            "PlayerId": int(pid),
+            f"Pred_{rate_col}_neutral": float(league_rate),
+            f"n_eff_{rate_col}": 0.0,
+        })
+    for pid, g in known.groupby("PlayerId"):
         g = g.sort_values("Season").copy()
         g["yb"] = target_year - g["Season"].astype(int)
         w = g["PA"].astype(float).values * (decay ** g["yb"].values)
@@ -249,7 +278,7 @@ def _project_neutral_rate(hit_df: pd.DataFrame, target_year: int,
             f"Pred_{rate_col}_neutral": float(pred),
             f"n_eff_{rate_col}": n_eff,
         })
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), league_rate
 
 
 def project_runs_and_rbi(hit_df: pd.DataFrame, team_rpg: pd.DataFrame,
@@ -288,11 +317,11 @@ def project_runs_and_rbi(hit_df: pd.DataFrame, team_rpg: pd.DataFrame,
     df["R_per_PA"] = df["R"] / df["PA"].replace(0, np.nan)
     df["RBI_per_PA"] = df["RBI"] / df["PA"].replace(0, np.nan)
 
-    r_proj = _project_neutral_rate(
+    r_proj, r_league = _project_neutral_rate(
         df, target_year, "R_per_PA", "R", factor_lookup,
         k_pa=k_pa, decay=decay, max_history_years=max_history_years,
     )
-    rbi_proj = _project_neutral_rate(
+    rbi_proj, rbi_league = _project_neutral_rate(
         df, target_year, "RBI_per_PA", "RBI", factor_lookup,
         k_pa=k_pa, decay=decay, max_history_years=max_history_years,
     )
@@ -328,9 +357,16 @@ def project_runs_and_rbi(hit_df: pd.DataFrame, team_rpg: pd.DataFrame,
 
     out["Pred_target_team_id"]     = target_teams
     out["Pred_target_team_factor"] = factors
-    out["Pred_R_per_PA"]   = (out["Pred_R_per_PA_neutral"].fillna(0)
+    # Fill a missing neutral rate with the LEAGUE rate, not 0.0. A player
+    # outside the PA >= 25 prior pool (most of the organizational depth: 1,860
+    # of 2,894 hitters on the last refresh) has no projection of his own, and
+    # .fillna(0) shipped him a confident Pred_R_per_PA of 0.000 — which reads
+    # as "will score no runs" and becomes exactly that the moment playing time
+    # is assigned. League average is the honest baseline for a player we know
+    # nothing about, and giving everyone a usable baseline is the point.
+    out["Pred_R_per_PA"]   = (out["Pred_R_per_PA_neutral"].fillna(r_league)
                               * pd.Series(factors).values)
-    out["Pred_RBI_per_PA"] = (out["Pred_RBI_per_PA_neutral"].fillna(0)
+    out["Pred_RBI_per_PA"] = (out["Pred_RBI_per_PA_neutral"].fillna(rbi_league)
                               * pd.Series(factors).values)
     out["Pred_lineup_slot"] = slots
 
