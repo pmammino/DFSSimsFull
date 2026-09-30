@@ -528,3 +528,31 @@ def test_left_and_right_handers_differ_in_a_platoon_role():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_save_and_hold_shares_are_normalised_per_team():
+    """Role weights are not an allocation.
+
+    Summed over a real staff the raw weights come to 1.16 (saves) and 1.85
+    (holds), so multiplying them into a team pool over-allocates — league
+    saves read 1,412 against a pool of 1,215 and holds 4,270 against 2,308.
+    """
+    out, _, _ = _run(_pitchers(), "pitcher")
+    for col in ("Proj_SV_share", "Proj_HLD_share"):
+        per = out.groupby("Pred_target_team_id")[col].sum()
+        assert np.allclose(per.to_numpy(), 1.0), (col, per.to_dict())
+
+
+def test_the_raw_role_weight_is_kept_alongside():
+    out, _, _ = _run(_pitchers(), "pitcher")
+    assert (out[out.pt_role == "Closer"]["pt_save_share"] > 0.5).all()
+
+
+def test_floor_tier_arms_do_not_compete_for_the_pool():
+    df = _pitchers()
+    df.loc[df.index[:5], "pt_tier"] = TIER_FLOOR
+    out, _, _ = _run(df, "pitcher")
+    floored = out[out.pt_tier == TIER_FLOOR]
+    assert (floored["Proj_SV_share"] == 0.0).all()
+    per = out.groupby("Pred_target_team_id")["Proj_SV_share"].sum()
+    assert np.allclose(per.to_numpy(), 1.0)

@@ -520,6 +520,24 @@ def allocate_playing_time(players: pd.DataFrame, kind: str, *,
             out.loc[off, "pt_raw"], errors="coerce").fillna(floor_v).clip(
                 upper=ceiling)
 
+    # Save and hold shares are per-ROLE WEIGHTS, not an allocation: a closer's
+    # 0.65 says "a closer takes about 65% of a save pool", which is a fact
+    # about the role and not about how many pitchers a club happens to carry.
+    # Summed over a real staff they come to 1.16 (saves) and 1.85 (holds), so
+    # a consumer who multiplies them straight into a team pool over-allocates
+    # — league saves read 1,412 against a pool of 1,215, and holds 4,270
+    # against 2,308. Normalising per team turns the weights into shares that
+    # sum to 1, which is what a pool needs. The raw role weight is kept beside
+    # them because it is still the role's own attribute.
+    if not is_pa:
+        for src, dest in (("pt_save_share", "Proj_SV_share"),
+                          ("pt_hold_share", "Proj_HLD_share")):
+            w = pd.to_numeric(out[src], errors="coerce").fillna(0.0)
+            # Only players who will pitch compete for the pool.
+            w = w.where(~at_floor, 0.0)
+            tot = w.groupby(teams).transform("sum")
+            out[dest] = np.where(tot > 0, w / tot, 0.0)
+
     # Games / starts follow the same scaling as volume, so a player scaled up
     # 30% is credited with proportionally more appearances rather than pitching
     # 250 innings across 32 starts.
