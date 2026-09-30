@@ -200,12 +200,53 @@ def test_target_year_history_is_excluded():
     assert out.loc[1, "team_id"] == NYY
 
 
-def test_player_with_no_qualifying_season_is_unknown():
+def test_a_thin_season_still_yields_its_team_marked_low_volume():
+    """Below min_volume is weak evidence, not absent evidence.
+
+    This asserted `unknown` until a refresh shipped 67% of hitters with no
+    team id. `min_volume` is a TIE-BREAK guard — it stops a 3-PA cup of coffee
+    outranking the club a player spent the season with — and when no season
+    clears it there is no tie to break, so refusing to assign discards a team
+    we actually know. A player whose only MLB evidence is 5 PA with the
+    Yankees was, in fact, a Yankee. `low_volume` carries the caveat that
+    refusing used to express.
+    """
     out = assign_target_teams(
         _history([(1, 2026, NYY, 5)]), 2027, min_volume=25,
     ).set_index("PlayerId")
+    assert out.loc[1, "team_id"] == NYY
+    assert out.loc[1, "assign_source"] == "low_volume"
+
+
+def test_only_a_missing_team_id_is_unknown():
+    """The one case with genuinely nothing to go on."""
+    hist = _history([(1, 2026, NYY, 500)])
+    hist["TeamId"] = np.nan
+    out = assign_target_teams(hist, 2027).set_index("PlayerId")
     assert pd.isna(out.loc[1, "team_id"])
     assert out.loc[1, "assign_source"] == "unknown"
+
+
+def test_min_volume_still_decides_the_tie_break():
+    """The guarantee that matters: a cup of coffee must not win.
+
+    Player 1 has a full season with NYY and 3 PA with LAD in the same year.
+    The low-volume fallback must not promote LAD — it only fires when NOTHING
+    clears the bar.
+    """
+    hist = _history([(1, 2026, NYY, 500), (1, 2026, LAD, 3)])
+    out = assign_target_teams(hist, 2027, min_volume=25).set_index("PlayerId")
+    assert out.loc[1, "team_id"] == NYY
+    assert out.loc[1, "assign_source"] == "history"
+
+
+def test_a_qualifying_season_beats_a_more_recent_thin_one():
+    """Recency must not let the fallback override real evidence."""
+    hist = _history([(1, 2025, NYY, 600), (1, 2026, LAD, 4)])
+    out = assign_target_teams(hist, 2027, min_volume=25).set_index("PlayerId")
+    assert out.loc[1, "team_id"] == NYY, (
+        "a 4-PA 2026 line must not outrank a 600-PA 2025 season")
+    assert out.loc[1, "assign_source"] == "history"
 
 
 def test_override_beats_history_including_a_null():

@@ -799,10 +799,25 @@ def step9_project_runs_rbi(h_final: pd.DataFrame, hit_df: pd.DataFrame,
     # here too or it is silently dropped — which is what happened to
     # Pred_target_team_abbr and team_assign_source: pitchers carried them and
     # hitters did not, for no reason anyone would guess from the output.
+    # Team IDENTITY comes from hit_assign, not from `proj`. `proj` only holds
+    # players in the R/RBI prior pool (PA >= 25 within the lookback), so
+    # carrying the team columns on it gated WHO HAS A TEAM on whether we could
+    # project their runs — two unrelated questions. The last refresh shipped
+    # 1,950 of 2,894 hitters (67%) with no Pred_target_team_id for exactly
+    # that reason, and so with no park factor and no team context, even though
+    # every one of them had a resolved organization sitting in `Team`.
+    # hit_assign covers every player in the history frame, so merge it
+    # separately and leave `proj` to supply rates only.
+    ident = hit_assign[["PlayerId", "team_id", "team_abbr", "assign_source"]]
+    h_final = h_final.merge(
+        ident.rename(columns={"team_id": "Pred_target_team_id",
+                              "team_abbr": "Pred_target_team_abbr",
+                              "assign_source": "team_assign_source"}),
+        on="PlayerId", how="left",
+    )
     merge_cols = ["PlayerId", "Pred_R_per_PA_neutral", "Pred_RBI_per_PA_neutral",
                   "Pred_R_per_PA", "Pred_RBI_per_PA",
-                  "Pred_target_team_factor", "Pred_target_team_id",
-                  "Pred_target_team_abbr", "team_assign_source",
+                  "Pred_target_team_factor",
                   "Pred_lineup_slot",
                   "n_eff_R_per_PA", "n_eff_RBI_per_PA",
                   "SD_R_per_PA", "SD_RBI_per_PA"]
@@ -816,6 +831,9 @@ def step9_project_runs_rbi(h_final: pd.DataFrame, hit_df: pd.DataFrame,
         }),
         on="PlayerId", how="left",
     )
+    assigned = h_final["Pred_target_team_id"].notna().sum()
+    print(f"  Team identity: {assigned}/{len(h_final)} hitters assigned "
+          f"({h_final['team_assign_source'].value_counts().to_dict()})")
     return h_final
 
 
@@ -1220,7 +1238,16 @@ def main():
         sorted(set(hit_df["Season"].astype(int))),
         force=args.force,
     )
-    h_final = step9_project_runs_rbi(h_final, hit_df, team_rpg, target)
+    # hit_comb, not hit_df. The real-only frames exist so synthetic rows can't
+    # contaminate model CALIBRATION and league means — but team assignment is
+    # roster membership, not calibration, and attaching a prospect to his
+    # parent org is the entire point of the MLE rows. Passing the real-only
+    # frame here silently excluded all 1,875 translated hitters from
+    # assignment, which is why resolving their organizations changed nothing.
+    # (step11 already uses pit_comb; steps 9 and 10 disagreed with it.)
+    # Safe for the R/RBI model too: MLE rows carry R/RBI as NaN, so they are
+    # excluded from league_rate and simply receive it as their baseline.
+    h_final = step9_project_runs_rbi(h_final, hit_comb, team_rpg, target)
     # Fill R/RBI for MLE rookies (absent from the real R/RBI history) with the
     # league-average projected rate so downstream consumers never see NaN.
     for _col in ("P_R", "P_RBI", "Pred_R_per_PA_neutral", "Pred_RBI_per_PA_neutral"):
@@ -1229,8 +1256,11 @@ def main():
 
     # Step 10 — Park factor adjustment (both hitters and pitchers).
     # Produces _park columns alongside neutral projections.
+    # Combined frames here too: this step assigns the pitcher target team (and
+    # hence the home park) from history, so excluding the MLE rows left 2,560
+    # translated pitchers with no team and no park.
     h_final, p_final = step10_apply_park_factors(
-        h_final, p_final, hit_df, pit_df, target, force=args.force,
+        h_final, p_final, hit_comb, pit_comb, target, force=args.force,
     )
 
     # Step 11 — Pitcher summary outputs (RA9, TBF/IP, WP/PA, HBP%).
