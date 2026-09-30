@@ -174,6 +174,32 @@ def resolve_teams(
     return out
 
 
+# League RBI per run — the reconciliation target for RBI/PA against team R/PA.
+#
+# This read "~0.88 (~12% of runs are not driven in)" through the first season
+# layer ever to run on real data, and it is wrong. Runs that score with NO RBI
+# credited are only the ones nobody hit in: errors, wild pitches, passed balls,
+# balks, steals of home, and some fielder's-choice plays. Everything else —
+# including the batter who homers and drives in himself, a sacrifice fly, and a
+# bases-loaded walk — carries an RBI. That is roughly 5% of runs, not 12%.
+#
+# Measured on the first clean refresh (run 36762891387), across every pool and
+# both weightings:
+#
+#     all hitters      unweighted 0.9540   PA-weighted 0.9613
+#     projected tier   unweighted 0.9492   PA-weighted 0.9607
+#
+# Those projections shrink toward league rates that are literally sum(RBI)/
+# sum(PA) over the fetched MLB history, so their ratio IS the real league
+# RBI/R. Against 0.88 the report showed a +11% discrepancy and blamed the
+# missing playing-time model; the real gap is +2.5%.
+#
+# A wrong number in a reconciliation report is worse than no number: it is read
+# precisely when someone is deciding whether the model is healthy, and this one
+# sent the first reader chasing a defect that was not there. Re-derive it the
+# same way (ratio of the league R and RBI rates) if the run environment moves.
+LEAGUE_RBI_PER_RUN = 0.95
+
 # ─────────────────────────────────────────────────────────────────────────────
 # The season layer
 # ─────────────────────────────────────────────────────────────────────────────
@@ -259,8 +285,13 @@ def reconciliation_report(hitters: pd.DataFrame, pitchers: pd.DataFrame,
         lines.append(f"  mean R/PA   / team R/PA    {np.mean(r_ratios):.3f}"
                      f"   (target ~1.00 — every run is scored by one batter)")
     if rbi_ratios:
-        lines.append(f"  mean RBI/PA / team R/PA    {np.mean(rbi_ratios):.3f}"
-                     f"   (target ~0.88 — ~12% of runs are not driven in)")
+        got = float(np.mean(rbi_ratios))
+        off = (got - LEAGUE_RBI_PER_RUN) / LEAGUE_RBI_PER_RUN
+        lines.append(f"  mean RBI/PA / team R/PA    {got:.3f}"
+                     f"   (target ~{LEAGUE_RBI_PER_RUN:.2f} — only errors, "
+                     f"wild pitches, passed balls, balks and steals of home "
+                     f"score with no RBI)")
+        lines.append(f"                             {off:+.1%} vs target")
     lines.append("  ^ needs the playing-time model to close; R and RBI are")
     lines.append("    still free-standing player rates, not an allocation of")
     lines.append("    the runs the lineup actually scores.")
@@ -278,9 +309,11 @@ def reconciliation_report(hitters: pd.DataFrame, pitchers: pd.DataFrame,
         lines.append("  ^ the rest are organizational depth at the 1 PA / 1 IP")
         lines.append("    floor: present and joinable, but excluded from team")
         lines.append("    playing time so they cannot move an aggregate.")
-    lines.append("  ^ still unconstrained: no position data from statsapi, so no")
-    lines.append("    depth chart or batting order can be built yet — though the")
-    lines.append("    minors feed DOES carry `position`, which is a way in.")
+    lines.append("  ^ still unconstrained by position, but the DATA now exists:")
+    lines.append("    the fielding fetch returns one row per (player, position)")
+    lines.append("    with innings — 13,700 rows over 9 positions on the first")
+    lines.append("    clean run — and the minors feed carries `position` too. A")
+    lines.append("    depth chart is now a modelling step, not a data gap.")
 
     if "pt_tier" in hitters.columns:
         lines.append("")
