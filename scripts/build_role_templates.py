@@ -57,99 +57,16 @@ BOX = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Role definitions
-# ─────────────────────────────────────────────────────────────────────────────
-# PA / IP anchors are per 162 team games, at full availability, with the role
-# held all season. They are STARTING POINTS to be fitted from history, not
-# measurements — `fit_role_anchors` in the plan is what should replace them.
-#
-# vL Share is the fraction of plate appearances against left-handed pitching,
-# and it is given separately for left- and right-handed batters because the
-# same role implies very different exposure depending on which side of a
-# platoon the player is on. This is the column that fixes a real bug: the
-# pipeline currently derives vL_share from a player's PAST usage
-# (splits_model.py:153), so a hitter moving into a platoon job keeps a stale
-# league-average share.
-
-HITTER_ROLES: list[dict] = [
-    dict(role="Full Time", pa=630, vl_lhb=0.26, vl_rhb=0.29,
-         note="Everyday regular, ~150 games. Sees the league handedness mix."),
-    dict(role="Everyday DH / 1B-DH", pa=600, vl_lhb=0.26, vl_rhb=0.29,
-         note="Rarely rested, no defensive injury exposure."),
-    dict(role="Strong Side Platoon", pa=480, vl_lhb=0.12, vl_rhb=0.45,
-         note="The high-volume half of a platoon — usually a LHB who sits "
-              "against LHP. Plays the majority of games."),
-    dict(role="Weak Side Platoon", pa=230, vl_lhb=0.08, vl_rhb=0.68,
-         note="The low-volume half — usually a RHB who plays mostly against "
-              "LHP. Only ~28% of league PA are vs LHP, which caps his volume."),
-    dict(role="Catcher - Primary", pa=500, vl_lhb=0.26, vl_rhb=0.29,
-         note="CATCHERS HAVE THEIR OWN LADDER. A full-time catcher is ~500 PA, "
-              "not 630 — applying the Full Time anchor over-projects every "
-              "catcher in baseball by ~120 PA."),
-    dict(role="Catcher - Tandem", pa=340, vl_lhb=0.22, vl_rhb=0.38,
-         note="Roughly even split with a partner; often matchup-managed."),
-    dict(role="Catcher - Backup", pa=180, vl_lhb=0.24, vl_rhb=0.33,
-         note="Clear #2, starts ~45-55 games."),
-    dict(role="Utility IF", pa=290, vl_lhb=0.26, vl_rhb=0.31,
-         note="Covers multiple infield spots; volume depends on incumbents' "
-              "health."),
-    dict(role="Utility OF / 4th OF", pa=300, vl_lhb=0.24, vl_rhb=0.33,
-         note="Distinct from Utility IF — different volume and platoon usage."),
-    dict(role="Bench Bat", pa=150, vl_lhb=0.22, vl_rhb=0.36,
-         note="Pinch-hits and spot starts."),
-    dict(role="Injury Replacement / 26th Man", pa=90, vl_lhb=0.26, vl_rhb=0.29,
-         note="Plays only when someone ahead of him is hurt. His volume is "
-              "conditional on OTHER players' injuries — a team-level coupling "
-              "that ultimately needs simulating, not a point estimate."),
-    dict(role="Depth (no MLB PA)", pa=1, vl_lhb=0.26, vl_rhb=0.29,
-         note="Organizational depth. Hits the 1 PA floor (PT_FLOOR_PA) so he "
-              "stays present and joinable without moving any aggregate."),
-]
-
-PITCHER_ROLES: list[dict] = [
-    dict(role="Ace (SP1)", ip=195, gs=32, g=32, sv=0.00, hld=0.00,
-         note="Front-line starter, ~6.1 IP per start."),
-    dict(role="Mid-Rotation Starter (SP2-3)", ip=170, gs=30, g=30,
-         sv=0.00, hld=0.00, note="~5.2 IP per start."),
-    dict(role="End-of-Rotation Starter (SP4-5)", ip=130, gs=25, g=26,
-         sv=0.00, hld=0.01,
-         note="Shorter leash; occasional bullpen appearance."),
-    dict(role="Innings-Limited Starter", ip=110, gs=22, g=22,
-         sv=0.00, hld=0.00,
-         note="Young arm on a workload cap, or a post-surgery ramp. Common "
-              "now and materially different from End-of-Rotation."),
-    dict(role="Swing Arm / Long Relief", ip=95, gs=8, g=30,
-         sv=0.01, hld=0.04, note="Moves between rotation and bullpen."),
-    dict(role="Opener", ip=55, gs=18, g=45, sv=0.00, hld=0.03,
-         note="Already modelled on the daily side (OPENER_BF_MEAN = 4.6 in "
-              "slate_config), so it belongs here for consistency. Takes the "
-              "start but faces ~4-5 batters."),
-    dict(role="Closer", ip=62, gs=0, g=60, sv=0.65, hld=0.05,
-         note="Takes the large majority of the team's save pool. Note IP is "
-              "NEARLY FLAT across bullpen roles — what differs is save and "
-              "hold context, which is why these roles are worth separating."),
-    dict(role="Late Inning RP (Setup)", ip=65, gs=0, g=65, sv=0.12, hld=0.28,
-         note="Primary hold earner; fills in for the closer."),
-    dict(role="Middle Relief", ip=60, gs=0, g=58, sv=0.04, hld=0.14,
-         note="Bridge innings, lower leverage."),
-    dict(role="Bullpen Depth Arm", ip=40, gs=0, g=35, sv=0.01, hld=0.05,
-         note="Up and down from AAA; mop-up and spot duty."),
-    dict(role="Rehab / Injury Return", ip=60, gs=10, g=14, sv=0.02, hld=0.03,
-         note="Expected back mid-season. Pair with a Role Start of Mid or "
-              "Late rather than discounting the anchor twice."),
-    dict(role="Depth (no MLB IP)", ip=1, gs=0, g=1, sv=0.00, hld=0.00,
-         note="Organizational depth. Hits the 1 IP floor (PT_FLOOR_IP)."),
-]
-
-# Role Start -> share of the season the role is held. This replaces the
-# Early/Mid/Late "callup" roles with a strictly more expressive parameter, and
-# unifies callup timing with return-from-injury timing — they are the same
-# quantity.
-TIMING = [
-    ("Opening Day", 1.00, "On the roster from day one."),
-    ("Early Season (~May)", 0.80, "Called up or activated in April/May."),
-    ("Mid Season (~July)", 0.50, "Mid-season callup, or back from a long IL stay."),
-    ("Late Season (~Sept)", 0.20, "September callup / late activation."),
-]
+# The role vocabulary, its anchors, the timing table, the default-role
+# heuristics and the full-time reference all live in role_taxonomy.py. They
+# used to live HERE, which meant playing_time_model.py would have needed its
+# own copy — and two copies of a table nobody diffs drift, with a renamed role
+# failing as a silent lookup miss rather than an error.
+from role_taxonomy import (  # noqa: E402
+    HITTER_ROLES, PITCHER_ROLES, TIMING, full_time_reference,
+    suggest_hitter_role as _suggest_hitter_role,
+    suggest_pitcher_role as _suggest_pitcher_role,
+)
 
 
 def _style_header(ws, row, ncols):
@@ -305,77 +222,6 @@ def _roles_sheet(wb, role_defs, kind):
             "held all season. Multiply by Role Share and Availability.").font = \
         Font(name=FONT, size=10, italic=True)
     return ws, base
-
-
-def _full_time_reference(df: pd.DataFrame, col: str = "Last_PA") -> float:
-    """PA/TBF a full-time player carries IN THIS FILE.
-
-    Cannot be a fixed 650: `Last_PA` is whatever fraction of a season the
-    source data covers, and the committed artifacts were built from a PARTIAL
-    2026 season (median 142, max 503). Comparing against absolute thresholds
-    would label every regular in baseball a bench player — Ohtani's 289
-    partial-season PA came out as "Utility IF" before this.
-
-    The 95th percentile is the reference rather than the max, so one outlier
-    cannot compress everyone else.
-    """
-    if col not in df.columns:
-        return 650.0
-    v = pd.to_numeric(df[col], errors="coerce").dropna()
-    p95 = float(v.quantile(0.95)) if len(v) else 0.0
-    return p95 if p95 > 0 else 650.0
-
-
-def _suggest_hitter_role(row, reference: float):
-    """A rough starting point, NOT a projection.
-
-    Scaled to a full-season equivalent so it survives a partial-season source
-    file. It knows nothing about position, so it never suggests a catcher role
-    — fill those in by hand, and remember a full-time catcher is ~500 PA.
-    """
-    if row.get("pt_tier") == "floor":
-        return "Depth (no MLB PA)"
-    pa = row.get("evidence_volume")
-    if pa is None or pd.isna(pa):
-        pa = row.get("Last_PA", 0) or 0
-    share = float(pa) / max(reference, 1.0)      # 1.0 = a full-time workload
-    if share >= 0.80:
-        return "Full Time"
-    if share >= 0.55:
-        return "Strong Side Platoon"
-    if share >= 0.35:
-        return "Utility OF / 4th OF"
-    if share >= 0.18:
-        return "Bench Bat"
-    return "Depth (no MLB PA)"
-
-
-def _suggest_pitcher_role(row, reference: float, staff_rank=None):
-    """Starters split by IP per game (rate-based, so partial seasons are fine).
-
-    Relievers split by their RA9 rank within their own staff, because a bullpen
-    role is inherently a within-team standing — the best arm on the staff is
-    the likeliest closer. This is a starting point: a real depth chart knows
-    things RA9 does not (contract, handedness, the manager's preferences).
-    """
-    if row.get("pt_tier") == "floor":
-        return "Depth (no MLB IP)"
-    if str(row.get("role", "")).lower() == "starter":
-        ip_g = row.get("weighted_IP_per_G", 0) or 0
-        if ip_g >= 5.8:
-            return "Ace (SP1)"
-        if ip_g >= 5.0:
-            return "Mid-Rotation Starter (SP2-3)"
-        if ip_g >= 3.5:
-            return "End-of-Rotation Starter (SP4-5)"
-        return "Swing Arm / Long Relief"
-    if staff_rank == 1:
-        return "Closer"
-    if staff_rank in (2, 3):
-        return "Late Inning RP (Setup)"
-    if staff_rank is not None and staff_rank <= 6:
-        return "Middle Relief"
-    return "Bullpen Depth Arm"
 
 
 def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
@@ -593,7 +439,7 @@ def _load(target_year: int, out_dir: Path, kind: str) -> list[dict]:
     df = pd.read_csv(path)
     team_col = next((c for c in ("Pred_target_team_id", "Pred_home_team_id",
                                  "home_park_team_id") if c in df.columns), None)
-    reference = _full_time_reference(df)
+    reference = full_time_reference(df)
     # Bullpen roles are a within-team standing, so rank relievers by RA9 on
     # their own staff rather than league-wide.
     staff_rank = {}

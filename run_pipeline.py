@@ -1306,6 +1306,9 @@ def main():
     print("\n" + "═" * 70)
     print("STEP 12b: Fielding history (positions + defensive counting stats)")
     print("═" * 70)
+    # Initialised here, not inside the try: step 13b reads it for primary
+    # position, and a failed fetch would otherwise leave the name undefined.
+    fld = None
     try:
         from data_acquisition import fetch_fielding_data
 
@@ -1344,6 +1347,37 @@ def main():
     p_final = apply_playing_time(p_final, p_tiers, role="pitcher")
     print(" hitters:"); print(tier_report(h_final, role="hitter"))
     print(" pitchers:"); print(tier_report(p_final, role="pitcher"))
+
+    # ── Step 13b — the baseline playing-time model ──────────────────────────
+    # Replaces the `unmodeled` placeholder with a real allocation. Everything
+    # it decides is a DEFAULT: roles, start dates and availability are all
+    # overridable per player from rosters/player_roles_{hitters,pitchers}_*.csv.
+    print("\n" + "═" * 70)
+    print("STEP 13b: Baseline playing-time model (roles → PA / IP)")
+    print("═" * 70)
+    from playing_time_model import playing_time_report, project_playing_time
+    from team_context import TEAM_OVERRIDE_PATH, load_roster_reserves
+
+    reserves = load_roster_reserves(TEAM_OVERRIDE_PATH(target))
+    # Position comes from the fielding history, which is what finally lets a
+    # catcher be given a catcher's workload instead of a 630-PA regular's.
+    for _kind in ("hitter", "pitcher"):
+        _df = h_final if _kind == "hitter" else p_final
+        try:
+            _out, _diag, _stats = project_playing_time(
+                _df, _kind, target_year=target, fielding=fld,
+                reserves=reserves,
+            )
+            print(playing_time_report(_out, _diag, _stats, _kind))
+            if _kind == "hitter":
+                h_final = _out
+            else:
+                p_final = _out
+        except Exception as e:
+            # A failure here must not cost the whole rebuild: the tier columns
+            # are already set, so the output stays valid with Proj_* unmodeled.
+            print(f"  playing-time model FAILED for {_kind}s "
+                  f"({type(e).__name__}: {e}) — leaving tiers unmodeled")
 
     # Names
     chadwick = fetch_chadwick_lookup(force=args.force)

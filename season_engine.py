@@ -326,8 +326,21 @@ def reconciliation_report(hitters: pd.DataFrame, pitchers: pd.DataFrame,
         vol = "Proj_PA"
         if vol in hitters.columns:
             unmodeled = int(hitters[vol].isna().sum())
-            lines.append(f"  {unmodeled} hitters await a playing-time model"
-                         f" (Proj_PA is NaN, not a guess)")
+            if unmodeled:
+                lines.append(f"  {unmodeled} hitters have no Proj_PA — the "
+                             f"playing-time model did not run for them")
+            else:
+                v = pd.to_numeric(hitters[vol], errors="coerce")
+                lines.append(f"  Proj_PA: all {len(hitters)} assigned "
+                             f"(max {v.max():,.0f}, median {v.median():,.0f})")
+                if "team_id" in hitters.columns:
+                    per = v.groupby(hitters["team_id"]).sum()
+                    per = per[per.index.notna()]
+                    if len(per):
+                        lines.append(
+                            f"  team PA closure: min {per.min():,.0f} "
+                            f"max {per.max():,.0f} "
+                            f"(budget {162 * PA_PER_TEAM_GAME:,.0f})")
     return "\n".join(lines)
 
 
