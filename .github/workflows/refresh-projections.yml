@@ -218,6 +218,15 @@ jobs:
           # the partial one the committed artifacts used.
           python scripts/build_role_templates.py --target-year "$TARGET_YEAR"
 
+      - name: Export the projections spreadsheet
+        run: |
+          # Turns the per-PA rates and projected playing time into the season
+          # counting stats — the form anyone actually reads. Runs after the
+          # season layer so the team save/hold pools exist; without them the
+          # SV and HLD columns come out blank.
+          python scripts/export_projections.py \
+            --target-year "$TARGET_YEAR" --run "${{ github.run_id }}"
+
       - name: Upload the rebuilt files
         if: always()
         uses: actions/upload-artifact@v4
@@ -227,6 +236,7 @@ jobs:
           retention-days: 30
           path: |
             out/*.csv
+            out/*.xlsx
             out/season_*/
             rosters/player_roles_*.xlsx
             bip_inputs/*.csv
@@ -254,7 +264,10 @@ jobs:
           # intermediates in out/debug/ and a blanket add swept them into the
           # repo on the first run. They are gitignored now, but naming what we
           # want is the durable fix.
-          git add out/*.csv rosters/player_roles_*.xlsx bip_inputs/*.csv
+          # out/*.xlsx is the exported projections spreadsheet. Explicit, like
+          # everything else here — a blanket `-A out` swept debug parquet into
+          # the repo the first time this ran.
+          git add out/*.csv out/*.xlsx rosters/player_roles_*.xlsx bip_inputs/*.csv
           if git diff --cached --quiet; then
             echo "::notice title=No changes::the rebuild produced identical files"
             exit 0

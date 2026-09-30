@@ -64,12 +64,15 @@ from pipeline_config import PT_FLOOR_IP, PT_FLOOR_PA
 from playing_time import SOURCE_FLOOR, SOURCE_MODEL, TIER_FLOOR, TIER_PROJECTED
 from role_taxonomy import (
     DEFAULT_AVAILABILITY,
+    FAMILY_CORE_SLOTS,
     DEFAULT_TIMING,
     DEPTH_HITTER_ROLE,
     DEPTH_PITCHER_ROLE,
     is_depth_role,
     full_time_reference,
     primary_positions,
+    role_depth_order,
+    role_family,
     role_anchor,
     role_names,
     suggest_hitter_role,
@@ -216,6 +219,23 @@ def _staff_ranks(players: pd.DataFrame, *, team_col: str) -> pd.Series:
     eligible = relievers & ra9.notna() & players[team_col].notna()
     if "pt_tier" in players.columns:
         eligible &= players["pt_tier"].astype(str) == TIER_PROJECTED
+
+    # A leverage job also needs enough evidence for RA9 to MEAN anything.
+    # Without this bar the closer's job went to whoever got lucky in a tiny
+    # sample: Oakland's was Michel Otañez on 28 batters faced — about seven
+    # innings — where RA9 is noise. Three clubs had a closer under 100 TBF.
+    # Below the bar a pitcher still gets a bullpen role, just not the ninth
+    # inning, which is the honest distinction: we do not know he is good, we
+    # only failed to see him be bad.
+    if "evidence_volume" in players.columns:
+        ev = pd.to_numeric(players["evidence_volume"], errors="coerce")
+        seasoned = eligible & (ev >= BULLPEN_ROLE_MIN_TBF)
+        # Unless nobody on the staff clears it — then rank whoever is there,
+        # because every club does have a closer and leaving one team without
+        # any leverage arm is a worse answer than an uncertain one.
+        by_team = seasoned.groupby(players[team_col]).transform("any")
+        eligible = np.where(by_team.fillna(False), seasoned, eligible)
+        eligible = pd.Series(eligible, index=players.index)
     rank[eligible] = (ra9[eligible]
                       .groupby(players.loc[eligible, team_col])
                       .rank(method="first", ascending=True))
@@ -324,9 +344,19 @@ def _evidence_factor(players: pd.DataFrame, kind: str) -> pd.Series:
 # roster depth. Each rank past the core keeps `ROSTER_DEPTH_DECAY` of the
 # previous one's volume, which is what "he is up and down from Triple-A" means
 # expressed as playing time. Overridable per player like every other default.
-ROSTER_DEPTH_CORE = {"hitter": 13, "pitcher": 13}
+# Superseded by FAMILY_CORE_SLOTS in role_taxonomy: a flat 13 per club ranked
+# starters against relievers and lineup regulars against bench bats, which is
+# the wrong competition. Kept only so an external caller referencing it does
+# not break; nothing here reads it.
+ROSTER_DEPTH_CORE = {"hitter": 13, "pitcher": 13}   # deprecated
 ROSTER_DEPTH_DECAY = 0.78
 ROSTER_DEPTH_FLOOR = 0.04
+
+# Minimum evidence (batters faced) before a reliever is considered for a
+# LEVERAGE role — closer or setup. ~100 TBF is about 25 innings; under that,
+# a staff-best RA9 is a small-sample accident rather than a reason to hand
+# someone the ninth. Below the bar a pitcher still gets a bullpen role.
+BULLPEN_ROLE_MIN_TBF = 100.0
 
 
 def apply_roster_depth(players: pd.DataFrame, kind: str, *,
@@ -340,21 +370,38 @@ def apply_roster_depth(players: pd.DataFrame, kind: str, *,
     out = players.copy()
     out["pt_depth_rank"] = np.nan
     out["pt_depth_factor"] = 1.0
+    out["pt_family"] = out["pt_role"].astype(str).map(role_family)
     if team_col not in out.columns:
         return out
-    core = ROSTER_DEPTH_CORE.get(kind, 13)
     tier = out.get("pt_tier", pd.Series(TIER_PROJECTED, index=out.index))
     eligible = (tier.astype(str) == TIER_PROJECTED) & out[team_col].notna()
     if not eligible.any():
         return out
-    rank = (out.loc[eligible, "pt_raw"]
-            .groupby(out.loc[eligible, team_col])
-            .rank(ascending=False, method="first"))
+
+    # Rank within (club, FAMILY), not across the whole staff. Ranking by raw
+    # innings put 14 of 30 closers outside the core and left one projecting
+    # 1.4 innings with 22 saves: a closer's 62-inning anchor loses to any
+    # marginal starter's 130, however certain his job is. Starters compete
+    # with starters for the rotation's slots and relievers with relievers for
+    # the bullpen's, which is how a staff is actually built.
+    # Within a family, rank on the ROLE's seniority first and raw volume only
+    # as the tie-break. Ranking on volume alone put a closer 13th among his own
+    # bullpen — his 62-inning anchor loses to any setup man with a better
+    # evidence factor — and left him nine innings while still holding the
+    # ninth. Sorting on (order, -raw) and numbering the result gives the same
+    # thing a rank over a composite key would, without inventing a scale that
+    # mixes the two.
+    sub = out.loc[eligible].copy()
+    sub["_order"] = sub["pt_role"].astype(str).map(role_depth_order)
+    sub = sub.sort_values(["_order", "pt_raw"], ascending=[True, False])
+    rank = (sub.groupby([sub[team_col], sub["pt_family"]]).cumcount() + 1
+            ).reindex(out.loc[eligible].index)
     out.loc[eligible, "pt_depth_rank"] = rank
-    beyond = rank[rank > core]
+    slots = sub["pt_family"].map(FAMILY_CORE_SLOTS).fillna(0).astype(float)
+    over = rank - slots
+    beyond = over[over > 0]
     if len(beyond):
-        factor = np.maximum(ROSTER_DEPTH_DECAY ** (beyond - core),
-                            ROSTER_DEPTH_FLOOR)
+        factor = np.maximum(ROSTER_DEPTH_DECAY ** beyond, ROSTER_DEPTH_FLOOR)
         out.loc[beyond.index, "pt_depth_factor"] = factor.to_numpy()
     out["pt_raw"] = out["pt_raw"] * out["pt_depth_factor"]
     return out
@@ -519,6 +566,35 @@ def allocate_playing_time(players: pd.DataFrame, kind: str, *,
         out.loc[off, vol_out] = pd.to_numeric(
             out.loc[off, "pt_raw"], errors="coerce").fillna(floor_v).clip(
                 upper=ceiling)
+
+    # Save and hold shares are per-ROLE WEIGHTS, not an allocation: a closer's
+    # 0.65 says "a closer takes about 65% of a save pool", which is a fact
+    # about the role and not about how many pitchers a club happens to carry.
+    # Summed over a real staff they come to 1.16 (saves) and 1.85 (holds), so
+    # a consumer who multiplies them straight into a team pool over-allocates
+    # — league saves read 1,412 against a pool of 1,215, and holds 4,270
+    # against 2,308. Normalising per team turns the weights into shares that
+    # sum to 1, which is what a pool needs. The raw role weight is kept beside
+    # them because it is still the role's own attribute.
+    if not is_pa:
+        # The weight is scaled by how much of his role's innings a pitcher
+        # ACTUALLY gets. A save is an appearance, so a reliever who throws a
+        # fifth of a closer's innings cannot convert a closer's save pool —
+        # before this, one projected 1.4 innings and 22.3 saves, which is not
+        # a thing that can happen. The innings he does not throw hand their
+        # share to the rest of the staff through the normalisation below.
+        anchor = pd.to_numeric(out["pt_anchor"], errors="coerce")
+        realised = (pd.to_numeric(out[vol_out], errors="coerce")
+                    / anchor.replace(0, np.nan))
+        realised = realised.replace([np.inf, -np.inf], np.nan).fillna(0.0) \
+            .clip(0.0, 1.0)
+        for src, dest in (("pt_save_share", "Proj_SV_share"),
+                          ("pt_hold_share", "Proj_HLD_share")):
+            w = pd.to_numeric(out[src], errors="coerce").fillna(0.0) * realised
+            # Only players who will pitch compete for the pool.
+            w = w.where(~at_floor, 0.0)
+            tot = w.groupby(teams).transform("sum")
+            out[dest] = np.where(tot > 0, w / tot, 0.0)
 
     # Games / starts follow the same scaling as volume, so a player scaled up
     # 30% is credited with proportionally more appearances rather than pitching

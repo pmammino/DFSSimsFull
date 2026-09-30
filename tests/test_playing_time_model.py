@@ -232,13 +232,20 @@ def test_a_team_with_no_projected_players_is_reported():
 # roster depth
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_players_beyond_the_core_roster_are_discounted():
+def test_players_beyond_their_family_core_slots_are_discounted():
+    """Core slots are per FAMILY — nine in the lineup, four on the bench, six
+    starters, eight relievers — not a flat 13 per club. A flat count ranked
+    starters against relievers and regulars against bench bats, which is the
+    wrong competition and is how a closer ended up 13th on his own staff."""
+    from role_taxonomy import FAMILY_CORE_SLOTS
     out, _, _ = _run(_hitters(n_per_team=22, teams=(NYY,)), "hitter")
-    core = out[out.pt_depth_rank <= M.ROSTER_DEPTH_CORE["hitter"]]
-    tail = out[out.pt_depth_rank > M.ROSTER_DEPTH_CORE["hitter"]]
-    assert (core["pt_depth_factor"] == 1.0).all()
-    assert (tail["pt_depth_factor"] < 1.0).all()
-    assert tail["pt_depth_factor"].is_monotonic_decreasing
+    ranked = out[out.pt_depth_rank.notna()]
+    for fam, g in ranked.groupby("pt_family"):
+        slots = FAMILY_CORE_SLOTS[fam]
+        core = g[g.pt_depth_rank <= slots]
+        tail = g[g.pt_depth_rank > slots]
+        assert (core["pt_depth_factor"] == 1.0).all(), fam
+        assert (tail["pt_depth_factor"] < 1.0).all(), fam
 
 
 def test_depth_discount_never_reaches_zero():
@@ -528,3 +535,139 @@ def test_left_and_right_handers_differ_in_a_platoon_role():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_save_and_hold_shares_are_normalised_per_team():
+    """Role weights are not an allocation.
+
+    Summed over a real staff the raw weights come to 1.16 (saves) and 1.85
+    (holds), so multiplying them into a team pool over-allocates — league
+    saves read 1,412 against a pool of 1,215 and holds 4,270 against 2,308.
+    """
+    out, _, _ = _run(_pitchers(), "pitcher")
+    for col in ("Proj_SV_share", "Proj_HLD_share"):
+        per = out.groupby("Pred_target_team_id")[col].sum()
+        assert np.allclose(per.to_numpy(), 1.0), (col, per.to_dict())
+
+
+def test_the_raw_role_weight_is_kept_alongside():
+    out, _, _ = _run(_pitchers(), "pitcher")
+    assert (out[out.pt_role == "Closer"]["pt_save_share"] > 0.5).all()
+
+
+def test_floor_tier_arms_do_not_compete_for_the_pool():
+    df = _pitchers()
+    df.loc[df.index[:5], "pt_tier"] = TIER_FLOOR
+    out, _, _ = _run(df, "pitcher")
+    floored = out[out.pt_tier == TIER_FLOOR]
+    assert (floored["Proj_SV_share"] == 0.0).all()
+    per = out.groupby("Pred_target_team_id")["Proj_SV_share"].sum()
+    assert np.allclose(per.to_numpy(), 1.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Closers must project a closer's innings
+#
+# Found by reading the exported spreadsheet: Justin Martinez projected 1.4
+# innings while recording 22.3 saves, Josh Hader 9.3, Mason Miller 22.9. The
+# median closer sat at 40 innings against a real 60-65, and 14 of 30 fell
+# outside the core roster entirely.
+#
+# Three separate causes, one per test below.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _staff(n_rp=16, n_sp=11, team=NYY, closer_evidence=400.0):
+    """A club with more arms than roster slots — the real shape of the data,
+    where 31 projected pitchers compete for 13 jobs."""
+    rows, pid = [], 2000
+    for i in range(n_sp):
+        rows.append({"PlayerId": pid, "Name": f"sp{i}", "Pred_target_team_id": team,
+                     "pt_tier": TIER_PROJECTED, "role": "starter",
+                     "weighted_IP_per_G": 5.2, "RA9": 4.0 + i * 0.1,
+                     "TBF_per_IP": 4.3, "evidence_volume": 700.0 - i * 55})
+        pid += 1
+    for i in range(n_rp):
+        rows.append({"PlayerId": pid, "Name": f"rp{i}", "Pred_target_team_id": team,
+                     "pt_tier": TIER_PROJECTED, "role": "reliever",
+                     "weighted_IP_per_G": 1.0,
+                     # rp0 is the best arm -> the closer
+                     "RA9": 2.5 + i * 0.2, "TBF_per_IP": 4.3,
+                     "evidence_volume": closer_evidence if i == 0 else 260.0})
+        pid += 1
+    return pd.DataFrame(rows)
+
+
+def test_a_closer_is_never_ranked_out_of_the_core_bullpen():
+    """He was 13th among his own relievers, behind setup men with better
+    evidence factors, because ranking was on raw innings and a closer's
+    62-inning anchor loses that race every time."""
+    out, _, _ = _run(_staff(), "pitcher")
+    closer = out[out.pt_role == "Closer"]
+    assert len(closer) == 1
+    from role_taxonomy import FAMILY_CORE_SLOTS
+    assert closer.iloc[0]["pt_depth_rank"] <= FAMILY_CORE_SLOTS["RP"]
+    assert closer.iloc[0]["pt_depth_factor"] == 1.0
+
+
+def test_a_closer_projects_a_closers_innings():
+    out, _, _ = _run(_staff(), "pitcher")
+    ip = float(out[out.pt_role == "Closer"].iloc[0]["Proj_IP"])
+    assert 35.0 <= ip <= 80.0, f"closer projected {ip:.1f} IP; real is 55-70"
+
+
+def test_marginal_starters_do_not_outrank_the_bullpen():
+    """The 11th starter on a six-slot rotation must be discounted, not the
+    closer. Ranking across the whole staff had it backwards."""
+    out, _, _ = _run(_staff(), "pitcher")
+    rp = out[out.pt_family == "RP"]
+    sp = out[out.pt_family == "SP"]
+    assert (sp["pt_depth_rank"].max() > 6), "fixture must over-fill the rotation"
+    assert sp[sp.pt_depth_rank > 6]["pt_depth_factor"].max() < 1.0
+    assert out[out.pt_role == "Closer"].iloc[0]["pt_depth_factor"] == 1.0
+
+
+def test_a_tiny_sample_does_not_earn_the_ninth_inning():
+    """Oakland's closer was Michel Otanez on 28 batters faced — about seven
+    innings — where a staff-best RA9 is an accident, not a job."""
+    df = _staff()
+    # A spectacular RA9 over almost no evidence.
+    df.loc[df.Name == "rp5", ["RA9", "evidence_volume"]] = [0.9, 28.0]
+    out, _, _ = _run(df, "pitcher")
+    assert out[out.Name == "rp5"].iloc[0]["pt_role"] != "Closer"
+    assert len(out[out.pt_role == "Closer"]) == 1
+
+
+def test_every_club_still_gets_a_closer_even_with_thin_arms():
+    """The evidence bar must not leave a team without a ninth-inning arm."""
+    df = _staff()
+    df["evidence_volume"] = 40.0          # nobody clears the bar
+    out, _, _ = _run(df, "pitcher")
+    assert len(out[out.pt_role == "Closer"]) == 1
+
+
+def test_saves_cannot_exceed_what_the_innings_allow():
+    """A pitcher projected 1.4 innings recorded 22.3 saves. A save is an
+    appearance; the share must follow the innings actually thrown."""
+    df = _staff()
+    out, _, _ = _run(df, "pitcher")
+    closer = out[out.pt_role == "Closer"].iloc[0]
+    full_share = float(closer["Proj_SV_share"])
+
+    # Same club, but the closer is barely available.
+    thin = df.copy()
+    thin.loc[thin.Name == "rp0", "evidence_volume"] = 30.0
+    out2, _, _ = _run(thin, "pitcher")
+    c2 = out2[out2.pt_role == "Closer"]
+    if len(c2):
+        assert float(c2.iloc[0]["Proj_SV_share"]) < full_share, (
+            "a closer who throws fewer innings must take fewer saves")
+    for o in (out, out2):
+        per = o.groupby("Pred_target_team_id")["Proj_SV_share"].sum()
+        assert np.allclose(per.to_numpy(), 1.0)
+
+
+def test_no_pitcher_takes_a_save_share_without_innings():
+    out, _, _ = _run(_staff(), "pitcher")
+    no_ip = out[out["Proj_IP"] <= 1.0]
+    assert (no_ip["Proj_SV_share"] == 0).all()
+    assert (no_ip["Proj_HLD_share"] == 0).all()
