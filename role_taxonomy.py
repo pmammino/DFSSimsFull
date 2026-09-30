@@ -147,6 +147,91 @@ TIMING = [
 DEFAULT_TIMING = "Opening Day"
 DEFAULT_AVAILABILITY = 1.00
 
+# Role FAMILY, and how many of each a 26-man roster actually carries.
+#
+# This exists because ranking a club's players by raw innings to decide who is
+# "core" ranks them on the wrong axis. A staff carries five or six starters and
+# seven or eight relievers; it does not carry thirteen arms sorted by volume.
+# Ranking by volume put 14 of 30 CLOSERS outside the core 13 and crushed them
+# with the depth discount — Justin Martinez projected 1.4 innings while
+# recording 22 saves, behind three End-of-Rotation arms sitting at the evidence
+# floor whose only qualification was a bigger anchor.
+#
+# The taxonomy already said why volume cannot be the axis: bullpen IP is nearly
+# flat across roles (closer 62, setup 65, middle 60), and what separates those
+# jobs is save and hold context. So a closer loses an innings race to any
+# marginal starter, every time, however certain his job is.
+#
+# Ranking within FAMILY fixes it: starters compete with starters for six slots,
+# relievers with relievers for eight, and the closer is core by construction.
+ROLE_FAMILY: dict[str, str] = {
+    # hitters — nine lineup spots plus a four-man bench
+    "Full Time": "LINEUP", "Everyday DH / 1B-DH": "LINEUP",
+    "Strong Side Platoon": "LINEUP", "Catcher - Primary": "LINEUP",
+    "Catcher - Tandem": "LINEUP",
+    "Weak Side Platoon": "BENCH", "Catcher - Backup": "BENCH",
+    "Utility IF": "BENCH", "Utility OF / 4th OF": "BENCH",
+    "Bench Bat": "BENCH", "Injury Replacement / 26th Man": "BENCH",
+    "Depth (no MLB PA)": "DEPTH",
+    # pitchers — a rotation and a bullpen
+    "Ace (SP1)": "SP", "Mid-Rotation Starter (SP2-3)": "SP",
+    "End-of-Rotation Starter (SP4-5)": "SP", "Innings-Limited Starter": "SP",
+    "Opener": "SP", "Swing Arm / Long Relief": "SP",
+    "Closer": "RP", "Late Inning RP (Setup)": "RP", "Middle Relief": "RP",
+    "Bullpen Depth Arm": "RP", "Rehab / Injury Return": "RP",
+    "Depth (no MLB IP)": "DEPTH",
+}
+
+# Core slots per family. Hitters: nine in the lineup, four on the bench.
+# Pitchers: six starters (five plus the sixth who covers doubleheaders and
+# injuries) and eight relievers. 13 + 13 = the 26-man roster.
+FAMILY_CORE_SLOTS: dict[str, int] = {
+    "LINEUP": 9, "BENCH": 4, "SP": 6, "RP": 8, "DEPTH": 0,
+}
+
+
+def role_family(role: str) -> str:
+    """Which part of the roster a role belongs to. Unknown roles are DEPTH,
+    the conservative answer: they get the discount rather than a core slot."""
+    return ROLE_FAMILY.get(role, "DEPTH")
+
+
+# Seniority WITHIN a family — who holds a core slot when there are more
+# candidates than slots. Lower is more senior.
+#
+# The role already encodes how secure a job is, so ranking on it is strictly
+# better than ranking on innings. Volume-ranking inside the bullpen put a
+# closer 13th among his own relievers and left him 9 innings: his 62-inning
+# anchor loses to any setup man with a better evidence factor, even though the
+# ninth inning is the most certain job in the pen. A closer is core by
+# definition; a depth arm is not, whatever his numbers look like.
+#
+# Ties are broken on raw volume, so within a role the better-established
+# player keeps the slot.
+ROLE_DEPTH_ORDER: dict[str, int] = {
+    # rotation
+    "Ace (SP1)": 1, "Mid-Rotation Starter (SP2-3)": 2,
+    "End-of-Rotation Starter (SP4-5)": 3, "Innings-Limited Starter": 4,
+    "Swing Arm / Long Relief": 5, "Opener": 6,
+    # bullpen
+    "Closer": 1, "Late Inning RP (Setup)": 2, "Middle Relief": 3,
+    "Rehab / Injury Return": 4, "Bullpen Depth Arm": 5,
+    # lineup
+    "Full Time": 1, "Everyday DH / 1B-DH": 1, "Catcher - Primary": 2,
+    "Strong Side Platoon": 3, "Catcher - Tandem": 4,
+    # bench
+    "Utility IF": 1, "Utility OF / 4th OF": 1, "Catcher - Backup": 2,
+    "Weak Side Platoon": 3, "Bench Bat": 4,
+    "Injury Replacement / 26th Man": 5,
+    # depth
+    "Depth (no MLB PA)": 9, "Depth (no MLB IP)": 9,
+}
+
+
+def role_depth_order(role: str) -> int:
+    """Seniority within the family; unknown roles sort last."""
+    return ROLE_DEPTH_ORDER.get(role, 9)
+
 # The two roles that mean "organizational depth" — the ones that must land on
 # the 1 PA / 1 IP floor rather than in the team's allocation.
 DEPTH_HITTER_ROLE = "Depth (no MLB PA)"
