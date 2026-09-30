@@ -239,7 +239,12 @@ def _read_me(ws, meta: dict):
         ("  Hitters      one row per hitter, sorted by projected PA", None),
         ("  Pitchers     one row per pitcher, sorted by projected IP", None),
         ("  Teams        per-club run environment, wins, save and hold pools", None),
-        ("  What-If      live formulas: change a PA or IP and the line moves", None),
+        ("", None),
+        ("  A companion file, mlb_" + str(meta["year"]) + "_what_if.xlsx, holds "
+         "the same top players", None),
+        ("  with LIVE formulas: change a yellow PA or IP cell and the whole", None),
+        ("  line recalculates. Use it to see the arithmetic, or to test what a", None),
+        ("  role change would do before editing the override file.", None),
         ("", None),
         ("HOW THE COUNTING STATS ARE BUILT", "head"),
         ("  Every stat is a projected RATE times projected PLAYING TIME.", None),
@@ -514,11 +519,22 @@ def main(argv=None) -> int:
         _write_sheet(wb.create_sheet("Teams"), teams,
                      three_dp={"win_pct", "team_factor", "rs_per_game",
                                "ra_per_game"})
-    _what_if(wb.create_sheet("What-If"), hitters, pitchers)
-
     xlsx = a.dest / f"mlb_{y}_projections.xlsx"
     wb.save(xlsx)
     print(f"  wrote {xlsx.name}")
+
+    # The live sheet goes in its OWN workbook. Bundled with 7,000 rows of data
+    # the file is too large for the LibreOffice pass to verify — it times out
+    # before returning a result — and formulas that cannot be checked ship as
+    # cells that read empty to everything except Excel. Alone, the same
+    # formulas verify in seconds, and the data workbook stays formula-free so
+    # there is nothing in it left unverified.
+    wb2 = Workbook()
+    _what_if(wb2.active, hitters, pitchers)
+    wb2.active.title = "What-If"
+    whatif = a.dest / f"mlb_{y}_what_if.xlsx"
+    wb2.save(whatif)
+    print(f"  wrote {whatif.name}  (live formulas)")
     print(f"\n  league check: {r_scored:,.0f} runs scored vs "
           f"{r_allowed:,.0f} allowed ({meta['r_gap']:+.1f}%)")
     return 0
