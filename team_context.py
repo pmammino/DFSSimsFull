@@ -364,16 +364,15 @@ def assign_target_teams(
     if missing:
         raise KeyError(f"history frame missing columns: {sorted(missing)}")
 
-    qualifying = history[
-        (history["Season"] < target_year)
-        & history["TeamId"].notna()
-        & (history[volume_col].fillna(0) >= min_volume)
+    eligible = history[
+        (history["Season"] < target_year) & history["TeamId"].notna()
     ]
 
-    inferred: dict[int, int] = {}
-    if not qualifying.empty:
-        latest = qualifying.groupby(id_col)["Season"].transform("max")
-        final_season = qualifying[qualifying["Season"] == latest]
+    def _pick(frame: pd.DataFrame) -> dict[int, int]:
+        if frame.empty:
+            return {}
+        latest = frame.groupby(id_col)["Season"].transform("max")
+        final_season = frame[frame["Season"] == latest]
         volume = (final_season.groupby([id_col, "TeamId"])[volume_col]
                   .sum().reset_index())
         # Deterministic: most volume first, then lowest team id.
@@ -381,7 +380,22 @@ def assign_target_teams(
             [id_col, volume_col, "TeamId"], ascending=[True, False, True],
         )
         picked = volume.groupby(id_col).first().reset_index()
-        inferred = {int(r[id_col]): int(r["TeamId"]) for _, r in picked.iterrows()}
+        return {int(r[id_col]): int(r["TeamId"]) for _, r in picked.iterrows()}
+
+    vol = eligible[volume_col].fillna(0)
+    inferred = _pick(eligible[vol >= min_volume])
+    # Fall back to ANY volume rather than giving up. `min_volume` exists to
+    # stop a 3-PA cup of coffee outranking the club a player actually spent
+    # the season with — it is a TIE-BREAK guard, and when nothing clears it
+    # there is no tie to break, so refusing to assign just discards a known
+    # team. That cost real coverage: an MLE-translated prospect carries one
+    # row holding his parent organization, and a credibility-deflated sample
+    # below 25 (any short-season line, or a full Single-A season at 0.12) left
+    # him with NO team id — hence no park factor and no team context — even
+    # though his org was never in doubt. Marked `low_volume` so the weaker
+    # provenance stays visible.
+    low_volume = {pid: tid for pid, tid in _pick(eligible[vol > 0]).items()
+                  if pid not in inferred}
 
     rows = []
     for pid in pd.unique(history[id_col].dropna()):
@@ -390,6 +404,8 @@ def assign_target_teams(
             team_id, source = overrides[pid], "override"
         elif pid in inferred:
             team_id, source = inferred[pid], "history"
+        elif pid in low_volume:
+            team_id, source = low_volume[pid], "low_volume"
         else:
             team_id, source = None, "unknown"
         rows.append({

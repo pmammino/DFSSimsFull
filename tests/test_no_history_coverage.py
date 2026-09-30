@@ -177,12 +177,38 @@ def test_the_floor_is_a_real_number_for_both_roles():
 # Layer 4 — team context: an org for the player, no distortion for the team
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_a_player_with_no_qualifying_season_gets_no_team_rather_than_a_wrong_one():
+def test_a_thin_season_still_places_the_player_on_that_team():
+    """Weak evidence beats none, because "none" costs park and team context.
+
+    The original assertion here was that a 3-PA season yields NO team, "rather
+    than a wrong one". The refreshed run showed what that costs: 1,950 of
+    2,894 hitters with no Pred_target_team_id, hence no park factor and no
+    team context, while their organization sat resolved in `Team` the whole
+    time. A single 3-PA line with the Yankees is not a WRONG answer — it is
+    the only answer available, and `low_volume` says so.
+    """
     hist = pd.DataFrame([(1, TARGET - 1, NYY, 3)],
                         columns=["PlayerId", "Season", "TeamId", "PA"])
     out = assign_target_teams(hist, TARGET, min_volume=25).set_index("PlayerId")
-    assert pd.isna(out.loc[1, "team_id"])
-    assert out.loc[1, "assign_source"] == "unknown"
+    assert out.loc[1, "team_id"] == NYY
+    assert out.loc[1, "assign_source"] == "low_volume"
+
+
+def test_every_player_in_the_history_frame_gets_a_team_when_one_exists():
+    """The property the last refresh violated, stated directly.
+
+    Coverage of team identity must not depend on playing-time volume: an
+    MLE-translated prospect carries one row with his parent org and a
+    credibility-deflated sample that can land anywhere from 300 PA to 1.
+    """
+    rows = [(i, TARGET - 1, NYY, pa) for i, pa in
+            enumerate([600.0, 310.0, 60.0, 24.0, 8.0, 1.0])]
+    hist = pd.DataFrame(rows, columns=["PlayerId", "Season", "TeamId", "PA"])
+    out = assign_target_teams(hist, TARGET, min_volume=25)
+    assert len(out) == len(rows)
+    assert out["team_id"].notna().all(), (
+        f"unassigned: {out[out.team_id.isna()].to_dict('records')}")
+    assert (out["team_id"] == NYY).all()
 
 
 def test_an_mle_player_can_be_placed_on_his_parent_org():
