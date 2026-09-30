@@ -197,3 +197,40 @@ def test_writes_the_season_directory(tmp_path):
 def test_missing_projections_give_an_actionable_error(tmp_path):
     with pytest.raises(SystemExit, match="run_pipeline"):
         se.run(TARGET, tmp_path, write=False)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LEAGUE_RBI_PER_RUN — a reconciliation target that was wrong
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_league_rbi_per_run_matches_reality():
+    """The target read 0.88 through the first real season-layer run.
+
+    Only runs nobody hit in carry no RBI: errors, wild pitches, passed balls,
+    balks, steals of home, some fielder's-choice plays. The batter who homers
+    drives in himself; a sac fly and a bases-loaded walk both count. That is
+    ~5% of runs, not ~12%.
+
+    Measured on run 36762891387 across every pool and both weightings:
+    0.9492 / 0.9540 / 0.9607 / 0.9613. A report is read exactly when someone
+    is deciding whether the model is healthy, and 0.88 turned a +2.5% gap into
+    an apparent +11% one.
+    """
+    assert 0.93 <= se.LEAGUE_RBI_PER_RUN <= 0.97, (
+        f"LEAGUE_RBI_PER_RUN = {se.LEAGUE_RBI_PER_RUN}; real league RBI/R is "
+        "~0.95. Re-derive as the ratio of the league RBI and R rates.")
+
+
+def test_rbi_target_is_not_the_old_wrong_value():
+    """Explicitly pin the regression, so a revert is loud."""
+    assert se.LEAGUE_RBI_PER_RUN != 0.88
+
+
+def test_reconciliation_reports_the_rbi_gap_against_the_constant():
+    """The printed deviation must be measured against the constant, not a
+    literal, so correcting one corrects the other."""
+    import inspect
+    src = inspect.getsource(se.reconciliation_report)
+    assert "LEAGUE_RBI_PER_RUN" in src, (
+        "the RBI target must come from the constant, not a hardcoded string")
+    assert "0.88" not in src, "the old literal is still in the report"
