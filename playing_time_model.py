@@ -84,6 +84,11 @@ from team_context import FREE_AGENT_TEAM_ID, PA_PER_TEAM_GAME
 # Team budgets over a 162-game season.
 TEAM_PA_BUDGET = 162.0 * PA_PER_TEAM_GAME     # ~6,156
 TEAM_IP_BUDGET = 162.0 * 9.0                  # 1,458
+# Starts are the hardest budget of the three and the only one that was not
+# being enforced: a club plays 162 games and each one has exactly one
+# starting pitcher. Unclosed, the staff collectively started 178.5 games a
+# club — 5,354 across the league against the 4,859 that exist.
+TEAM_GS_BUDGET = 162.0
 
 # Per-player ceilings, as physical bounds rather than opinions. The most PA
 # anyone has taken in a season is ~778 (Jimmy Rollins 2007); the most IP in the
@@ -683,7 +688,23 @@ def allocate_playing_time(players: pd.DataFrame, kind: str, *,
                  / pd.to_numeric(out["pt_anchor"], errors="coerce")
                  .replace(0, np.nan))
         ratio = ratio.replace([np.inf, -np.inf], np.nan).fillna(1.0)
-        out["Proj_GS"] = (out["pt_anchor_GS"] * ratio).clip(0, PT_MAX_GS).round(1)
+        out["Proj_GS"] = (out["pt_anchor_GS"] * ratio).clip(0, PT_MAX_GS)
+        # Close them on the 162 starts the club actually has, by the same
+        # iterative fit the innings use. Without it the anchors simply added
+        # up to more than a season: one ace, two mid-rotation and two
+        # end-of-rotation anchors alone come to 168 before anybody is scaled.
+        gs = out["Proj_GS"].to_numpy(float).copy()
+        for team_id, idx in out[on_a_club].groupby(teams[on_a_club]).groups.items():
+            pos = out.index.get_indexer(idx)
+            block = gs[pos]
+            if block.sum() <= 0:
+                continue
+            gs[pos] = _close_one_team(block, TEAM_GS_BUDGET, PT_MAX_GS)
+        # The ceiling binds on most staffs here — several starters sit at it
+        # at once — so the fit can run out of passes a hair above it. A
+        # rotation where somebody starts 34.1 games is wrong in a way a
+        # reader notices; being a start short of 162 is not.
+        out["Proj_GS"] = np.round(np.minimum(gs, PT_MAX_GS), 1)
         out["Proj_G"] = (out["pt_anchor_G"] * ratio).clip(0, PT_MAX_G).round(1)
     else:
         pa = pd.to_numeric(out[vol_out], errors="coerce")
