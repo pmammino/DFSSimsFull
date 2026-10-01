@@ -64,6 +64,12 @@ from pipeline_config import PT_FLOOR_IP, PT_FLOOR_PA
 from playing_time import SOURCE_FLOOR, SOURCE_MODEL, TIER_FLOOR, TIER_PROJECTED
 from role_taxonomy import (
     DEFAULT_AVAILABILITY,
+    MIX_TOLERANCE,
+    blend_anchors,
+    format_role_mix,
+    mix_volume_sd,
+    modal_role,
+    parse_role_mix,
     FAMILY_CORE_SLOTS,
     DEFAULT_TIMING,
     DEPTH_HITTER_ROLE,
@@ -180,17 +186,57 @@ def load_role_overrides(path: str | Path, kind: str) -> pd.DataFrame:
     if "Availability" in df.columns:
         df["Availability"] = pd.to_numeric(
             df["Availability"], errors="coerce").clip(0.0, 1.0)
-    keep = ["PlayerId"] + [c for c in ("Role", "Role Start", "Availability")
-                           if c in df.columns]
+    # Role MIXTURES. A player in a job battle is not 100% anything, and the
+    # workbook has carried one probability column per role — plus a
+    # `Role Prob Sum` check — since it was written. Accept either shape: a
+    # ready-made "Role Mix" string, or the workbook's own per-role columns.
+    mix = _read_role_mix(df, kind, p.name)
+    if mix is not None:
+        df["Role Mix"] = mix
+
+    keep = ["PlayerId"] + [c for c in ("Role", "Role Mix", "Role Start",
+                                       "Availability") if c in df.columns]
     return df[keep].drop_duplicates("PlayerId", keep="last")
 
 
-def apply_role_overrides(players: pd.DataFrame,
-                         overrides: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+def _read_role_mix(df: pd.DataFrame, kind: str, name: str):
+    """Normalize whichever mixture shape the file uses into one string column.
+
+    Returns None when the file carries no mixture at all, which is the common
+    case: a file that only renames three players' roles is still valid.
+    """
+    if "Role Mix" in df.columns:
+        parsed = df["Role Mix"].map(lambda v: parse_role_mix(v, kind))
+    else:
+        cols = [c for c in role_names(kind) if c in df.columns]
+        if not cols:
+            return None
+        block = df[cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+        # A hand-typed set of probabilities that does not sum to 1 is worth
+        # saying out loud before it is normalized away: it usually means a
+        # column was missed, not that the person meant these ratios.
+        totals = block.sum(axis=1)
+        off = totals[(totals > 0) & ((totals - 1.0).abs() > MIX_TOLERANCE)]
+        if len(off):
+            print(f"  role overrides {name}: {len(off)} row(s) whose role "
+                  f"probabilities sum to {off.iloc[0]:.2f} rather than 1.00 "
+                  f"— normalized, but check them")
+        parsed = [
+            parse_role_mix(
+                "|".join(f"{c}:{v}" for c, v in zip(cols, row) if v > 0), kind)
+            for row in block.to_numpy()
+        ]
+        parsed = pd.Series(parsed, index=df.index)
+    out = parsed.map(lambda m: format_role_mix(m) if m else np.nan)
+    return out if out.notna().any() else None
+
+
+def apply_role_overrides(players: pd.DataFrame, overrides: pd.DataFrame, *,
+                         kind: str = "hitter") -> tuple[pd.DataFrame, dict]:
     """Let explicit assignments win over the derived defaults."""
     out = players.copy()
-    stats = {"matched": 0, "role": 0, "timing": 0, "availability": 0,
-             "unmatched": 0}
+    stats = {"matched": 0, "role": 0, "mix": 0, "timing": 0,
+             "availability": 0, "unmatched": 0}
     if overrides is None or overrides.empty:
         return out, stats
 
@@ -198,6 +244,24 @@ def apply_role_overrides(players: pd.DataFrame,
     stats["unmatched"] = int((~overrides["PlayerId"].isin(known)).sum())
     ov = overrides[overrides["PlayerId"].isin(known)].set_index("PlayerId")
     stats["matched"] = len(ov)
+
+    # The mixture goes on first so an explicit single `Role` in the same file
+    # still wins: naming one role is the more specific statement.
+    if "Role Mix" in ov.columns:
+        vals = ov["Role Mix"].dropna()
+        if not vals.empty:
+            idx = out["PlayerId"].map(vals)
+            mask = idx.notna()
+            out.loc[mask, "pt_role_mix"] = idx[mask].to_numpy()
+            # Everything that cannot be averaged — roster family, depth
+            # order, the name beside him on the sheet — uses the heaviest
+            # role. A 60/40 split still has to occupy one roster spot.
+            modal = idx[mask].map(
+                lambda v: modal_role(parse_role_mix(v, kind) or {}))
+            keep = modal.notna()
+            out.loc[modal[keep].index, "pt_role"] = modal[keep].to_numpy()
+            out.loc[mask, "pt_role_source"] = "override"
+            stats["mix"] = int(mask.sum())
 
     for col, dest, key in (("Role", "pt_role", "role"),
                            ("Role Start", "pt_role_start", "timing"),
@@ -308,6 +372,9 @@ def assign_default_roles(players: pd.DataFrame, kind: str, *,
     out["pt_role_start"] = DEFAULT_TIMING
     out["pt_availability"] = DEFAULT_AVAILABILITY
     out["pt_role_source"] = "default"
+    # Always present, empty for a settled player, so a consumer never has to
+    # ask whether the column exists.
+    out["pt_role_mix"] = ""
     return out
 
 
@@ -481,12 +548,19 @@ def raw_volumes(players: pd.DataFrame, kind: str,
     """anchor x timing x availability x evidence, then roster-depth discount."""
     out = players.copy()
     key = "pa" if kind == "hitter" else "ip"
-    anchors, gs, g, sv, hld, vl = [], [], [], [], [], []
+    anchors, gs, g, sv, hld, vl, sd = [], [], [], [], [], [], []
     unknown: set[str] = set()
 
     bats_col = "BatSide" if "BatSide" in out.columns else None
+    has_mix = "pt_role_mix" in out.columns
     for _, r in out.iterrows():
-        a = role_anchor(str(r.get("pt_role")), kind)
+        # A mixture blends the anchors it names; everything downstream then
+        # works on one blended anchor exactly as it did on a single role's.
+        mix = parse_role_mix(r.get("pt_role_mix"), kind) if has_mix else None
+        a = blend_anchors(mix, kind) if mix else None
+        sd.append(mix_volume_sd(mix, kind) if mix else 0.0)
+        if a is None:
+            a = role_anchor(str(r.get("pt_role")), kind)
         if a is None:
             unknown.add(str(r.get("pt_role")))
             a = role_anchor(DEPTH_HITTER_ROLE if kind == "hitter"
@@ -508,6 +582,9 @@ def raw_volumes(players: pd.DataFrame, kind: str,
     avail = pd.to_numeric(out["pt_availability"],
                           errors="coerce").fillna(1.0).clip(0.0, 1.0)
     out["pt_anchor"] = np.asarray(anchors, dtype=float)
+    # The spread BETWEEN the roles a person named — the uncertainty they
+    # expressed by declining to pick one. Zero for a settled player.
+    out["pt_role_sd"] = np.asarray(sd, dtype=float)
     out["pt_season_share"] = share * avail
     out["pt_evidence_factor"] = _evidence_factor(out, kind)
     out["pt_raw"] = (out["pt_anchor"] * out["pt_season_share"]
@@ -735,7 +812,7 @@ def project_playing_time(players: pd.DataFrame, kind: str, *,
                                team_col=team_col)
     ov = load_role_overrides(role_override_path(kind, target_year, roster_path),
                              kind)
-    out, stats["overrides"] = apply_role_overrides(out, ov)
+    out, stats["overrides"] = apply_role_overrides(out, ov, kind=kind)
     out = raw_volumes(out, kind, team_col=team_col)
     out, team_diag = allocate_playing_time(out, kind, team_col=team_col,
                                            reserves=reserves)

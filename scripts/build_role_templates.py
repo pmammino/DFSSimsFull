@@ -470,7 +470,13 @@ def _load(target_year: int, out_dir: Path, kind: str) -> list[dict]:
             "Role Start": "Opening Day",
             "Availability": 1.00,
             "Notes": None,
-            "_probs": {},
+            # Pre-fill the assignment as a probability of 1 on its own role,
+            # so the sheet round-trips: export it unchanged and the model
+            # reads back exactly what it assigned. A person expressing a job
+            # battle edits these cells into a split — 0.6 / 0.3 / 0.1 — and
+            # the model blends the anchors rather than picking one.
+            "_probs": ({_role: 1.0} if (_role := (
+                r["pt_role"] if pd.notna(r.get("pt_role")) else None)) else {}),
         })
     return recs
 
