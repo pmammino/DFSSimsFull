@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from team_context import TEAM_ABBR_BY_ID
 from verify_refresh import (  # noqa: E402
-    FAIL, PASS, WARN, Checks, check_physically_possible,
+    FAIL, PASS, WARN, Checks, check_extra_base_hits, check_physically_possible,
     check_pool_composition, check_team_identity, volume_weights,
 )
 
@@ -294,12 +294,61 @@ def test_the_bias_being_removed_is_real():
     assert fixed == pytest.approx(0.1150)
 
 
-def test_projected_players_keep_their_career_weight():
-    """This is not a switch to Proj_PA — that is NaN until the PT model lands,
-    and 1.0 only for the floor tier, so using it would invert the bias."""
+def test_projected_players_keep_their_career_weight_without_proj_pa():
+    """The fallback, for a frame from before the playing-time step.
+
+    This test used to assert that Career_PA was the weight FULL STOP, on the
+    grounds that Proj_PA was NaN for everyone but the floor tier, where it
+    was the 1.0 floor — so weighting by it would have counted nobody but the
+    floor. That was true of the frames that existed then. The playing-time
+    model now fills Proj_PA for every projected player, and a league
+    aggregate is a claim about the season being projected, so it should be
+    weighted by the playing time the projections allocate. Career_PA ranks a
+    36-year-old on his way out above the 23-year-old taking his job.
+    """
     df = pd.DataFrame({"Career_PA": [1000.0, 4000.0],
                        "pt_tier": ["projected", "projected"]})
     assert list(volume_weights(df)) == [1000.0, 4000.0]
+
+
+def test_projected_playing_time_is_preferred_when_the_model_filled_it():
+    df = pd.DataFrame({"Career_PA": [9000.0, 300.0],
+                       "Proj_PA":   [120.0, 600.0],
+                       "pt_tier":   ["projected", "projected"]})
+    assert list(volume_weights(df)) == [120.0, 600.0]
+
+
+def test_career_pa_and_proj_pa_disagree_about_who_matters():
+    """Guard: the fixture must exercise the difference, or this proves nothing."""
+    df = pd.DataFrame({"Career_PA": [9000.0, 300.0],
+                       "Proj_PA":   [120.0, 600.0],
+                       "pt_tier":   ["projected", "projected"]})
+    rate = np.array([0.080, 0.120])          # declining veteran vs the kid
+    by_career = np.average(rate, weights=df.Career_PA)
+    by_proj   = np.average(rate, weights=volume_weights(df))
+    assert by_career < 0.085, "fixture no longer shows the career-PA bias"
+    assert by_proj > 0.110
+
+
+def test_an_unpopulated_proj_pa_column_falls_back():
+    """A column of floors, or mostly NaN, means the step did not run."""
+    floors = pd.DataFrame({"Career_PA": [1000.0, 4000.0],
+                           "Proj_PA":   [1.0, 1.0],
+                           "pt_tier":   ["projected", "projected"]})
+    assert list(volume_weights(floors)) == [1000.0, 4000.0]
+
+    mostly_missing = pd.DataFrame({
+        "Career_PA": [1000.0, 4000.0, 2000.0, 500.0],
+        "Proj_PA":   [600.0, np.nan, np.nan, np.nan],
+        "pt_tier":   ["projected"] * 4})
+    assert list(volume_weights(mostly_missing)) == [1000.0, 4000.0, 2000.0, 500.0]
+
+
+def test_negative_proj_pa_cannot_become_a_negative_weight():
+    df = pd.DataFrame({"Career_PA": [1000.0, 4000.0],
+                       "Proj_PA":   [-50.0, 600.0],
+                       "pt_tier":   ["projected", "projected"]})
+    assert (volume_weights(df) >= 0).all()
 
 
 def test_weights_degrade_without_pt_tier():
@@ -333,6 +382,107 @@ def test_pool_composition_is_skipped_without_tiers():
     check_pool_composition(c, pd.DataFrame({"Career_PA": [1.0]}),
                            pd.DataFrame({"Career_PA": [1.0]}))
     assert not c.rows
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# the batted-ball mix, against the real pool in bip_inputs/
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The real per-BIP shares the check reads out of bip_inputs/, to about four
+# decimal places. A fixture built on these lands at 1.00x on every event.
+REAL_PER_BIP = {"1B": 0.2091, "2B": 0.0619, "3B": 0.0054, "HR": 0.0448}
+
+
+def _hitters_at(scale: dict | None = None, bip_share: float = 0.676,
+                n: int = 50) -> pd.DataFrame:
+    """A hitter frame whose per-BIP mix is the real one, times `scale`."""
+    scale = scale or {}
+    per_bip = {k: v * scale.get(k, 1.0) for k, v in REAL_PER_BIP.items()}
+    out = 1.0 - sum(per_bip.values())
+    row = {
+        "P_1B": per_bip["1B"] * bip_share, "P_2B": per_bip["2B"] * bip_share,
+        "P_3B": per_bip["3B"] * bip_share, "P_HR": per_bip["HR"] * bip_share,
+        "P_BIPOut": out * bip_share, "P_SF": 0.0,
+        "Proj_PA": 600.0, "Career_PA": 3000.0, "pt_tier": "projected",
+    }
+    return pd.DataFrame([row] * n)
+
+
+def test_a_realistic_batted_ball_mix_passes_every_event():
+    c = Checks()
+    check_extra_base_hits(c, _hitters_at())
+    r = _rows(c)
+    for ev in ("HR", "3B", "2B", "1B", "Out"):
+        assert r[f"per-BIP {ev}"] == PASS, _detail(c, f"per-BIP {ev}")
+    assert r["TB per BIP"] == PASS
+
+
+def test_suppressed_extra_base_hits_still_fail():
+    """The original bug: 0.81x on home runs."""
+    c = Checks()
+    check_extra_base_hits(c, _hitters_at({"HR": 0.81, "2B": 0.83, "3B": 0.84,
+                                          "1B": 1.07}))
+    r = _rows(c)
+    assert r["per-BIP HR"] == FAIL
+    assert r["per-BIP 2B"] == FAIL
+    assert r["per-BIP 1B"] == FAIL
+
+
+def test_inflated_extra_base_hits_now_fail_too():
+    """A one-sided floor let a sampler that ran the other way pass unremarked.
+
+    The Gaussian imputation sampler put 1.083x on doubles while holding
+    triples at 0.855x — one bug, and the old check could only see half of it.
+    """
+    c = Checks()
+    check_extra_base_hits(c, _hitters_at({"2B": 1.18}))
+    assert _rows(c)["per-BIP 2B"] == FAIL
+    assert "inflated" in _detail(c, "per-BIP 2B")
+
+
+def test_a_uniform_suppression_of_hits_passes_every_per_event_check():
+    """The blind spot TB per BIP exists to cover.
+
+    The extra-base floor is applied per event, and singles have no floor at
+    all — only a cap, because the bug being guarded inflated them. So take
+    every hit type down by the same 8%: HR, 2B and 3B all clear their floor
+    and pass, singles are well under their cap and pass, the out share rises
+    and is not checked. Nothing fails, and the league has lost 8% of its
+    total bases — about 32 points of slugging.
+    """
+    h = _hitters_at({"1B": 0.92, "2B": 0.92, "3B": 0.92, "HR": 0.92})
+    c = Checks()
+    check_extra_base_hits(c, h)
+    r = _rows(c)
+    assert all(r[f"per-BIP {ev}"] == PASS for ev in ("1B", "2B", "3B", "HR"))
+    assert r["TB per BIP"] == FAIL
+    assert "SLG" in _detail(c, "TB per BIP")
+
+
+def test_the_check_weights_by_projected_playing_time():
+    """A bench bat's rates must not count the same as a regular's."""
+    regular = _hitters_at(n=1)
+    bench = _hitters_at({"HR": 0.3, "2B": 0.5, "1B": 1.3}, n=1)
+    bench.loc[:, "Proj_PA"] = 20.0
+    pool = pd.concat([regular] * 9 + [bench] * 9, ignore_index=True)
+    c = Checks()
+    check_extra_base_hits(c, pool)
+    # Nine regulars at 600 PA against nine bench bats at 20 drown them out.
+    assert _rows(c)["per-BIP HR"] == PASS
+
+    unweighted = pool.drop(columns=["Proj_PA"])
+    unweighted.loc[:, "Career_PA"] = 3000.0
+    c2 = Checks()
+    check_extra_base_hits(c2, unweighted)
+    assert _rows(c2)["per-BIP HR"] == FAIL
+
+
+def test_a_missing_batted_ball_pool_warns_rather_than_failing(monkeypatch):
+    import verify_refresh as vr
+    monkeypatch.setattr(vr, "ROOT", ROOT / "does_not_exist")
+    c = Checks()
+    check_extra_base_hits(c, _hitters_at())
+    assert _rows(c)["extra-base hits"] == WARN
 
 
 if __name__ == "__main__":

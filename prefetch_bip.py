@@ -2,6 +2,7 @@ import sys, time, warnings, numpy as np, pandas as pd
 warnings.filterwarnings("ignore")
 import pybaseball as pb
 from datetime import date, timedelta
+from data_acquisition import regular_season_only
 pb.cache.enable()
 
 def scrape_year(year, start_md=(3,20), chunk=7):
@@ -13,6 +14,10 @@ def scrape_year(year, start_md=(3,20), chunk=7):
         try:
             df = pb.statcast(start_dt=cur.isoformat(), end_dt=ce.isoformat(), verbose=False)
             if df is not None and len(df):
+                # The window runs 3/20 -> 11/1, which brackets spring training
+                # at one end and the entire postseason at the other. Neither
+                # belongs in a regular-season batted-ball pool.
+                df = regular_season_only(df)
                 df = df[df["description"].isin(["hit_into_play","hit_into_play_no_out","hit_into_play_score"])]
                 if len(df):
                     frames.append(df[["batter","pitcher","events","stand","launch_speed","launch_angle","hc_x","hc_y","home_team"]].copy())

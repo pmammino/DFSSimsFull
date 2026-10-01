@@ -36,8 +36,26 @@ sys.path.insert(0, str(ROOT))
 # to their real share of the batted-ball pool. The bug this guards produced
 # 0.81x on home runs; normal projection regression is a few percent.
 XBH_MIN_RATIO = 0.90
+# And may not inflate them either. The Gaussian imputation sampler ran the
+# other way — 1.083x on doubles while triples sat at 0.855x — so a one-sided
+# floor let half of that pass unremarked.
+XBH_MAX_RATIO = 1.10
 # Singles absorbed the deflected mass at 1.07x, so cap them too.
 SINGLE_MAX_RATIO = 1.05
+# Total bases per batted ball, against the same real pool.
+#
+# The per-event checks have a blind spot: their extra-base floor is applied
+# one event at a time, and singles have no floor at all, only a cap — the bug
+# that check was written for INFLATED them. So a uniform suppression of every
+# hit type passes all of it, with the lost mass going to the out share, which
+# nothing bounds. TB per BIP is the weighted combination that does not
+# survive that, and it is the term that drives SLG. It needs no PA
+# denominator, so it is also immune to how complete the batted-ball scrape
+# was.
+#
+# The band is a loose backstop, not a precision instrument: it is there to
+# catch gross drift without crying wolf. Current refresh sits at 0.984.
+TB_PER_BIP_BAND = (0.95, 1.05)
 
 PASS, FAIL, WARN = "PASS", "FAIL", "WARN"
 
@@ -131,28 +149,45 @@ def check_extra_base_hits(checks: Checks, h: pd.DataFrame) -> None:
         checks.add(WARN, "extra-base hits",
                    "no bip_inputs/bip_*.csv — cannot verify against real data")
         return
-    newest = bip[-1]
-    b = pd.read_csv(newest, usecols=["events"])
+    # Pool every available season rather than only the newest. The quantity
+    # being estimated — what happens to a batted ball, given contact — moves
+    # very little year to year, while a single season carries only ~670
+    # triples, a 3.9% standard error on the rarest class the check has to
+    # judge against a 10% tolerance. Pooling halves the check's own noise so
+    # it is testing the projections and not the sample.
+    b = pd.concat([pd.read_csv(f, usecols=["events"]) for f in bip],
+                  ignore_index=True)
+    source = f"{len(bip)} season{'s' if len(bip) > 1 else ''}, {len(b):,} BIP"
     label = {"single": "1B", "double": "2B", "triple": "3B", "home_run": "HR"}
     actual = b["events"].map(label).fillna("Out").value_counts(normalize=True)
 
-    w = pd.to_numeric(h.get("Last_PA"), errors="coerce").fillna(0).clip(lower=0)
-    if w.sum() <= 0:
-        w = pd.Series(np.ones(len(h)))
+    # Weight by the same volume measure every other league aggregate uses.
+    # This check used to weight by Last_PA, which in the committed artifacts
+    # is a PARTIAL season — so it judged the league's batted-ball mix by
+    # whoever happened to play early in the year, not by the playing time
+    # the projections allocate.
+    w = volume_weights(h)
     cols = {"HR": "P_HR", "3B": "P_3B", "2B": "P_2B", "1B": "P_1B",
             "Out": "P_BIPOut"}
     sf = np.average(h["P_SF"], weights=w)
     total = sum(np.average(h[c], weights=w) for c in cols.values()) + sf
 
+    shares = {}
     for ev, col in cols.items():
         proj = np.average(h[col], weights=w) / total
         if ev == "Out":
             proj += sf / total
+        shares[ev] = proj
         ratio = proj / actual[ev]
         if ev in ("HR", "2B", "3B"):
-            status = PASS if ratio >= XBH_MIN_RATIO else FAIL
-            note = ("" if status == PASS else
-                    f" — still suppressed; EVENT_BLEND_WEIGHTS_* regressed?")
+            if ratio < XBH_MIN_RATIO:
+                status, note = FAIL, (" — suppressed; EVENT_BLEND_WEIGHTS_* "
+                                      "regressed, or the imputation sampler?")
+            elif ratio > XBH_MAX_RATIO:
+                status, note = FAIL, (" — inflated; a sampler that misplaces "
+                                      "batted-ball mass can run either way")
+            else:
+                status, note = PASS, ""
         elif ev == "1B":
             status = PASS if ratio <= SINGLE_MAX_RATIO else FAIL
             note = ("" if status == PASS else
@@ -163,7 +198,19 @@ def check_extra_base_hits(checks: Checks, h: pd.DataFrame) -> None:
             note = ""
         checks.add(status, f"per-BIP {ev}",
                    f"{proj:.4f} vs {actual[ev]:.4f} real "
-                   f"({newest.name}) = {ratio:.2f}x{note}")
+                   f"({source}) = {ratio:.2f}x{note}")
+
+    # Total bases per batted ball — the combination offsetting per-event
+    # errors do not survive, and the term that drives SLG.
+    bases = {"1B": 1, "2B": 2, "3B": 3, "HR": 4}
+    tb_proj = sum(n * shares[ev] for ev, n in bases.items())
+    tb_real = sum(n * actual[ev] for ev, n in bases.items())
+    ratio = tb_proj / tb_real
+    lo, hi = TB_PER_BIP_BAND
+    checks.add(PASS if lo <= ratio <= hi else FAIL, "TB per BIP",
+               f"{tb_proj:.4f} vs {tb_real:.4f} real = {ratio:.3f}x"
+               + ("" if lo <= ratio <= hi else
+                  " — total bases per batted ball is off; SLG will be too"))
 
 
 def check_playing_time(checks: Checks, h: pd.DataFrame,
@@ -323,13 +370,25 @@ def volume_weights(df: pd.DataFrame) -> pd.Series:
         appearances clears a 1-PA bar.
       - MLE-translated minor leaguers, always floor by construction.
 
-    Career_PA is still the weight for everyone projected, because Proj_PA is
-    NaN until the playing-time model exists — it is 1.0 ONLY for the floor
-    tier, so weighting by it directly would invert the bias and count nobody
-    but the floor. Zeroing the floor tier gets the same answer without waiting
-    for that model. With no pt_tier column this degrades to plain Career_PA,
-    which is what it always was.
+    Proj_PA is the right weight now that the playing-time model fills it: a
+    league aggregate is a statement about the season being projected, so it
+    should be weighted by the playing time the projections themselves
+    allocate. It used to be unusable — NaN for everyone except the floor
+    tier, where it was the 1.0 floor, so weighting by it counted nobody but
+    the floor — which is why Career_PA with the floor tier zeroed stood in
+    for it. That fallback is still what runs on a frame from before the
+    playing-time step, or one where the step did not populate it.
+
+    Career_PA is a career, not a season: it ranks a 36-year-old on his way
+    out above the 23-year-old taking his job. Last_PA is worse still in the
+    committed artifacts, where it holds a PARTIAL season.
     """
+    proj = _num(df, "Proj_PA")
+    # Usable only if the playing-time model actually populated it. All-floor
+    # (every value at the 1.0 floor) or mostly-missing means it did not.
+    if proj.notna().mean() > 0.5 and proj.fillna(0).sum() > 2 * len(df):
+        return proj.fillna(0).clip(lower=0)
+
     w = _num(df, "Career_PA").fillna(0)
     if "pt_tier" in df.columns:
         w = w.where(df["pt_tier"].astype(str) != "floor", 0.0)
