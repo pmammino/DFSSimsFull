@@ -344,6 +344,20 @@ def test_an_unpopulated_proj_pa_column_falls_back():
     assert list(volume_weights(mostly_missing)) == [1000.0, 4000.0, 2000.0, 500.0]
 
 
+def test_the_floor_tier_carries_no_weight_through_proj_pa_either():
+    """Zeroing it on the Career_PA path only was half the job.
+
+    Once Proj_PA became the preferred weight the floor tier came back in
+    through it, at 1 PA or 1 IP a head — 1.2% of the hitter weight and
+    7.1% of the pitcher weight.
+    """
+    df = pd.DataFrame({"Career_PA": [3000.0, 3000.0, 400.0],
+                       "Proj_PA":   [600.0, 600.0, 1.0],
+                       "pt_tier":   ["projected", "projected", "floor"]})
+    w = volume_weights(df)
+    assert list(w) == [600.0, 600.0, 0.0]
+
+
 def test_negative_proj_pa_cannot_become_a_negative_weight():
     df = pd.DataFrame({"Career_PA": [1000.0, 4000.0],
                        "Proj_PA":   [-50.0, 600.0],

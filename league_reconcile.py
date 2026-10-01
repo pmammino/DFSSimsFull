@@ -64,7 +64,24 @@ def _volume(df: pd.DataFrame, col: str) -> np.ndarray:
     if col not in df.columns:
         return np.zeros(len(df), dtype=float)
     v = pd.to_numeric(df[col], errors="coerce").to_numpy(float)
-    return np.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0).clip(min=0.0)
+    v = np.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0).clip(min=0.0)
+    return _drop_floor(df, v)
+
+
+def _drop_floor(df: pd.DataFrame, weights: np.ndarray) -> np.ndarray:
+    """Zero the floor tier's weight in a league aggregate.
+
+    Depth players are carried at 1 PA / 1 IP so they are present, ranked and
+    joinable. That is not a projection that they will play, so it must not
+    be a vote on what the league looks like — and at 7.1% of the pitcher
+    weight it is more than enough to matter. They are still CORRECTED by the
+    reconciliation; they just do not help decide what to correct toward.
+    """
+    if "pt_tier" not in df.columns:
+        return weights
+    floor = df["pt_tier"].astype(str).to_numpy() == "floor"
+    out = np.where(floor, 0.0, weights)
+    return out if out.sum() > 0 else weights
 
 
 def batters_faced(pitchers: pd.DataFrame) -> np.ndarray:

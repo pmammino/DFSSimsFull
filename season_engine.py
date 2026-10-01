@@ -334,13 +334,26 @@ def reconciliation_report(hitters: pd.DataFrame, pitchers: pd.DataFrame,
                 lines.append(f"  Proj_PA: all {len(hitters)} assigned "
                              f"(max {v.max():,.0f}, median {v.median():,.0f})")
                 if "team_id" in hitters.columns:
-                    per = v.groupby(hitters["team_id"]).sum()
+                    # Projected players only. The floor tier is carried at
+                    # 1 PA so a depth player is present and joinable, and
+                    # sits outside the budget rather than taking plate
+                    # appearances off the major-league roster.
+                    vp = v
+                    if "pt_tier" in hitters.columns:
+                        vp = v.where(hitters["pt_tier"].astype(str) != "floor",
+                                     0.0)
+                    per = vp.groupby(hitters["team_id"]).sum()
                     per = per[per.index.notna()]
                     if len(per):
+                        n_floor = int((hitters.get(
+                            "pt_tier", pd.Series(dtype=object)
+                        ).astype(str) == "floor").sum())
                         lines.append(
                             f"  team PA closure: min {per.min():,.0f} "
                             f"max {per.max():,.0f} "
-                            f"(budget {162 * PA_PER_TEAM_GAME:,.0f})")
+                            f"(budget {162 * PA_PER_TEAM_GAME:,.0f}, "
+                            f"projected only; {n_floor:,} floor players carry "
+                            f"1 PA each outside it)")
     return "\n".join(lines)
 
 

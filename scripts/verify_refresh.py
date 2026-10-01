@@ -265,10 +265,21 @@ def check_playing_time(checks: Checks, h: pd.DataFrame,
 
         # Team closure. A club cannot bat 7,000 times, and the league totals
         # are what let runs scored equal runs allowed.
+        #
+        # Measured over the PROJECTED players only. The floor tier sits
+        # outside the budget by design — a depth arm carried at 1 IP so he
+        # is present and joinable is not a claim that he will pitch, and
+        # how many of them a club has is a fact about how deep the minor
+        # league feed went, not about the club. Summing them in made that
+        # coverage artifact take real innings off the major-league staff:
+        # clubs lost 5.8% to 9.3% of their pitching budget depending on how
+        # many farmhands happened to be translated for them.
         tcol = "Pred_target_team_id"
         if tcol in df.columns:
             budget = 162.0 * 38.0 if col == "Proj_PA" else 162.0 * 9.0
             v = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+            if "pt_tier" in df.columns:
+                v = v.where(df["pt_tier"].astype(str) != "floor", 0.0)
             per = v.groupby(df[tcol]).sum()
             per = per[per.index.notna() & (per.index > 0)]
             if len(per):
@@ -276,7 +287,7 @@ def check_playing_time(checks: Checks, h: pd.DataFrame,
                 checks.add(PASS if worst <= budget * 0.02 else FAIL,
                            f"{col} team closure",
                            f"{len(per)} clubs, worst off budget by "
-                           f"{worst:,.1f} of {budget:,.0f}")
+                           f"{worst:,.1f} of {budget:,.0f} (projected only)")
 
 
 def check_fielding(checks: Checks, out_dir, target_year: int) -> None:
@@ -400,10 +411,21 @@ def volume_weights(df: pd.DataFrame) -> pd.Series:
     committed artifacts, where it holds a PARTIAL season.
     """
     proj = _num(df, "Proj_PA")
+    if proj.isna().all():
+        proj = _num(df, "Proj_IP")
     # Usable only if the playing-time model actually populated it. All-floor
     # (every value at the 1.0 floor) or mostly-missing means it did not.
     if proj.notna().mean() > 0.5 and proj.fillna(0).sum() > 2 * len(df):
-        return proj.fillna(0).clip(lower=0)
+        w = proj.fillna(0).clip(lower=0)
+        # The floor tier is carried so depth players are present, ranked and
+        # joinable — not so they vote on what the league looks like. At 1 PA
+        # or 1 IP apiece they are 1.2% of the hitter weight but 7.1% of the
+        # pitcher weight, which is enough to drag a league aggregate toward
+        # organizational filler.
+        if "pt_tier" in df.columns:
+            w = w.where(df["pt_tier"].astype(str) != "floor", 0.0)
+        if w.sum() > 0:
+            return w
 
     w = _num(df, "Career_PA").fillna(0)
     if "pt_tier" in df.columns:
