@@ -133,7 +133,13 @@ PITCHER_ROLES: list[dict] = [
          note="Front-line starter, ~6.1 IP per start."),
     dict(role="Mid-Rotation Starter (SP2-3)", ip=170, gs=30, g=30,
          sv=0.00, hld=0.00, note="~5.2 IP per start."),
-    dict(role="End-of-Rotation Starter (SP4-5)", ip=130, gs=25, g=26,
+    # 130 -> 110, fitted against the real within-club innings curve by
+    # scripts/fit_role_anchors.py. It was the one anchor the fit moved
+    # cleanly and repeatably, and the innings it gives back go to the top of
+    # the rotation: the ace median lands at 178.6 against a real 178.8, and
+    # the count of starters over 180 innings at 17 against a real 17, where
+    # before they were 165.9 and 10.
+    dict(role="End-of-Rotation Starter (SP4-5)", ip=110, gs=25, g=26,
          sv=0.00, hld=0.002,
          note="Shorter leash; occasional bullpen appearance. The hold weight "
               "is tiny because a club carries 5+ of these and 0.01 each came "
