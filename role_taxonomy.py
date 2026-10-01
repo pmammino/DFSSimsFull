@@ -47,6 +47,7 @@ Two of them encode a fact worth keeping visible:
 
 from __future__ import annotations
 
+import math
 import numpy as np
 import pandas as pd
 
@@ -337,6 +338,139 @@ def role_anchor(role: str, kind: str) -> dict | None:
         if r["role"] == role:
             return r
     return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Role mixtures
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# A player in a job battle is not 100% anything. The honest description of a
+# spring-training competition is "60% full time, 30% strong-side platoon, 10%
+# utility", and forcing that to a single label throws away the thing the
+# person actually knows. The role workbook has had probability columns and a
+# `Role Prob Sum` check since it was written, and its own legend says the
+# pipeline reads them — these functions are what makes that true.
+#
+# A mixture is carried as a compact string so it survives a CSV round trip
+# without adding twelve columns to a frame that is already very wide:
+#
+#     "Full Time:0.6|Strong Side Platoon:0.3|Utility IF:0.1"
+
+MIX_SEP = "|"
+MIX_KV = ":"
+MIX_TOLERANCE = 0.02       # how far a hand-typed set of probabilities may sum off 1
+
+
+def parse_role_mix(value, kind: str) -> dict[str, float] | None:
+    """Read a mixture string into normalized weights, or None if unusable.
+
+    Unknown role names are dropped rather than raising, for the same reason
+    `role_anchor` returns None: a typo in a hand-edited file should be
+    reportable, not fatal. A mixture that loses every one of its roles that
+    way comes back None so the caller can fall back to the default.
+    """
+    if value is None or isinstance(value, float) and pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    valid = set(role_names(kind))
+    out: dict[str, float] = {}
+    for part in text.split(MIX_SEP):
+        if MIX_KV not in part:
+            continue
+        name, _, raw = part.rpartition(MIX_KV)
+        name = name.strip()
+        try:
+            p = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if name in valid and p > 0:
+            out[name] = out.get(name, 0.0) + p
+    total = sum(out.values())
+    if total <= 0:
+        return None
+    return {k: v / total for k, v in out.items()}
+
+
+def format_role_mix(mix: dict[str, float]) -> str:
+    """Render weights back to the string form, heaviest role first."""
+    if not mix:
+        return ""
+    items = sorted(mix.items(), key=lambda kv: (-kv[1], kv[0]))
+    return MIX_SEP.join(f"{k}{MIX_KV}{round(v, 4):g}" for k, v in items)
+
+
+def modal_role(mix: dict[str, float]) -> str | None:
+    """The heaviest role in a mixture, ties broken by name for stability.
+
+    This is the player's role for everything that cannot be averaged — which
+    family he competes in for a roster spot, where he sits in the depth
+    order, what the spreadsheet shows next to his name. A 60/40 split between
+    a lineup job and a bench job still has to occupy one of them when the
+    club ranks its hitters.
+    """
+    if not mix:
+        return None
+    return sorted(mix.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+
+
+def blend_anchors(mix: dict[str, float], kind: str) -> dict | None:
+    """The anchor a mixture implies.
+
+    Volume terms (pa / ip / gs / g) and the save and hold pool shares are
+    expectations: sum of probability times the role's own value. A player who
+    is 50% closer and 50% setup takes 0.5 x 0.80 + 0.5 x 0.06 = 0.43 of his
+    club's saves, which is what "the job is not settled" costs him.
+
+    The platoon shares are NOT expectations. `vl_lhb` and `vl_rhb` are shares
+    OF a player's plate appearances, so they weight by the plate appearances
+    each role contributes, not by its probability. Half a season of 630 PA at
+    0.29 and half of 150 PA at 0.36 is 0.30 exposure, not 0.325 — the role
+    that gives him more trips to the plate has more say in who he faces.
+    """
+    if not mix:
+        return None
+    rows = {r: role_anchor(r, kind) for r in mix}
+    if any(v is None for v in rows.values()):
+        return None
+    vol_key = "pa" if kind == "hitter" else "ip"
+    out: dict[str, float] = {}
+    keys = (("pa", "vl_lhb", "vl_rhb") if kind == "hitter"
+            else ("ip", "gs", "g", "sv", "hld"))
+    volume = sum(mix[r] * float(rows[r][vol_key]) for r in mix)
+    for key in keys:
+        if key.startswith("vl_"):
+            out[key] = (sum(mix[r] * float(rows[r][vol_key])
+                            * float(rows[r][key]) for r in mix) / volume
+                        if volume > 0 else
+                        sum(mix[r] * float(rows[r][key]) for r in mix))
+        else:
+            out[key] = sum(mix[r] * float(rows[r][key]) for r in mix)
+    out["role"] = modal_role(mix)
+    return out
+
+
+def mix_volume_sd(mix: dict[str, float], kind: str) -> float:
+    """Spread of the volume across the roles in a mixture.
+
+    This is the uncertainty the person expressed by not picking one role —
+    the standard deviation BETWEEN the roles they named, nothing more. It is
+    not a predictive interval and does not include a player's own
+    season-to-season variation, which the evidence factor handles separately.
+    A settled player is 0.0 by construction.
+    """
+    if not mix:
+        return 0.0
+    vol_key = "pa" if kind == "hitter" else "ip"
+    vals = []
+    for r, p in mix.items():
+        row = role_anchor(r, kind)
+        if row is None:
+            return 0.0
+        vals.append((p, float(row[vol_key])))
+    mean = sum(p * v for p, v in vals)
+    return float(math.sqrt(max(sum(p * (v - mean) ** 2 for p, v in vals), 0.0)))
 
 
 def timing_share(label: str | float | None) -> float:
