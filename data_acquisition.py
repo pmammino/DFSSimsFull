@@ -28,7 +28,7 @@ import requests
 
 from pipeline_config import (
     CACHE_DIR, STATSAPI_TIMEOUT, SAVANT_TIMEOUT, SAVANT_DAYS_PER_CHUNK,
-    RATE_HIST_START,
+    RATE_HIST_START, STATCAST_REGULAR_SEASON,
 )
 from slate_config import canonical_team
 from team_context import abbr_for_team_id
@@ -970,6 +970,23 @@ def fetch_sprint_speeds(years: list[int], force: bool = False) -> pd.DataFrame:
 # Statcast scraping for the target_year - 1 season (e.g., 2026 to predict 2027)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def regular_season_only(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop spring training, exhibition and postseason rows from a Statcast
+    frame.
+
+    The savant search endpoint has no game_type filter of its own, so every
+    scrape over a March-November window picks up all of them. Shared by
+    `fetch_statcast_season` and the standalone `prefetch_bip.py`.
+
+    A frame without a `game_type` column is returned untouched — some cached
+    pulls predate the column being kept — so this can be applied anywhere
+    without having to know the provenance of the frame.
+    """
+    if df is None or "game_type" not in df.columns:
+        return df
+    return df[df["game_type"].astype(str) == STATCAST_REGULAR_SEASON]
+
+
 def fetch_statcast_season(year: int, force: bool = False) -> pd.DataFrame:
     """Scrape a full season of Statcast BIP data from baseballsavant.
 
@@ -999,7 +1016,10 @@ def fetch_statcast_season(year: int, force: bool = False) -> pd.DataFrame:
             df = pb.statcast(start_dt=cur.isoformat(), end_dt=chunk_end.isoformat(),
                              verbose=False)
             if df is not None and len(df):
-                # Filter to BIP immediately to save memory
+                # Regular season only, then filter to BIP immediately to
+                # save memory. The scrape starts in March, so without the
+                # first filter this pool is part spring training.
+                df = regular_season_only(df)
                 df = df[df["description"].isin(
                     ["hit_into_play", "hit_into_play_no_out", "hit_into_play_score"]
                 )]

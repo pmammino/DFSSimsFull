@@ -323,10 +323,49 @@ BIP_BOUNDS = {
     "adjusted_angle": (-90, 90),
 }
 
+# How synthetic batted balls are drawn for players short of TARGET_N.
+#
+#   "bootstrap"  resample real (launch_speed, launch_angle, adjusted_angle)
+#                observations from a three-pool mixture — the player's
+#                current season, his decay-weighted history, and the season
+#                population — with the mixture probabilities set to the same
+#                blend weights the Gaussian path used as moment weights.
+#   "gaussian"   the legacy path: one multivariate normal per player-season,
+#                matched to the blended mean and covariance.
+#
+# The Gaussian is moment-correct and shape-wrong, and outcome is a sharply
+# non-linear function of (launch_speed, launch_angle), so being shape-wrong
+# biases the scored outcome. Measured against the real 2024-26 batted balls
+# in bip_inputs/, a Gaussian matched to the league's own mean and covariance
+# holds 51% of the real mass in the gap band (EV >= 95, LA 8-20) and 64% in
+# the barrel band (EV >= 98, LA 24-33): total variation distance 0.255.
+#
+# Scored through the classifier, the synthetic rows it produced came out at
+# 1.083x real on doubles, 0.855x on triples, 1.064x on home runs and 0.963x
+# on singles — and 75% of the scored pool is synthetic. See
+# tests/test_bip_imputation_shape.py.
+IMP_SAMPLER = "bootstrap"
+
 # ── XGBoost (BIP-outcome) parameters ─────────────────────────────────────────
 # These mirror the R script (xgb_grid with caret) but use direct xgboost
 # to skip caret's CV overhead. The grid is small and fixed for reproducibility.
-XGB_SAMPLE_SIZE = 100_000
+# Cap on the training rows handed to the BIP classifier. The sample is
+# stratified, so a cap costs every class the same FRACTION of its rows — and
+# the classes that cannot afford it are the rare ones. Triples are 0.53% of
+# batted balls, so a 100k cap on a 304k pool was training the triple class on
+# ~530 examples rather than ~1,630, and it showed up as exactly the bias we
+# were chasing. Measured on a held-out fifth of the real 2024-26 batted balls
+# (mean predicted probability / actual rate, so 1.000 is unbiased):
+#
+#     cap        logloss     double    triple
+#     100,000    0.43684     0.990     0.971
+#     200,000    0.43248     0.997     0.991
+#     none       0.43160     1.001     1.004
+#
+# Both log-loss and the rare-class calibration improve monotonically, and the
+# cost is 6s of training. None means "use the whole pool"; the cap mechanism
+# is kept for anyone who needs to bound training time on a much larger pool.
+XGB_SAMPLE_SIZE = None
 XGB_PARAMS = dict(
     objective="multi:softprob",
     learning_rate=0.1,
@@ -451,6 +490,16 @@ EVENT_BLEND_WEIGHTS_HITTER = {
     "home_run": (1.0, 0.0),
 }
 EVENT_BLEND_WEIGHTS_PITCHER = EVENT_BLEND_WEIGHTS_HITTER
+
+# Statcast's game_type codes. The savant search endpoint returns every game
+# type in a date range, and the BIP scrapes run March -> November, so without
+# a filter the batted-ball pool carries spring training ("S"), exhibition
+# ("E") and the whole postseason ("F"/"D"/"L"/"W") alongside the regular
+# season. Those games are played by different players under different rules —
+# spring rosters are full of non-MLB arms, the postseason is the opposite —
+# and they are counted against regular-season PA denominators everywhere
+# downstream, which silently inflates the implied balls-in-play share.
+STATCAST_REGULAR_SEASON = "R"
 
 # ── Data acquisition rate limiting ───────────────────────────────────────────
 STATSAPI_TIMEOUT = 60

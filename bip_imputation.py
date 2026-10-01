@@ -21,9 +21,13 @@ Two blend weights:
         population. Uses RAW history count — actual data volume earns
         credibility regardless of decay applied to the mean.
 
-Continuous variables (launch_speed, launch_angle, adjusted_angle) are
-modeled as a multivariate normal per player-season. Categorical variables
-(stand, home_team) are sampled from blended categorical distributions.
+Continuous variables (launch_speed, launch_angle, adjusted_angle) are drawn
+by resampling real batted balls from a three-pool mixture whose weights are
+the two blend weights above (IMP_SAMPLER = "bootstrap"); the legacy path
+modelled them as a multivariate normal per player-season, which matched the
+first two moments but not the shape of the (EV, LA) joint, and that cost
+extra-base hits. Categorical variables (stand, home_team) are sampled from
+blended categorical distributions.
 
 This is a memory-conscious port — it processes one season at a time and
 discards the synthetic data of completed seasons rather than holding all
@@ -44,6 +48,7 @@ from pipeline_config import (
     IMP_MIN_OBS_BATTER, IMP_MIN_OBS_PITCHER,
     IMP_HIST_DECAY, IMP_HIST_MAX_LOOKBACK,
     IMP_PLAYER_HIST_DECAY, IMP_PLAYER_MAX_LOOKBACK,
+    IMP_SAMPLER,
     BIP_CONT_VARS, BIP_BOUNDS,
 )
 
@@ -133,7 +138,48 @@ def _build_population_stats(df: pd.DataFrame, szn: int, season_col: str,
         "stand":     stand_probs,
         "home_team": ht_probs,
         "vars":      vars_cont,
+        **_row_pool(df, use_seasons, season_col, vars_cont, decay_w),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Row pools for the bootstrap sampler
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _row_pool(df: pd.DataFrame, use_seasons: list, season_col: str,
+              vars_cont: list[str], decay_w: np.ndarray) -> dict:
+    """Collect the real batted balls behind a set of seasons, with one
+    sampling weight per row, so the bootstrap sampler can draw actual
+    observations instead of Gaussian draws.
+
+    A row from a season `k` back carries weight `decay ** k`, which makes a
+    draw from this pool equivalent in expectation to the decay-weighted mean
+    the Gaussian path computes — but with the real joint shape preserved.
+    """
+    rows, weights = [], []
+    for i, s in enumerate(use_seasons):
+        sdf = df.loc[df[season_col] == s, vars_cont].dropna()
+        if len(sdf) == 0:
+            continue
+        rows.append(sdf.to_numpy(dtype=float))
+        weights.append(np.full(len(sdf), float(decay_w[i])))
+    if not rows:
+        return {"rows": None, "row_w": None}
+    stacked = np.concatenate(rows, axis=0)
+    w = np.concatenate(weights)
+    total = w.sum()
+    return {"rows": stacked, "row_w": w / total if total > 0 else None}
+
+
+def _draw_rows(pool: dict, n: int, rng) -> np.ndarray | None:
+    """Draw `n` rows with replacement from a weighted row pool."""
+    if n <= 0 or pool is None:
+        return None
+    rows, w = pool.get("rows"), pool.get("row_w")
+    if rows is None or len(rows) == 0 or w is None:
+        return None
+    idx = rng.choice(len(rows), size=n, replace=True, p=w)
+    return rows[idx]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -215,6 +261,7 @@ def _get_player_hist_stats(player_hist_df: pd.DataFrame, szn: int,
         "home_team": ht_probs,
         "n_eff":     n_eff,
         "n_raw":     n_raw,
+        **_row_pool(player_hist_df, use_seasons, season_col, vars_cont, decay_w),
     }
 
 
@@ -287,6 +334,107 @@ def _sample_categorical(player_probs: Optional[pd.Series], pop_probs: pd.Series,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Continuous-variable samplers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sample_gaussian(mean: np.ndarray, cov: np.ndarray,
+                     vars_cont: list[str], n: int, rng) -> np.ndarray:
+    """Legacy sampler: a multivariate normal matched to the blended moments."""
+    try:
+        return rng.multivariate_normal(mean, cov, size=n, check_valid="ignore")
+    except Exception:
+        # Cov can be near-singular for low-data players; regularize and retry
+        reg = cov + np.eye(len(vars_cont)) * 1e-3
+        return rng.multivariate_normal(mean, reg, size=n, check_valid="ignore")
+
+
+def _sample_bootstrap(player_data: pd.DataFrame,
+                      player_hist_stats: Optional[dict], pop: dict,
+                      vars_cont: list[str], w_curr: float, w_player: float,
+                      n: int, rng) -> Optional[np.ndarray]:
+    """Draw real batted balls from a three-pool mixture.
+
+    The mixture probabilities are the blend weights the Gaussian path uses
+    as moment weights:
+
+        current season   w_player * w_curr
+        player history   w_player * (1 - w_curr)
+        population       1 - w_player
+
+    so the sampled mean matches the Gaussian path's `shrunk_mean` in
+    expectation. What differs is everything past the first two moments.
+
+    That difference is the point. Outcome is a sharply non-linear function of
+    (launch_speed, launch_angle), so E[f(X)] under a moment-matched Gaussian
+    is not E[f(X)] under the real joint distribution — and the gap falls
+    hardest exactly where extra-base hits live. Measured against the real
+    2024-26 batted balls in `bip_inputs/`, a Gaussian matched to the league's
+    own mean and covariance puts:
+
+        51% of the real mass in the gap band  (EV >= 95, LA 8-20 deg)
+        64% of the real mass in the barrel band (EV >= 98, LA 24-33 deg)
+
+    with a total variation distance of 0.255 from the real (EV, LA) grid.
+    A quarter of the probability mass is in the wrong place, because the real
+    joint is a curved ridge and a Gaussian is an ellipse. Scored through the
+    classifier, the synthetic rows came out at 1.083x real on doubles,
+    0.855x on triples, 1.064x on home runs and 0.963x on singles.
+
+    Resampling real observations cannot have that bias: every draw is an
+    actual batted ball. Shrinkage still happens, through how often we draw
+    from the population pool rather than from the player's own.
+
+    Returns None when no pool has usable rows, so the caller can fall back.
+    """
+    curr_rows = player_data[vars_cont].dropna().to_numpy(dtype=float)
+    curr_pool = ({"rows": curr_rows,
+                  "row_w": np.full(len(curr_rows), 1.0 / len(curr_rows))}
+                 if len(curr_rows) else None)
+    hist_pool = player_hist_stats if player_hist_stats else None
+
+    p_curr = w_player * w_curr
+    p_hist = w_player * (1.0 - w_curr)
+    p_pop  = 1.0 - w_player
+
+    # Fold the weight of any empty pool into the pools that do have rows,
+    # preserving the player-vs-population split where possible.
+    if curr_pool is None:
+        p_hist += p_curr
+        p_curr = 0.0
+    if hist_pool is None or hist_pool.get("rows") is None:
+        p_curr += p_hist
+        p_hist = 0.0
+        if curr_pool is None:
+            p_pop += p_curr
+            p_curr = 0.0
+    if pop.get("rows") is None:
+        if p_curr + p_hist <= 0:
+            return None
+        scale = 1.0 / (p_curr + p_hist)
+        p_curr, p_hist, p_pop = p_curr * scale, p_hist * scale, 0.0
+
+    probs = np.array([p_curr, p_hist, p_pop], dtype=float)
+    total = probs.sum()
+    if total <= 0:
+        return None
+    counts = rng.multinomial(n, probs / total)
+
+    parts = [
+        _draw_rows(curr_pool, int(counts[0]), rng),
+        _draw_rows(hist_pool, int(counts[1]), rng),
+        _draw_rows(pop,       int(counts[2]), rng),
+    ]
+    parts = [p for p in parts if p is not None and len(p)]
+    if not parts:
+        return None
+    drawn = np.concatenate(parts, axis=0)
+    if len(drawn) != n:
+        return None
+    rng.shuffle(drawn, axis=0)
+    return drawn
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Per-player imputation
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -339,19 +487,24 @@ def _impute_player(player_data: pd.DataFrame, player_hist_stats: Optional[dict],
     shrunk_cov  = w_player * player_cov  + (1 - w_player) * pop["cov"]
 
     # Sample continuous variables
-    try:
-        synth = rng.multivariate_normal(shrunk_mean, shrunk_cov, size=n_needed,
-                                        check_valid="ignore")
-    except Exception:
-        # Cov can be near-singular for low-data players; regularize and retry
-        reg = shrunk_cov + np.eye(len(vars_cont)) * 1e-3
-        synth = rng.multivariate_normal(shrunk_mean, reg, size=n_needed,
-                                        check_valid="ignore")
-
-    out = pd.DataFrame(synth, columns=vars_cont)
-    for v, (lo, hi) in BIP_BOUNDS.items():
-        if v in out.columns:
-            out[v] = out[v].clip(lower=lo, upper=hi)
+    if IMP_SAMPLER == "bootstrap":
+        synth = _sample_bootstrap(player_data, player_hist_stats, pop,
+                                  vars_cont, w_curr, w_player, n_needed, rng)
+    else:
+        synth = None
+    if synth is None:
+        synth = _sample_gaussian(shrunk_mean, shrunk_cov, vars_cont,
+                                 n_needed, rng)
+        out = pd.DataFrame(synth, columns=vars_cont)
+        # Gaussian draws have unbounded tails, so they need clamping. The
+        # bootstrap path draws real observations and is left alone — 1.15% of
+        # real batted balls come off the bat below the 40 mph floor, and
+        # clipping them up to 40 would be inventing contact quality.
+        for v, (lo, hi) in BIP_BOUNDS.items():
+            if v in out.columns:
+                out[v] = out[v].clip(lower=lo, upper=hi)
+    else:
+        out = pd.DataFrame(synth, columns=vars_cont)
     out["launch_speed"]   = out["launch_speed"].round(1)
     out["launch_angle"]   = out["launch_angle"].round(0)
     out["adjusted_angle"] = out["adjusted_angle"].round(0)
