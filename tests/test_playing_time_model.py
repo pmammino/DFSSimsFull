@@ -93,18 +93,63 @@ def test_league_closure_follows_from_team_closure():
     assert out["Proj_PA"].sum() == pytest.approx(M.TEAM_PA_BUDGET * 3)
 
 
-def test_closure_holds_with_a_floor_tier_present():
-    """Floor players are held at 1.0 and their total comes OUT of the budget,
-    so the team still closes exactly."""
+def test_the_floor_tier_does_not_take_playing_time_from_the_roster():
+    """Floor players are held at 1.0 and sit OUTSIDE the budget.
+
+    This test used to assert the opposite — that their total came out of the
+    budget so the club's rows summed to exactly the budget. That made the
+    club's real players share `budget - n_floor`, and how many floor players
+    a club carries is a fact about how deep the minor-league feed went for
+    that organization, not about the club. On the shipped projections it
+    ranged from 85 to 136 pitchers, so clubs were handed 5.8% to 9.3% fewer
+    innings than their budget with a 3.5-point spread between them that
+    tracked nothing but data coverage.
+
+    `team_context.roster_volume_weights` had it right all along: the 1-PA
+    floor exists so a player is present, ranked and joinable, "not so he
+    takes playing time away from the major-league roster."
+    """
     df = _hitters()
     # Floor SOME of each club, not all of one: a team with no projected
     # players has nobody to allocate to and correctly cannot reach the budget.
     df.loc[df.groupby("Pred_target_team_id").head(6).index, "pt_tier"] = TIER_FLOOR
     out, _, _ = _run(df, "hitter")
-    tot = out.groupby("Pred_target_team_id")["Proj_PA"].sum()
-    assert np.allclose(tot.to_numpy(), M.TEAM_PA_BUDGET)
+
+    projected = out[out.pt_tier != TIER_FLOOR]
+    tot = projected.groupby("Pred_target_team_id")["Proj_PA"].sum()
+    assert np.allclose(tot.to_numpy(), M.TEAM_PA_BUDGET), \
+        "the players who will actually bat get the whole budget"
+
     floor = out[out.pt_tier == TIER_FLOOR]["Proj_PA"]
     assert (floor == 1.0).all(), "the verifier checks this exactly"
+
+    # And the club's rows therefore sum to budget + one per floor player.
+    everyone = out.groupby("Pred_target_team_id")["Proj_PA"].sum()
+    n_floor = out[out.pt_tier == TIER_FLOOR].groupby(
+        "Pred_target_team_id").size()
+    assert np.allclose(everyone.to_numpy(),
+                       M.TEAM_PA_BUDGET + n_floor.reindex(everyone.index)
+                       .fillna(0).to_numpy())
+
+
+def test_a_deeper_farm_system_does_not_cost_the_major_league_roster():
+    """The cross-club bias the old closure introduced, pinned directly."""
+    shallow = _hitters()
+    deep = _hitters()
+    # Same major-league roster, one club carrying far more depth rows.
+    extra = deep.head(40).copy()
+    extra["PlayerId"] = range(900_000, 900_040)
+    extra["pt_tier"] = TIER_FLOOR
+    deep = pd.concat([deep, extra], ignore_index=True)
+
+    s_out, _, _ = _run(shallow, "hitter")
+    d_out, _, _ = _run(deep, "hitter")
+
+    def regular_pa(frame):
+        f = frame[frame.pt_tier != TIER_FLOOR]
+        return f.groupby("Pred_target_team_id")["Proj_PA"].sum().max()
+
+    assert regular_pa(d_out) == pytest.approx(regular_pa(s_out), rel=1e-9)
 
 
 def test_nobody_exceeds_the_physical_ceiling():

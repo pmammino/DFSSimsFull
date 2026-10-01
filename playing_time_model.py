@@ -510,9 +510,24 @@ def allocate_playing_time(players: pd.DataFrame, kind: str, *,
     Returns (players with Proj_PA/Proj_IP, per-team diagnostics).
 
     Floor-tier and depth-role players are held at exactly PT_FLOOR_PA /
-    PT_FLOOR_IP and their total is SUBTRACTED from the budget before the
-    projected players are scaled, so the team still closes exactly and the
-    verifier's "0 not at 1.0" check keeps passing.
+    PT_FLOOR_IP and sit OUTSIDE the budget: the projected players close on
+    the whole of it, and the floor rows are carried alongside. The team's
+    rows therefore sum to `budget + n_floor`, by design.
+
+    They used to be subtracted from the budget instead, which took their
+    plate appearances off the major-league roster — the opposite of what the
+    floor is for, and what `team_context.roster_volume_weights` says it is
+    for in as many words: "the 1-PA floor exists so a player is present,
+    ranked and joinable — not so he takes playing time away from the
+    major-league roster."
+
+    The cost of getting that backwards was not small, and it was worst where
+    it was least visible. How many floor players a club carries is a fact
+    about DATA COVERAGE — how many of its farmhands the MLE step managed to
+    translate — not about baseball, and it ranged from 85 to 136 pitchers.
+    So a club's real pitchers were handed 5.8% to 9.3% fewer innings than
+    its budget, with a 3.5-point spread BETWEEN clubs that tracked nothing
+    but the depth of the feed. Hitters lost 1.0% to 1.4% the same way.
 
     Free agents and players with no club are excluded from closure and keep
     their raw role volume: they are expected to sign somewhere, and folding
@@ -547,8 +562,8 @@ def allocate_playing_time(players: pd.DataFrame, kind: str, *,
         floor_rows = at_floor.loc[idx]
         reserve = float(reserves.get(int(team_id), {}).get(share_key, 0.0) or 0.0)
         reserved = budget * reserve
-        floor_total = float(floor_rows.sum()) * floor_v
-        target = budget - reserved - floor_total
+        # The floor rows are NOT deducted: they sit outside the budget.
+        target = budget - reserved
         proj_idx = block.index[~floor_rows]
         if len(proj_idx) == 0 or target <= 0:
             rows.append({"team_id": int(team_id), "n": len(block),

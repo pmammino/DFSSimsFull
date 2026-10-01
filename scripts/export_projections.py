@@ -513,8 +513,19 @@ def main(argv=None) -> int:
             df.to_csv(path, index=False)
             print(f"  wrote {path.name}  ({len(df):,} rows x {len(df.columns)} cols)")
 
-    r_scored = float(hitters["R"].sum())
-    r_allowed = float(pitchers["R"].sum())
+    # Projected players only. The floor tier is 2,179 hitters and 3,101
+    # pitchers carried at 1 PA / 1 IP apiece so they are present, ranked and
+    # joinable — placeholders, not projections that they will play. Summing
+    # their runs into a league total adds a phantom 3,101 innings of pitching
+    # to a 43,740-inning league and makes the two sides disagree by 5%.
+    def _projected(df):
+        if "Tier" not in df.columns:
+            return df
+        keep = df["Tier"].astype(str) != "floor"
+        return df[keep] if keep.any() else df
+
+    r_scored = float(_projected(hitters)["R"].sum())
+    r_allowed = float(_projected(pitchers)["R"].sum())
     meta = {
         "year": y, "n_hit": len(hitters), "n_pit": len(pitchers),
         "stamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),

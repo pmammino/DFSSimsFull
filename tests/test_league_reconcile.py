@@ -247,6 +247,49 @@ def test_a_row_that_carries_no_distribution_is_left_alone():
     assert h2.loc[h2.index[1], PROB_EVENTS].isna().all()
 
 
+def test_the_floor_tier_does_not_vote_on_what_the_league_looks_like():
+    """Depth players are placeholders, and there are a lot of them.
+
+    2,179 hitters and 3,101 pitchers sit at the 1 PA / 1 IP floor so they
+    are present, ranked and joinable. That is 1.2% of the hitter weight but
+    7.1% of the pitcher weight — enough to drag a league aggregate toward
+    organizational filler if they were allowed to count.
+    """
+    h = _hitters(n=60, seed=30)
+    h["pt_tier"] = "projected"
+    depth = _hitters(n=400, tilt={"P_K": 1.6}, seed=31)   # nothing like MLB
+    depth["pt_tier"] = "floor"
+    depth["Proj_PA"] = 1.0
+    pool = pd.concat([h, depth], ignore_index=True)
+
+    only_real = league_vector(h, h["Proj_PA"].to_numpy(float))["P_K"]
+    assert league_vector(
+        pool, pool["Proj_PA"].to_numpy(float))["P_K"] != pytest.approx(
+            only_real, rel=1e-6), "fixture must be able to show the drag"
+
+    from league_reconcile import _volume
+    assert league_vector(pool, _volume(pool, "Proj_PA"))["P_K"] == \
+        pytest.approx(only_real, rel=1e-9)
+
+
+def test_floor_players_are_corrected_even_though_they_do_not_vote():
+    h = _hitters(n=60, seed=32)
+    h["pt_tier"] = ["projected"] * 59 + ["floor"]
+    h.loc[h.index[-1], "Proj_PA"] = 1.0
+    before = h[PROB_EVENTS].iloc[-1].to_numpy().copy()
+    h2, _, rep = reconcile_league(h, _pitchers(tilt={"P_K": 1.10}))
+    assert rep["applied"]
+    assert not np.allclose(before, h2[PROB_EVENTS].iloc[-1].to_numpy())
+
+
+def test_an_all_floor_frame_does_not_lose_every_weight():
+    """Zeroing everything would make the aggregate undefined."""
+    from league_reconcile import _volume
+    h = _hitters(n=20)
+    h["pt_tier"] = "floor"
+    assert _volume(h, "Proj_PA").sum() > 0
+
+
 def test_zero_volume_players_are_still_corrected():
     """They do not vote on the league, but their rates must still be right."""
     h, p = _hitters(), _pitchers(tilt={"P_K": 1.08})
