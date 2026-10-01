@@ -139,7 +139,12 @@ PITCHER_ROLES: list[dict] = [
     # the rotation: the ace median lands at 178.6 against a real 178.8, and
     # the count of starters over 180 innings at 17 against a real 17, where
     # before they were 165.9 and 10.
-    dict(role="End-of-Rotation Starter (SP4-5)", ip=110, gs=25, g=26,
+    # The starts anchor comes down WITH the innings, 25 -> 21, because the
+    # two are not independent: cutting innings alone drops this role's
+    # implied depth from 5.2 innings a start to 4.4, below what a starter
+    # who is in the rotation at all goes. 110/21 puts it back at 5.2,
+    # between the mid-rotation 5.7 and a bullpen game.
+    dict(role="End-of-Rotation Starter (SP4-5)", ip=110, gs=21, g=26,
          sv=0.00, hld=0.002,
          note="Shorter leash; occasional bullpen appearance. The hold weight "
               "is tiny because a club carries 5+ of these and 0.01 each came "

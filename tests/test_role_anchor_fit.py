@@ -191,3 +191,37 @@ def test_nobody_starts_more_games_than_a_rotation_turn_allows():
                         load_roster_reserves(TEAM_OVERRIDE_PATH(2027)))
     assert out["Proj_GS"].max() <= M.PT_MAX_GS + 1e-6
     assert out["Proj_G"].max() <= M.PT_MAX_G + 1e-6
+
+
+@needs_data
+def test_a_club_starts_exactly_the_games_it_plays():
+    """162 games, 162 starting pitchers. The hardest budget of the three,
+    and the only one that was not being enforced.
+
+    Unclosed, the anchors simply added up to more than a season — one ace,
+    two mid-rotation and two end-of-rotation come to 168 starts before
+    anybody is scaled — and the staff started 178.5 games a club, 5,354
+    across a league that has 4,859.
+    """
+    from fit_role_anchors import _projected
+    from team_context import TEAM_OVERRIDE_PATH, load_roster_reserves
+    f = pd.read_csv(FIELDING, low_memory=False)
+    players = pd.read_csv(PITCHERS, low_memory=False)
+    out, _ = _projected(players, "pitcher", f,
+                        load_roster_reserves(TEAM_OVERRIDE_PATH(2027)))
+    per_club = out.groupby("Pred_target_team_id")["Proj_GS"].sum()
+    assert per_club.max() <= M.TEAM_GS_BUDGET + 0.5
+    assert per_club.min() >= M.TEAM_GS_BUDGET - 1.5
+    assert out["Proj_GS"].max() <= M.PT_MAX_GS + 1e-6
+
+
+def test_the_end_of_rotation_starts_anchor_moved_with_its_innings():
+    """They are not independent: innings over starts is how deep a starter
+    goes, and cutting one alone sent this role to 4.4 innings a start —
+    shallower than a pitcher who is in the rotation at all goes."""
+    row = RT.role_anchor("End-of-Rotation Starter (SP4-5)", "pitcher")
+    mid = RT.role_anchor("Mid-Rotation Starter (SP2-3)", "pitcher")
+    assert row["gs"] == pytest.approx(21)
+    depth = row["ip"] / row["gs"]
+    assert 4.9 <= depth <= 5.5, f"{depth:.2f} innings per start"
+    assert depth < mid["ip"] / mid["gs"], "an SP4 does not outlast an SP2"
