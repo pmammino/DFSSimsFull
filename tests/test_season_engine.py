@@ -21,7 +21,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import season_engine as se  # noqa: E402
-from team_context import career_pa_weights  # noqa: E402
+from team_context import career_pa_weights, roster_volume_weights  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "out"
@@ -116,11 +116,52 @@ def test_end_to_end_run_covers_all_thirty_teams():
 
 @needs_projections
 def test_end_to_end_league_factor_closes_to_one():
-    """The closure constraint, on real data rather than a fixture."""
+    """The closure constraint, on real data rather than a fixture.
+
+    Weighted by `roster_volume_weights`, which is what the engine normalizes
+    against, so the closure is exact by construction. This used to use
+    `career_pa_weights` and still passed at 1e-9 — but only because the
+    committed artifacts predated the playing-time step and carried no
+    `pt_tier`, which makes the two functions the same function. On a frame
+    that has tiers they differ by design, and `team_context` says so: a
+    floor-tier player RECEIVES a team factor, so his R/RBI are
+    contextualized, but he must not CONSUME a share of the 6,156 plate
+    appearances his club actually bats.
+    """
     hitters = se.run(TARGET, OUT, write=False)["hitters"]
     mean = np.average(hitters["team_factor"],
-                      weights=career_pa_weights(hitters))
+                      weights=roster_volume_weights(hitters))
     assert mean == pytest.approx(1.0, abs=1e-9)
+
+
+@needs_projections
+def test_the_floor_tier_cannot_move_league_runs():
+    """The property the exact check above is a proxy for.
+
+    Organizational depth is in the frame at the 1-PA floor — 2,179 hitters
+    across 30 clubs on the current artifacts, about 73 per club against a
+    6,156-PA budget. They are carried so they are present, ranked and
+    joinable. If they could shift the league's run total, that would be
+    plate appearances conjured out of roster bookkeeping.
+
+    So this is deliberately loose: it asserts the floor tier is NEGLIGIBLE,
+    not that it is absent. Counting every one of them at a full share is
+    what the tight assertion above would be doing if it used
+    `career_pa_weights`.
+    """
+    hitters = se.run(TARGET, OUT, write=False)["hitters"]
+    # Guard: without tiers the two weightings are the SAME function, and
+    # both of these tests degenerate into the same trivial check. That is
+    # how the old assertion stayed green on artifacts that predated the
+    # playing-time step while being wrong about what it measured.
+    assert "pt_tier" in hitters.columns, (
+        "the committed artifacts predate the playing-time step; this test "
+        "and the closure test above are not exercising what they claim")
+    assert (hitters["pt_tier"].astype(str) == "floor").any()
+
+    with_floor = np.average(hitters["team_factor"],
+                            weights=career_pa_weights(hitters))
+    assert with_floor == pytest.approx(1.0, abs=1e-3)
 
 
 @needs_projections
@@ -157,10 +198,11 @@ def test_a_real_team_change_moves_both_clubs(tmp_path):
     na = after["teams"].set_index("team_id")["n_hitters"]
     assert na[COL] == nb[COL] + len(movers)
 
-    # And league runs are conserved.
+    # And league runs are conserved — under the weighting the engine closes
+    # against, so this is exact rather than approximately true.
     ah = after["hitters"]
     assert np.average(ah["team_factor"],
-                      weights=career_pa_weights(ah)) == pytest.approx(1.0, abs=1e-9)
+                      weights=roster_volume_weights(ah)) == pytest.approx(1.0, abs=1e-9)
 
 
 @needs_projections
