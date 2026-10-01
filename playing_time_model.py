@@ -90,8 +90,26 @@ TEAM_IP_BUDGET = 162.0 * 9.0                  # 1,458
 # modern era is ~250. These exist so a shallow roster cannot scale one player
 # to an impossible workload during closure — without them, a team with few
 # projected players hands its whole budget to whoever is there.
+#
+# PT_MAX_IP is the one that had to come down. 230 is a bound from an era
+# that ended: the real league leader threw 208.7, 207.0 and 214.0 innings in
+# 2024, 2025 and 2026, and exactly three pitchers a season clear 200. A
+# ceiling set 7% above anything that has happened recently is not a physical
+# bound, it is slack, and the closure spent it — the projected leader sat at
+# 228.2, above every real season in the sample. 215 still allows a workload
+# nobody has reached since 2023 while stopping the closure inventing one.
+#
+# The same applies to starts. A five-man rotation turns over 32 or 33 times
+# in 162 games, and the real maxima in 2024-26 were 33, 34 and 34, with
+# nobody reaching 35 and about seven pitchers a season clearing 33. The
+# clip was 40, which let the closure hand out 37.4 and 39.2 starts —
+# impossible, and visible on the face of the spreadsheet. Appearances are
+# left where they were: the real maxima are 79, 81 and 83 against a clip
+# of 82, which is the right kind of close.
 PT_MAX_PA = 760.0
-PT_MAX_IP = 230.0
+PT_MAX_IP = 215.0
+PT_MAX_GS = 34.0
+PT_MAX_G = 82.0
 
 # Closure is an iterative proportional fit: scale, clip anyone over the
 # ceiling, redistribute the remainder, repeat. Converges in two or three passes
@@ -303,8 +321,17 @@ def assign_default_roles(players: pd.DataFrame, kind: str, *,
 # a full-time player, whatever last year looked like); above the ceiling the
 # player is probably mis-roled, and the override file is the right fix for that
 # rather than letting one season's volume silently promote him.
-EVIDENCE_FACTOR_MIN = 0.45
-EVIDENCE_FACTOR_MAX = 1.30
+# How far a player's own volume history may move him off his role's anchor.
+# Narrowed from 0.45-1.30 against the real rank curve (see
+# scripts/fit_role_anchors.py): the wider band was letting team talent push
+# aces apart far more than real workloads do. Real #1 starters cluster
+# tightly — p25 171, median 179, p75 188 — because a rotation slot is
+# governed by health and a five-man turn, not by how good the pitcher is.
+# The projections spanned 152 to 228. Tightening improves the weighted
+# curve error on both sides (pitchers 12.8% -> 12.2%, hitters 10.9% ->
+# 10.7%), so it is not a trade.
+EVIDENCE_FACTOR_MIN = 0.55
+EVIDENCE_FACTOR_MAX = 1.22
 
 
 def _evidence_factor(players: pd.DataFrame, kind: str) -> pd.Series:
@@ -356,7 +383,35 @@ def _evidence_factor(players: pd.DataFrame, kind: str) -> pd.Series:
 # the wrong competition. Kept only so an external caller referencing it does
 # not break; nothing here reads it.
 ROSTER_DEPTH_CORE = {"hitter": 13, "pitcher": 13}   # deprecated
-ROSTER_DEPTH_DECAY = 0.78
+#
+# Fitted per side against five seasons of real playing time in
+# out/fielding_history_<year>.csv; see scripts/fit_role_anchors.py, which
+# builds the real within-club rank curve and scores a candidate against it.
+#
+# One shared 0.78 was leaving the pitching staff far too flat. Weighted by
+# the real innings at each rank — a 15% miss on an ace matters, the same
+# miss on the 38th arm does not — against the real 2024-26 curve:
+#
+#     decay   wt err   ace median   league max   arms over 180 IP
+#     real                   178.8        214.0                 17
+#     0.78     12.9%         165.9        228.2                 10
+#     0.70     12.7%         174.1        215.0                 16
+#     0.66     12.8%         175.8        215.0                 16
+#     0.60     14.7%         181.7        230.0                 25
+#
+# 0.66 reproduces the ace median and the number of workhorse starters, at
+# the same global error as 0.78. The innings it takes back come from ranks
+# 13-20, which were running 10-18% heavy — a club was spreading its budget
+# over 32 arms where a real club uses 29, and the surplus came off the top
+# of the rotation.
+#
+# The hitter side was already within a few percent of its real curve, and
+# the sweep moved it by 0.5 points with the top of the roster getting
+# WORSE, so it keeps the value it had. Do not re-merge these into one
+# constant: the two sides are not the same shape.
+ROSTER_DEPTH_DECAY_HITTER = 0.78
+ROSTER_DEPTH_DECAY_PITCHER = 0.66
+ROSTER_DEPTH_DECAY = ROSTER_DEPTH_DECAY_HITTER   # back-compat alias
 ROSTER_DEPTH_FLOOR = 0.04
 
 # Minimum evidence (batters faced) before a reliever is considered for a
@@ -408,7 +463,9 @@ def apply_roster_depth(players: pd.DataFrame, kind: str, *,
     over = rank - slots
     beyond = over[over > 0]
     if len(beyond):
-        factor = np.maximum(ROSTER_DEPTH_DECAY ** beyond, ROSTER_DEPTH_FLOOR)
+        decay = (ROSTER_DEPTH_DECAY_PITCHER if kind == "pitcher"
+                 else ROSTER_DEPTH_DECAY_HITTER)
+        factor = np.maximum(decay ** beyond, ROSTER_DEPTH_FLOOR)
         out.loc[beyond.index, "pt_depth_factor"] = factor.to_numpy()
     out["pt_raw"] = out["pt_raw"] * out["pt_depth_factor"]
     return out
@@ -626,8 +683,8 @@ def allocate_playing_time(players: pd.DataFrame, kind: str, *,
                  / pd.to_numeric(out["pt_anchor"], errors="coerce")
                  .replace(0, np.nan))
         ratio = ratio.replace([np.inf, -np.inf], np.nan).fillna(1.0)
-        out["Proj_GS"] = (out["pt_anchor_GS"] * ratio).clip(0, 40).round(1)
-        out["Proj_G"] = (out["pt_anchor_G"] * ratio).clip(0, 82).round(1)
+        out["Proj_GS"] = (out["pt_anchor_GS"] * ratio).clip(0, PT_MAX_GS).round(1)
+        out["Proj_G"] = (out["pt_anchor_G"] * ratio).clip(0, PT_MAX_G).round(1)
     else:
         pa = pd.to_numeric(out[vol_out], errors="coerce")
         out["Proj_G"] = (pa / PA_PER_TEAM_GAME * 9.0).clip(0, 162).round(1)
