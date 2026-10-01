@@ -57,6 +57,22 @@ SINGLE_MAX_RATIO = 1.05
 # catch gross drift without crying wolf. Current refresh sits at 0.984.
 TB_PER_BIP_BAND = (0.95, 1.05)
 
+# Offense and defense are two views of one league, so their run rates are the
+# same number counted twice. League reconciliation (step 13c) closes this to
+# machine precision, which makes the band a check that the step RAN, not a
+# tolerance for a real disagreement. It was +3.8% before reconciliation
+# existed, and +4.3% on the run totals.
+OFFENSE_DEFENSE_MAX_GAP = 0.01
+
+# The same identity on the volume side: every plate appearance is one batter
+# faced. This one is NOT closed by reconciliation — it is the joint
+# consistency of TEAM_PA_BUDGET (162 x 38), TEAM_IP_BUDGET (162 x 9) and
+# TBF_PER_IP_CALIBRATION, which together pin a required batters-faced-per-
+# inning of 6156/1458 = 4.222 against a realized 4.200. Measured at -0.52%,
+# so the band is set where it will catch a drift without failing on a
+# residual we have named and not yet resolved.
+VOLUME_MAX_GAP = 0.015
+
 PASS, FAIL, WARN = "PASS", "FAIL", "WARN"
 
 
@@ -499,7 +515,17 @@ def check_league_calibration(checks: Checks, h: pd.DataFrame,
     # fabricated defect in one direction and a mask for a real one in the other.
     rp = pd.to_numeric(p["R_per_PA"], errors="coerce")
     ok = rp.notna().to_numpy()
-    wp = np.asarray(volume_weights(p), dtype=float)[ok]
+    # Weight by BATTERS FACED, not innings. R_per_PA is runs per batter
+    # faced, and innings are not its denominator — a high-strikeout,
+    # high-walk pitcher faces more batters per inning than a contact pitcher
+    # who works around them. Weighting a per-PA rate by innings understated
+    # this gap at +2.3% when it was really +3.8%, by under-counting exactly
+    # the pitchers who put men on base.
+    from league_reconcile import batters_faced
+    wp_all = batters_faced(p)
+    if not np.isfinite(wp_all).any() or np.nansum(wp_all) <= 0:
+        wp_all = np.asarray(volume_weights(p), dtype=float)
+    wp = np.asarray(wp_all, dtype=float)[ok]
     if wp.sum() <= 0:
         checks.add(WARN, "offense/defense",
                    f"no weighted pitcher R_per_PA ({int(ok.sum())} of "
@@ -507,10 +533,29 @@ def check_league_calibration(checks: Checks, h: pd.DataFrame,
         return
     rpa_p = float(np.average(rp.to_numpy()[ok], weights=wp))
     gap = abs(rpa_h - rpa_p) / max(rpa_p, 1e-9)
-    checks.add(PASS if gap <= 0.05 else FAIL, "offense/defense",
+    # Reconciliation closes this identically, so the band is about catching a
+    # step that did not run rather than about tolerating a real disagreement.
+    checks.add(PASS if gap <= OFFENSE_DEFENSE_MAX_GAP else FAIL,
+               "offense/defense",
                f"hitter R/PA {rpa_h:.4f} vs pitcher {rpa_p:.4f} "
-               f"({gap * 100:+.1f}%)")
+               f"({gap * 100:+.1f}%)"
+               + ("" if gap <= OFFENSE_DEFENSE_MAX_GAP else
+                  " — did league reconciliation run? (step 13c)"))
     checks.add(PASS, "implied R/G", f"{rpa_h * 38:.2f} (MLB ~4.40-4.50)")
+
+    # Runs scored must equal runs allowed, which needs the VOLUMES to agree
+    # as well as the rates: every plate appearance is one batter faced.
+    pa_total = float(np.nansum(np.asarray(wh, dtype=float)))
+    tbf_total = float(np.nansum(np.asarray(wp_all, dtype=float)))
+    if pa_total > 0 and tbf_total > 0:
+        vol = tbf_total / pa_total - 1.0
+        status = PASS if abs(vol) <= VOLUME_MAX_GAP else FAIL
+        checks.add(status, "PA vs batters faced",
+                   f"{pa_total:,.0f} PA vs {tbf_total:,.0f} faced "
+                   f"({vol:+.2%})"
+                   + ("" if status == PASS else
+                      " — TEAM_PA_BUDGET, TEAM_IP_BUDGET and "
+                      "TBF_PER_IP_CALIBRATION are not mutually consistent"))
 
 
 def main(argv=None) -> int:

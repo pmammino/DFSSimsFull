@@ -383,6 +383,69 @@ XGB_PARAMS = dict(
 # Outcome classes the XGBoost predicts (single / double / triple / home_run / out)
 BIP_OUTCOMES = ["out", "single", "double", "triple", "home_run"]
 
+# The nine per-PA events. They partition a plate appearance, so they sum to
+# exactly 1 for every player.
+PROB_EVENTS = ["P_K", "P_BB", "P_HBP", "P_SF", "P_HR", "P_3B", "P_2B", "P_1B",
+               "P_BIPOut"]
+
+# ── League reconciliation ────────────────────────────────────────────────────
+# Share of the reconciled league event vector taken from the HITTER side, per
+# event; the rest comes from the pitchers. See league_reconcile.py.
+#
+# These are not one number because the two sides are not equally good at the
+# same things, and for five of the nine events we can MEASURE which is
+# better. The batted-ball events have ground truth in bip_inputs/, and both
+# sides are describing the same batted balls:
+#
+#     per BIP     real     hitters         pitchers
+#     1B       0.20916   1.003x           0.989x
+#     2B       0.06168   1.000x           0.991x
+#     3B       0.00538   1.002x           0.918x
+#     HR       0.04466   0.996x           0.985x
+#     TB/BIP   0.52729   1.000x           0.986x
+#     mean |error|       0.25%            2.89%
+#
+# The hitter side is an order of magnitude closer, and that is not an
+# accident of this run — it is what the rest of the pipeline already assumes.
+# Pitcher batted-ball profiles are less stable year to year, so they are
+# deliberately regressed harder (OUT_ADAPTIVE_K_PITCHER 400 against 200 for
+# hitters) and imputed more heavily (IMP_TARGET_N_PITCHER 400 against 150).
+# Blending those two 50/50 would throw away the better estimate.
+#
+# It is not 1.0 because pitchers do have real batted-ball skill — that is why
+# the pipeline models it at all — so a tenth of the weight stays with them.
+#
+# K / BB / HBP / SF get 0.5, honestly: there is no ground truth in the repo
+# for them, the two sides disagree in OPPOSITE directions, and against the
+# soft league reference each is wrong on the one the other gets right.
+#
+#     event   hitters   pitchers   midpoint   real (approx)
+#     K/PA     0.2202     0.2288     0.2245      0.223
+#     BB/PA    0.0861     0.0829     0.0845      0.084
+#
+# Do not tune these to move league R/G. The intercept in pitcher_outputs is
+# not that dial either. If the reconciled league lands at the wrong LEVEL,
+# both sides are wrong and the cause is upstream, in the rate models and the
+# batted-ball pool. These weights only decide how a DISAGREEMENT is split.
+LEAGUE_HITTER_WEIGHT = {
+    # measured: the hitter side carries the batted-ball evidence
+    "P_1B":     0.90,
+    "P_2B":     0.90,
+    "P_3B":     0.90,
+    "P_HR":     0.90,
+    "P_BIPOut": 0.90,
+    # no ground truth available; split the difference
+    "P_K":      0.50,
+    "P_BB":     0.50,
+    "P_HBP":    0.50,
+    "P_SF":     0.50,
+}
+
+# Rescaling the events then renormalizing each player back to 1.0 pulls the
+# league aggregate slightly off target, so it iterates. Four passes puts the
+# residual below 1e-6, far under anything that matters.
+LEAGUE_RECONCILE_PASSES = 4
+
 # ── Season-weighting for the per-player aggregation step ─────────────────────
 # These are the LEGACY fixed weights — kept for backwards compatibility but
 # overridden by adaptive weights when launch-profile meta is available.
