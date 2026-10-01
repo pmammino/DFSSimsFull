@@ -1379,6 +1379,49 @@ def main():
             print(f"  playing-time model FAILED for {_kind}s "
                   f"({type(e).__name__}: {e}) — leaving tiers unmodeled")
 
+    # Step 13c — reconcile the two sides onto one league.
+    #
+    # Must come after the playing-time model: the league aggregate is a
+    # volume-weighted quantity, and until Proj_PA and Proj_IP exist there is
+    # nothing to weight it by. Every per-PA family is rescaled together, so
+    # the park-adjusted and platoon-split vectors stay consistent with the
+    # neutral one.
+    print("\n" + "═" * 70)
+    print("STEP 13c: League reconciliation (offense and defense are one league)")
+    print("═" * 70)
+    try:
+        from league_reconcile import reconcile_league, reconcile_report
+        h_final, p_final, _rec = reconcile_league(h_final, p_final)
+        print(reconcile_report(_rec))
+        if _rec.get("applied"):
+            # The pitcher summary outputs are functions of the event vector,
+            # so they are stale the moment it moves. Recompute rather than
+            # ship an RA9 that disagrees with the probabilities beside it.
+            from pitcher_outputs import compute_ra9, RUNS_INTERCEPT_DEFAULT
+            _ratio = p_final.get("er_ra_ratio")
+            for _sfx in ("", "_park"):
+                if f"P_K{_sfx}" not in p_final.columns:
+                    continue
+                _ra9, _era, _rpa, _tbf = compute_ra9(
+                    p_final, suffix=_sfx,
+                    intercept=RUNS_INTERCEPT_DEFAULT,
+                    er_ra_ratio=_ratio if _ratio is not None else 1.0,
+                )
+                p_final[f"R_per_PA{_sfx}"]   = _rpa
+                p_final[f"TBF_per_IP{_sfx}"] = _tbf
+                p_final[f"RA9{_sfx}"]        = _ra9
+                p_final[f"ERA{_sfx}"]        = _era
+                if f"P_HBP{_sfx}" in p_final.columns:
+                    p_final[f"HBP_pct{_sfx}"] = p_final[f"P_HBP{_sfx}"] * 100.0
+            print(f"\n  recomputed pitcher RA9 / ERA / R_per_PA / TBF_per_IP "
+                  f"from the reconciled events — league RA9 "
+                  f"{p_final['RA9'].mean():.2f}")
+    except Exception as e:
+        # Same posture as the playing-time step: a failure here leaves the
+        # output valid but unreconciled, and says so loudly.
+        print(f"  league reconciliation FAILED "
+              f"({type(e).__name__}: {e}) — the two sides remain unreconciled")
+
     # Names
     chadwick = fetch_chadwick_lookup(force=args.force)
     h_final = _attach_names(h_final, chadwick, "PlayerId")
