@@ -459,16 +459,36 @@ def _load(target_year: int, out_dir: Path, kind: str) -> list[dict]:
             "Age": (int(r["Age"]) if pd.notna(r.get("Age")) else None),
             "Bats": r.get("BatSide"),
             "Throws": r.get("PitchHand"),
-            "Pos": None,
+            "Pos": r.get("pt_position") if pd.notna(r.get("pt_position")) else None,
             "Last PA": (float(r["Last_PA"]) if pd.notna(r.get("Last_PA")) else None),
             "Last TBF": (float(r["Last_PA"]) if pd.notna(r.get("Last_PA")) else None),
             "Career": (float(r["Career_PA"]) if pd.notna(r.get("Career_PA")) else None),
+            # The role the PLAYING-TIME MODEL assigned, where it ran. That is
+            # the assignment the projections were actually built on, and this
+            # sheet exists to be a view of it that a person can edit.
+            #
+            # It used to re-derive a suggestion here instead, from
+            # `suggest_*_role` called WITHOUT the position or the platoon
+            # share — the weaker signature from before those existed. The two
+            # disagreed badly: the workbook showed four hitter roles with no
+            # catchers, no designated hitters and no platoon bats, and a
+            # pitching staff with no closer on any club, while the
+            # projections beside it had all twelve. Anyone opening the sheet
+            # to adjust a role was editing a different set of labels from the
+            # ones the numbers came from.
+            #
+            # The fallback is the old call, for a frame written before the
+            # playing-time step existed.
             "Suggested Role": (
-                _suggest_hitter_role(r, reference) if kind == "hitter"
-                else _suggest_pitcher_role(
-                    r, reference, staff_rank.get(int(r["PlayerId"])))),
-            "Role Start": "Opening Day",
-            "Availability": 1.00,
+                r["pt_role"] if pd.notna(r.get("pt_role"))
+                else (_suggest_hitter_role(r, reference) if kind == "hitter"
+                      else _suggest_pitcher_role(
+                          r, reference, staff_rank.get(int(r["PlayerId"]))))),
+            "Role Start": (r.get("pt_role_start")
+                           if pd.notna(r.get("pt_role_start"))
+                           else "Opening Day"),
+            "Availability": (float(r["pt_availability"])
+                             if pd.notna(r.get("pt_availability")) else 1.00),
             "Notes": None,
             # Pre-fill the assignment as a probability of 1 on its own role,
             # so the sheet round-trips: export it unchanged and the model
