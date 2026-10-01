@@ -536,7 +536,31 @@ TEAM_ID_COLS = ["Pred_target_team_id", "Pred_target_team_abbr",
 #
 # Consumers that must not treat a depth player as a real MLB option — the DFS
 # slate path above all — should filter on `pt_tier == "projected"`.
-PLAYING_TIME_COLS = ["pt_tier", "pt_source", "Proj_PA", "Proj_IP",
+# Everything `playing_time_model.project_playing_time` produces. This is a
+# WHITELIST — `_format_output` writes only the columns named here, so a
+# column the model adds and this list omits never reaches the CSV, and
+# nothing downstream can tell the difference between "the model did not
+# assign a role" and "the role was dropped on the way out".
+#
+# It omitted every role column, so `pt_role` and `pt_position` had never
+# once reached a pipeline-built export. The whole role taxonomy was
+# invisible: Role and Pos blank for all 6,941 players, and because the
+# export derives starts, appearances, saves and holds from the role, GS, G,
+# SV and HLD all summed to ZERO. The spreadsheets that did show roles were
+# ones I had rebuilt locally by calling the model directly, which bypasses
+# this function — so the defect was masked by the artifacts I was checking.
+#
+# tests/test_pipeline_output_contract.py fails if the model grows a column
+# that is not listed here.
+PLAYING_TIME_COLS = ["pt_tier", "pt_source", "pt_position", "pt_role",
+                     "pt_role_start", "pt_availability", "pt_role_source",
+                     "pt_family", "pt_anchor", "pt_season_share",
+                     "pt_evidence_factor", "pt_raw", "pt_depth_rank",
+                     "pt_depth_factor",
+                     "pt_anchor_G", "pt_anchor_GS",
+                     "pt_save_share", "pt_hold_share",
+                     "Proj_PA", "Proj_IP", "Proj_G", "Proj_GS",
+                     "Proj_SV_share", "Proj_HLD_share", "Proj_vL_share",
                      "evidence_volume", "evidence_season"]
 
 # Park-adjusted column groups (both hitters and pitchers). All neutral
