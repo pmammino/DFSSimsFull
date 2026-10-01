@@ -260,9 +260,16 @@ def assign_default_roles(players: pd.DataFrame, kind: str, *,
     if kind == "hitter":
         pos = primary_positions(fielding) if fielding is not None else {}
         out["pt_position"] = out["PlayerId"].map(pos)
+        # vL_share is the fraction of a player's PA that came against
+        # left-handed pitching. It is what makes a platoon bat identifiable:
+        # the role is about usage, and this measures the usage directly.
+        vl = (pd.to_numeric(out["vL_share"], errors="coerce")
+              if "vL_share" in out.columns
+              else pd.Series(np.nan, index=out.index))
         roles = [
-            suggest_hitter_role(r, reference, position=r.get("pt_position"))
-            for _, r in out.iterrows()
+            suggest_hitter_role(r, reference, position=r.get("pt_position"),
+                                vl_share=vl.iloc[i])
+            for i, (_, r) in enumerate(out.iterrows())
         ]
     else:
         ranks = _staff_ranks(out, team_col=team_col)
@@ -641,6 +648,43 @@ def project_playing_time(players: pd.DataFrame, kind: str, *,
                                            reserves=reserves)
     stats["roles"] = out["pt_role"].value_counts().to_dict()
     return out, team_diag, stats
+
+
+def allocate_opportunity(shares, pool: float, capacity) -> np.ndarray:
+    """Turn shares of a team pool into counts nobody could not have recorded.
+
+    A save and a hold are both APPEARANCES, so a pitcher cannot record more of
+    them than games he pitched in. The pool is a team quantity and the shares
+    are normalised across the staff, so a thin closer on a thin staff gets
+    normalised back up to a full share of a full pool — Félix Bautista drew
+    29.6 saves and 1.2 holds from 28.3 appearances.
+
+    Capping alone would quietly lose those saves. The pool is the club's
+    opportunity and somebody records it, so the surplus is redistributed to
+    team-mates who still have room, by the same iterative proportional fit
+    that closes playing time. If the whole staff is saturated the remainder is
+    dropped and the caller can see it in the totals — that is a real statement
+    about a roster too thin to finish its own games, not an error to hide.
+    """
+    shares = np.asarray(shares, dtype=float)
+    capacity = np.asarray(capacity, dtype=float)
+    counts = shares * float(pool)
+    for _ in range(_CLOSURE_PASSES):
+        over = counts > capacity
+        if not over.any():
+            break
+        surplus = float((counts[over] - capacity[over]).sum())
+        counts[over] = capacity[over]
+        room = capacity - counts
+        free = room > 1e-9
+        if not free.any() or surplus <= 1e-9:
+            break
+        w = counts[free]
+        # Spread by current allocation where there is any, else by headroom:
+        # a pitcher already taking saves is the likelier one to take more.
+        basis = w if w.sum() > 0 else room[free]
+        counts[free] = counts[free] + surplus * basis / basis.sum()
+    return np.minimum(counts, capacity)
 
 
 def playing_time_report(out: pd.DataFrame, team_diag: pd.DataFrame,

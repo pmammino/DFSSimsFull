@@ -98,40 +98,100 @@ HITTER_ROLES: list[dict] = [
               "stays present and joinable without moving any aggregate."),
 ]
 
+# The `sv` and `hld` weights are each role's share of its club's SAVE and HOLD
+# pool, and they are meant to PARTITION that pool — summed over a real staff
+# they should come to about 1.00.
+#
+# They did not. Summed over the staff this model actually produces (1 closer,
+# 2 setup, 3 middle, 15.3 depth arms) the old values came to 1.16 for saves
+# and 1.85 for holds, and normalising that back to 1 diluted exactly the roles
+# that should dominate:
+#
+#     closer took 62% of his club's saves, against a real ~80%
+#     closer saves ran to a 25 median, against a real 32-35
+#     setup men held 17, against a real ~25
+#     BULLPEN DEPTH ARMS took 21% of all league holds, against a real ~11%
+#
+# That last one was the big leak: 0.05 looks modest until it is multiplied by
+# the 15.3 up-and-down arms a club carries, which came to 0.767 — 41% of all
+# hold weight — for pitchers who are mopping up, not holding leads.
+#
+# Re-derived from how a real club's pool actually divides. Per team, roughly
+# 40 saves and 85 holds:
+#
+#     saves   closer 32 (80%) · setup 2.5 ea (12%) · middle 0.7 ea (5%)
+#             · depth 0.08 ea (3%)
+#     holds   setup 25 ea (59%) · middle 8 ea (28%) · depth 0.6 ea (11%)
+#             · closer 2 (2%)
+#
+# Weights below reproduce that against the model's own role counts: saves sum
+# to ~1.03, holds to ~0.99. They are still STARTING POINTS — `fit_opportunity_
+# rates` is what should replace them — but they are now the right shape, and
+# `test_save_and_hold_weights_partition_a_real_staff` fails if they drift.
 PITCHER_ROLES: list[dict] = [
     dict(role="Ace (SP1)", ip=195, gs=32, g=32, sv=0.00, hld=0.00,
          note="Front-line starter, ~6.1 IP per start."),
     dict(role="Mid-Rotation Starter (SP2-3)", ip=170, gs=30, g=30,
          sv=0.00, hld=0.00, note="~5.2 IP per start."),
     dict(role="End-of-Rotation Starter (SP4-5)", ip=130, gs=25, g=26,
-         sv=0.00, hld=0.01,
-         note="Shorter leash; occasional bullpen appearance."),
+         sv=0.00, hld=0.002,
+         note="Shorter leash; occasional bullpen appearance. The hold weight "
+              "is tiny because a club carries 5+ of these and 0.01 each came "
+              "to more hold weight than its closer."),
     dict(role="Innings-Limited Starter", ip=110, gs=22, g=22,
          sv=0.00, hld=0.00,
          note="Young arm on a workload cap, or a post-surgery ramp. Common "
               "now and materially different from End-of-Rotation."),
     dict(role="Swing Arm / Long Relief", ip=95, gs=8, g=30,
-         sv=0.01, hld=0.04, note="Moves between rotation and bullpen."),
-    dict(role="Opener", ip=55, gs=18, g=45, sv=0.00, hld=0.03,
+         sv=0.005, hld=0.02, note="Moves between rotation and bullpen."),
+    dict(role="Opener", ip=55, gs=18, g=45, sv=0.00, hld=0.01,
          note="Already modelled on the daily side (OPENER_BF_MEAN = 4.6 in "
               "slate_config), so it belongs here for consistency. Takes the "
               "start but faces ~4-5 batters."),
-    dict(role="Closer", ip=62, gs=0, g=60, sv=0.65, hld=0.05,
-         note="Takes the large majority of the team's save pool. Note IP is "
-              "NEARLY FLAT across bullpen roles — what differs is save and "
-              "hold context, which is why these roles are worth separating."),
-    dict(role="Late Inning RP (Setup)", ip=65, gs=0, g=65, sv=0.12, hld=0.28,
-         note="Primary hold earner; fills in for the closer."),
-    dict(role="Middle Relief", ip=60, gs=0, g=58, sv=0.04, hld=0.14,
+    dict(role="Closer", ip=62, gs=0, g=60, sv=0.80, hld=0.02,
+         note="Takes ~80% of his club's saves — one arm, one job, and the "
+              "reason this role exists. Note IP is NEARLY FLAT across bullpen "
+              "roles (62 / 65 / 60): what separates them is save and hold "
+              "context, which is why they are worth distinguishing at all."),
+    dict(role="Late Inning RP (Setup)", ip=65, gs=0, g=65, sv=0.06, hld=0.29,
+         note="Primary hold earner — two of them take ~59% of the hold pool "
+              "between them. Fills in for the closer, hence the save share."),
+    dict(role="Middle Relief", ip=60, gs=0, g=58, sv=0.017, hld=0.09,
          note="Bridge innings, lower leverage."),
-    dict(role="Bullpen Depth Arm", ip=40, gs=0, g=35, sv=0.01, hld=0.05,
-         note="Up and down from AAA; mop-up and spot duty."),
-    dict(role="Rehab / Injury Return", ip=60, gs=10, g=14, sv=0.02, hld=0.03,
+    dict(role="Bullpen Depth Arm", ip=40, gs=0, g=35, sv=0.004, hld=0.006,
+         note="Up and down from AAA; mop-up and spot duty. These weights are "
+              "SMALL ON PURPOSE: a club carries ~15 of them, so anything "
+              "larger swamps the roles that actually finish games."),
+    dict(role="Rehab / Injury Return", ip=60, gs=10, g=14, sv=0.01, hld=0.02,
          note="Expected back mid-season. Pair with a Role Start of Mid or "
               "Late rather than discounting the anchor twice."),
     dict(role="Depth (no MLB IP)", ip=1, gs=0, g=1, sv=0.00, hld=0.00,
          note="Organizational depth. Hits the 1 IP floor (PT_FLOOR_IP)."),
 ]
+
+# A representative staff, used to check the weights above partition the pool.
+# These are the per-club role counts this model actually produces, not an
+# idealisation — the weights have to sum to ~1 against the real distribution,
+# which is what the old ones failed to do.
+TYPICAL_STAFF: dict[str, float] = {
+    "Ace (SP1)": 0.6, "Mid-Rotation Starter (SP2-3)": 4.2,
+    "End-of-Rotation Starter (SP4-5)": 5.4, "Closer": 1.0,
+    "Late Inning RP (Setup)": 2.0, "Middle Relief": 3.0,
+    "Bullpen Depth Arm": 15.3,
+}
+
+
+def staff_weight_sums(staff: dict[str, float] | None = None) -> dict[str, float]:
+    """{'sv': x, 'hld': y} summed over a staff — both should be about 1.0."""
+    staff = staff or TYPICAL_STAFF
+    out = {"sv": 0.0, "hld": 0.0}
+    for role, n in staff.items():
+        a = role_anchor(role, "pitcher")
+        if a is None:
+            continue
+        out["sv"] += float(a["sv"]) * n
+        out["hld"] += float(a["hld"]) * n
+    return out
 
 # Role Start -> share of the season the role is held. This replaces the
 # Early/Mid/Late "callup" roles with a strictly more expressive parameter, and
@@ -362,7 +422,41 @@ def full_time_reference(volume) -> float:
     return ref if ref > 0 else 1.0
 
 
-def suggest_hitter_role(row, reference: float, position: str | None = None):
+# Thresholds for the default hitter role, as a share of a full-time workload.
+#
+# FULL_TIME_SHARE was 0.80 and produced 5.2 everyday regulars per club against
+# a real nine. The players it missed did not become bench bats — they became
+# STRONG SIDE PLATOON, which is worse than a volume error: that role carries
+# vL shares of 0.12 (LHB) and 0.45 (RHB), so labelling an everyday player a
+# platoon bat corrupts his handedness exposure, and that feeds the daily sim.
+# Paul Goldschmidt, Jazz Chisholm and Luis García were all platoon bats.
+# 0.60 yields 9.1 per club.
+FULL_TIME_SHARE = 0.60
+UTILITY_SHARE = 0.35
+
+# Platoon is a fact about USAGE, not volume, and the usage is already measured:
+# `vL_share` is the fraction of a player's plate appearances that came against
+# left-handed pitching, and the league sits at ~0.28. The tails are unambiguous
+# — among projected hitters, 44 of the 45 below 0.18 are left-handed and 29 of
+# the 30 above 0.40 are right-handed, which is precisely what a platoon looks
+# like. Inferring it from volume instead both missed the real platoon bats and
+# mislabelled regulars.
+WEAK_SIDE_VL = 0.40      # used AGAINST LHP; only ~28% of league PA are vs LHP
+STRONG_SIDE_VL = 0.18    # sits against same-handed pitching
+
+# Positions that make a player an infielder for the utility split. Utility IF
+# and Utility OF/4th OF carry different volume and platoon usage, and the
+# taxonomy says so — but without position data the heuristic could only ever
+# suggest the outfield one, so Utility IF was never assigned to anybody.
+INFIELD_POSITIONS = frozenset({"1B", "2B", "3B", "SS"})
+# A primary first baseman who plays every day is the DH/1B-DH job: the same
+# workload with no defensive injury exposure. Another role that had never
+# once been assigned, because the heuristic knew nothing about position.
+DH_POSITIONS = frozenset({"1B", "DH"})
+
+
+def suggest_hitter_role(row, reference: float, position: str | None = None,
+                        vl_share: float | None = None):
     """A default, NOT a projection.
 
     Scaled to a full-season equivalent so it survives a partial-season source
@@ -380,7 +474,9 @@ def suggest_hitter_role(row, reference: float, position: str | None = None):
         pa = row.get("Last_PA", 0) or 0
     share = float(pa) / max(reference, 1.0)      # 1.0 = a full-time workload
 
-    if str(position or "").upper() == "C":
+    pos = str(position or "").upper()
+
+    if pos == "C":
         # A catcher's ladder is compressed: the everyday job is ~500 PA, so
         # the same share of a full-time workload means a different role.
         if share >= 0.62:
@@ -389,12 +485,25 @@ def suggest_hitter_role(row, reference: float, position: str | None = None):
             return "Catcher - Tandem"
         return "Catcher - Backup"
 
-    if share >= 0.80:
+    # Platoon first, because it is about usage rather than volume and the two
+    # answer different questions. A right-hander who takes 45% of his plate
+    # appearances against left-handed pitching is a weak-side bat whatever his
+    # total — only ~28% of league PA are vs LHP, which is what caps him.
+    if vl_share is not None and not pd.isna(vl_share):
+        if float(vl_share) >= WEAK_SIDE_VL:
+            return "Weak Side Platoon"
+        if float(vl_share) <= STRONG_SIDE_VL and share >= UTILITY_SHARE:
+            return "Strong Side Platoon"
+
+    if share >= FULL_TIME_SHARE:
+        # An everyday first baseman is the DH/1B-DH job: same workload, no
+        # defensive injury exposure.
+        if pos in DH_POSITIONS:
+            return "Everyday DH / 1B-DH"
         return "Full Time"
-    if share >= 0.55:
-        return "Strong Side Platoon"
-    if share >= 0.35:
-        return "Utility OF / 4th OF"
+    if share >= UTILITY_SHARE:
+        return "Utility IF" if pos in INFIELD_POSITIONS \
+            else "Utility OF / 4th OF"
     # Bench Bat is the FLOOR for a projected-tier player, not the depth role.
     # The depth role routes a player to the 1 PA placeholder, which would
     # contradict the tier he already cleared: `pt_tier == "projected"` means he

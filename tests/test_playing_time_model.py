@@ -671,3 +671,212 @@ def test_no_pitcher_takes_a_save_share_without_innings():
     no_ip = out[out["Proj_IP"] <= 1.0]
     assert (no_ip["Proj_SV_share"] == 0).all()
     assert (no_ip["Proj_HLD_share"] == 0).all()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Save and hold weights must PARTITION the club's pool
+#
+# Summed over the staff this model produces, the old weights came to 1.16
+# (saves) and 1.85 (holds). Normalising that back to 1 diluted the roles that
+# should dominate: the closer took 62% of his club's saves against a real
+# ~80%, closer saves ran to a 25 median against a real 32-35, and BULLPEN
+# DEPTH ARMS took 21% of all league holds against a real ~11% — 0.05 each
+# looks modest until it is multiplied by the 15 such arms a club carries.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_save_and_hold_weights_partition_a_real_staff():
+    from role_taxonomy import staff_weight_sums
+    s = staff_weight_sums()
+    assert 0.90 <= s["sv"] <= 1.12, f"save weights sum to {s['sv']:.3f}"
+    assert 0.90 <= s["hld"] <= 1.12, f"hold weights sum to {s['hld']:.3f}"
+
+
+def test_the_closer_takes_the_large_majority_of_the_saves():
+    from role_taxonomy import role_anchor, staff_weight_sums
+    share = role_anchor("Closer", "pitcher")["sv"] / staff_weight_sums()["sv"]
+    assert 0.70 <= share <= 0.90, f"closer takes {share:.0%}; real is ~80%"
+
+
+def test_setup_men_take_the_large_majority_of_the_holds():
+    from role_taxonomy import role_anchor, staff_weight_sums
+    two = 2 * role_anchor("Late Inning RP (Setup)", "pitcher")["hld"]
+    assert 0.45 <= two / staff_weight_sums()["hld"] <= 0.70
+
+
+def test_depth_arms_cannot_swamp_the_hold_pool():
+    """15 arms x 0.05 came to 41% of all hold weight, for mop-up duty."""
+    from role_taxonomy import TYPICAL_STAFF, role_anchor, staff_weight_sums
+    n = TYPICAL_STAFF["Bullpen Depth Arm"]
+    contrib = n * role_anchor("Bullpen Depth Arm", "pitcher")["hld"]
+    assert contrib / staff_weight_sums()["hld"] < 0.20, (
+        "a club carries ~15 depth arms, so a per-arm weight that looks small "
+        "can still dominate the pool")
+
+
+def test_no_starter_role_earns_a_save():
+    from role_taxonomy import role_anchor
+    for role in ("Ace (SP1)", "Mid-Rotation Starter (SP2-3)",
+                 "End-of-Rotation Starter (SP4-5)", "Innings-Limited Starter"):
+        assert role_anchor(role, "pitcher")["sv"] == 0.0, role
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# allocate_opportunity — a save is an appearance
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_opportunity_never_exceeds_appearances():
+    """Félix Bautista drew 29.6 saves from 28.3 appearances."""
+    got = M.allocate_opportunity([0.8, 0.1, 0.1], 40.0, [28.0, 60.0, 60.0])
+    assert (got <= np.array([28.0, 60.0, 60.0]) + 1e-9).all()
+
+
+def test_the_capped_surplus_is_redistributed_not_lost():
+    """The pool is the club's opportunity; somebody records it."""
+    cap = np.array([28.0, 60.0, 60.0])
+    got = M.allocate_opportunity([0.8, 0.1, 0.1], 40.0, cap)
+    assert got.sum() == pytest.approx(40.0), got
+    assert got[0] == pytest.approx(28.0)
+
+
+def test_an_uncapped_allocation_is_untouched():
+    got = M.allocate_opportunity([0.8, 0.12, 0.08], 40.0, [60.0, 60.0, 60.0])
+    assert got == pytest.approx([32.0, 4.8, 3.2])
+
+
+def test_a_saturated_staff_drops_the_remainder_rather_than_inventing_room():
+    """Every arm maxed out: the shortfall is a real statement about a roster
+    too thin to finish its own games, not something to paper over."""
+    got = M.allocate_opportunity([0.5, 0.5], 40.0, [5.0, 5.0])
+    assert got.sum() == pytest.approx(10.0)
+    assert (got <= 5.0 + 1e-9).all()
+
+
+def test_opportunity_handles_degenerate_input():
+    assert M.allocate_opportunity([], 40.0, []).size == 0
+    assert M.allocate_opportunity([1.0], 0.0, [10.0])[0] == pytest.approx(0.0)
+
+
+def test_all_zero_shares_allocate_nothing():
+    """Not a bug: zero shares across a staff means nobody there holds a save
+    role, so nobody records those saves. The headroom fallback inside
+    allocate_opportunity exists for redistribution AFTER a cap binds, not to
+    hand a pool to pitchers with no claim on it."""
+    assert M.allocate_opportunity([0.0, 0.0], 40.0, [10.0, 10.0]).sum() == 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hitter roles: four of twelve were never assigned to anybody
+#
+# Reading the exported spreadsheet: Everyday DH / 1B-DH, Weak Side Platoon,
+# Utility IF and Injury Replacement had zero players. The heuristic knew
+# nothing about position or platoon usage, so it could only ever emit five of
+# the twelve roles it had.
+#
+# Worse than missing roles, it MISLABELLED: Full Time required a 0.80 share of
+# a full-time workload, which gave 5.2 regulars per club against a real nine,
+# and the regulars it missed became Strong Side Platoon — a role carrying vL
+# shares of 0.12/0.45. Calling an everyday player a platoon bat corrupts his
+# handedness exposure, and that feeds the daily sim.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _hitter(pa, pos=None, vl=None, bats="R", pid=1, team=NYY):
+    row = {"PlayerId": pid, "Name": f"h{pid}", "Pred_target_team_id": team,
+           "pt_tier": TIER_PROJECTED, "evidence_volume": pa, "Last_PA": pa,
+           "BatSide": bats}
+    if vl is not None:
+        row["vL_share"] = vl
+    return row
+
+
+def _roles_for(rows, fielding=None):
+    out, _, _ = _run(pd.DataFrame(rows), "hitter", fielding=fielding)
+    return dict(zip(out["Name"], out["pt_role"]))
+
+
+def test_an_everyday_first_baseman_gets_the_dh_role():
+    """Never once assigned, because the heuristic had no position data."""
+    rows = [_hitter(700, pid=i) for i in range(1, 15)]
+    f = pd.DataFrame([{"PlayerId": 1, "Pos": "1B", "Innings": 1200.0,
+                       "Season": 2026}])
+    assert _roles_for(rows, f)["h1"] == "Everyday DH / 1B-DH"
+
+
+def test_an_everyday_outfielder_is_full_time_not_dh():
+    rows = [_hitter(700, pid=i) for i in range(1, 15)]
+    f = pd.DataFrame([{"PlayerId": 1, "Pos": "CF", "Innings": 1200.0,
+                       "Season": 2026}])
+    assert _roles_for(rows, f)["h1"] == "Full Time"
+
+
+def test_a_utility_infielder_is_distinguished_from_an_outfielder():
+    """Utility IF and Utility OF carry different volume and platoon usage, but
+    only the outfield one could ever be suggested."""
+    rows = [_hitter(300, pid=1), _hitter(300, pid=2)] + \
+           [_hitter(700, pid=i) for i in range(3, 16)]
+    f = pd.DataFrame([{"PlayerId": 1, "Pos": "SS", "Innings": 600.0, "Season": 2026},
+                      {"PlayerId": 2, "Pos": "LF", "Innings": 600.0, "Season": 2026}])
+    got = _roles_for(rows, f)
+    assert got["h1"] == "Utility IF"
+    assert got["h2"] == "Utility OF / 4th OF"
+
+
+def test_a_right_hander_used_against_lhp_is_a_weak_side_platoon():
+    """Detected from USAGE, not volume. Among real projected hitters, 29 of
+    the 30 above a 0.40 vL share are right-handed — that is what a weak-side
+    platoon bat is, and the role had never been assigned."""
+    rows = [_hitter(250, vl=0.48, bats="R", pid=1)] + \
+           [_hitter(600, vl=0.28, pid=i) for i in range(2, 15)]
+    assert _roles_for(rows)["h1"] == "Weak Side Platoon"
+
+
+def test_a_left_hander_who_sits_against_lhp_is_a_strong_side_platoon():
+    """44 of the 45 real hitters below a 0.18 vL share are left-handed."""
+    rows = [_hitter(450, vl=0.12, bats="L", pid=1)] + \
+           [_hitter(600, vl=0.28, pid=i) for i in range(2, 15)]
+    assert _roles_for(rows)["h1"] == "Strong Side Platoon"
+
+
+def test_an_everyday_player_is_not_called_a_platoon_bat():
+    """THE mislabelling: Goldschmidt, Chisholm and Garcia were all platoon
+    bats, which would have given each of them a platoon's vL exposure."""
+    rows = [_hitter(600, vl=0.28, pid=i) for i in range(1, 15)]
+    got = _roles_for(rows)
+    assert not any(v.endswith("Platoon") for v in got.values()), got
+
+
+def test_a_full_time_share_yields_about_nine_regulars_a_club():
+    """0.80 gave 5.2 per club against a real nine; 0.60 gives ~9."""
+    from role_taxonomy import FULL_TIME_SHARE
+    assert 0.55 <= FULL_TIME_SHARE <= 0.65
+
+
+def test_platoon_detection_degrades_without_vl_share():
+    """The column is optional; absent it, volume alone still assigns a role."""
+    rows = [_hitter(600, pid=i) for i in range(1, 15)]
+    got = _roles_for(rows)
+    assert all(v in set(role_names("hitter")) for v in got.values())
+    assert "Full Time" in got.values()
+
+
+def test_every_assignable_hitter_role_can_actually_be_reached():
+    """Four of twelve were unreachable. Injury Replacement stays override-only
+    by design — its volume is conditional on OTHER players getting hurt, which
+    no per-player heuristic can see."""
+    from role_taxonomy import role_names
+    reachable = set()
+    f_rows, rows = [], []
+    for i, (pa, pos, vl, bats) in enumerate([
+        (700, "CF", 0.28, "R"), (700, "1B", 0.28, "R"), (700, "C", 0.28, "R"),
+        (300, "C", 0.28, "R"), (80, "C", 0.28, "R"), (300, "SS", 0.28, "R"),
+        (300, "LF", 0.28, "R"), (250, "RF", 0.48, "R"), (450, "LF", 0.12, "L"),
+        (60, "LF", 0.28, "R"),
+    ], start=1):
+        rows.append(_hitter(pa, vl=vl, bats=bats, pid=i))
+        f_rows.append({"PlayerId": i, "Pos": pos, "Innings": 900.0,
+                       "Season": 2026})
+    rows += [_hitter(700, vl=0.28, pid=100 + j) for j in range(6)]
+    out, _, _ = _run(pd.DataFrame(rows), "hitter", fielding=pd.DataFrame(f_rows))
+    reachable = set(out["pt_role"])
+    never = set(role_names("hitter")) - reachable - {
+        "Injury Replacement / 26th Man", DEPTH_HITTER_ROLE}
+    assert not never, f"still unreachable: {sorted(never)}"

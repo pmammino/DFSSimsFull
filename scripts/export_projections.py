@@ -152,14 +152,34 @@ def build_pitchers(p: pd.DataFrame, pools: pd.DataFrame) -> pd.DataFrame:
     # The raw `pt_save_share` is a per-role weight and sums past 1 over a real
     # staff (1.16 saves, 1.85 holds), so using it directly over-allocates.
     pool = pools.set_index("team_id") if len(pools) else None
+    out["SV"] = np.nan
+    out["HLD"] = np.nan
     if pool is not None and "team_id" in p.columns:
-        out["SV"] = (_num(p, "Proj_SV_share")
-                     * p["team_id"].map(pool.get("expected_saves"))).round(1)
-        out["HLD"] = (_num(p, "Proj_HLD_share")
-                      * p["team_id"].map(pool.get("hold_opportunities"))).round(1)
-    else:
-        out["SV"] = np.nan
-        out["HLD"] = np.nan
+        from playing_time_model import allocate_opportunity
+        sv = pd.Series(0.0, index=out.index)
+        hld = pd.Series(0.0, index=out.index)
+        g = out["G"].to_numpy(dtype=float)
+        teams = p["team_id"]
+        for tid, idx in out.groupby(teams.to_numpy()).groups.items():
+            if pd.isna(tid) or tid not in pool.index:
+                continue
+            pos = out.index.get_indexer(idx)
+            cap = g[pos]
+            # Saves first: a closer's saves take precedence over his holds,
+            # and holds are then limited to the appearances left over.
+            s = allocate_opportunity(_num(p, "Proj_SV_share").to_numpy()[pos],
+                                     float(pool.loc[tid, "expected_saves"]), cap)
+            hh = allocate_opportunity(_num(p, "Proj_HLD_share").to_numpy()[pos],
+                                      float(pool.loc[tid, "hold_opportunities"]),
+                                      np.maximum(cap - s, 0.0))
+            sv.iloc[pos] = s
+            hld.iloc[pos] = hh
+        out["SV"] = sv.round(1)
+        out["HLD"] = hld.round(1)
+        impossible = int(((out["SV"] + out["HLD"]) > out["G"] + 0.05).sum())
+        if impossible:
+            print(f"  WARNING: {impossible} pitchers still show more saves + "
+                  "holds than appearances")
     order = ["PlayerId", "Name", "Team", "Age", "Tier", "Role", "RoleSource",
              "SP_RP", "Origin", "IP", "G", "GS", "TBF", "H", "1B", "2B", "3B",
              "HR", "BB", "HBP", "SO", "ER", "R", "SV", "HLD", "ERA", "WHIP",
