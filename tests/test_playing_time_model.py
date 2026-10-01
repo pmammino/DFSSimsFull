@@ -671,3 +671,94 @@ def test_no_pitcher_takes_a_save_share_without_innings():
     no_ip = out[out["Proj_IP"] <= 1.0]
     assert (no_ip["Proj_SV_share"] == 0).all()
     assert (no_ip["Proj_HLD_share"] == 0).all()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Save and hold weights must PARTITION the club's pool
+#
+# Summed over the staff this model produces, the old weights came to 1.16
+# (saves) and 1.85 (holds). Normalising that back to 1 diluted the roles that
+# should dominate: the closer took 62% of his club's saves against a real
+# ~80%, closer saves ran to a 25 median against a real 32-35, and BULLPEN
+# DEPTH ARMS took 21% of all league holds against a real ~11% — 0.05 each
+# looks modest until it is multiplied by the 15 such arms a club carries.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_save_and_hold_weights_partition_a_real_staff():
+    from role_taxonomy import staff_weight_sums
+    s = staff_weight_sums()
+    assert 0.90 <= s["sv"] <= 1.12, f"save weights sum to {s['sv']:.3f}"
+    assert 0.90 <= s["hld"] <= 1.12, f"hold weights sum to {s['hld']:.3f}"
+
+
+def test_the_closer_takes_the_large_majority_of_the_saves():
+    from role_taxonomy import role_anchor, staff_weight_sums
+    share = role_anchor("Closer", "pitcher")["sv"] / staff_weight_sums()["sv"]
+    assert 0.70 <= share <= 0.90, f"closer takes {share:.0%}; real is ~80%"
+
+
+def test_setup_men_take_the_large_majority_of_the_holds():
+    from role_taxonomy import role_anchor, staff_weight_sums
+    two = 2 * role_anchor("Late Inning RP (Setup)", "pitcher")["hld"]
+    assert 0.45 <= two / staff_weight_sums()["hld"] <= 0.70
+
+
+def test_depth_arms_cannot_swamp_the_hold_pool():
+    """15 arms x 0.05 came to 41% of all hold weight, for mop-up duty."""
+    from role_taxonomy import TYPICAL_STAFF, role_anchor, staff_weight_sums
+    n = TYPICAL_STAFF["Bullpen Depth Arm"]
+    contrib = n * role_anchor("Bullpen Depth Arm", "pitcher")["hld"]
+    assert contrib / staff_weight_sums()["hld"] < 0.20, (
+        "a club carries ~15 depth arms, so a per-arm weight that looks small "
+        "can still dominate the pool")
+
+
+def test_no_starter_role_earns_a_save():
+    from role_taxonomy import role_anchor
+    for role in ("Ace (SP1)", "Mid-Rotation Starter (SP2-3)",
+                 "End-of-Rotation Starter (SP4-5)", "Innings-Limited Starter"):
+        assert role_anchor(role, "pitcher")["sv"] == 0.0, role
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# allocate_opportunity — a save is an appearance
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_opportunity_never_exceeds_appearances():
+    """Félix Bautista drew 29.6 saves from 28.3 appearances."""
+    got = M.allocate_opportunity([0.8, 0.1, 0.1], 40.0, [28.0, 60.0, 60.0])
+    assert (got <= np.array([28.0, 60.0, 60.0]) + 1e-9).all()
+
+
+def test_the_capped_surplus_is_redistributed_not_lost():
+    """The pool is the club's opportunity; somebody records it."""
+    cap = np.array([28.0, 60.0, 60.0])
+    got = M.allocate_opportunity([0.8, 0.1, 0.1], 40.0, cap)
+    assert got.sum() == pytest.approx(40.0), got
+    assert got[0] == pytest.approx(28.0)
+
+
+def test_an_uncapped_allocation_is_untouched():
+    got = M.allocate_opportunity([0.8, 0.12, 0.08], 40.0, [60.0, 60.0, 60.0])
+    assert got == pytest.approx([32.0, 4.8, 3.2])
+
+
+def test_a_saturated_staff_drops_the_remainder_rather_than_inventing_room():
+    """Every arm maxed out: the shortfall is a real statement about a roster
+    too thin to finish its own games, not something to paper over."""
+    got = M.allocate_opportunity([0.5, 0.5], 40.0, [5.0, 5.0])
+    assert got.sum() == pytest.approx(10.0)
+    assert (got <= 5.0 + 1e-9).all()
+
+
+def test_opportunity_handles_degenerate_input():
+    assert M.allocate_opportunity([], 40.0, []).size == 0
+    assert M.allocate_opportunity([1.0], 0.0, [10.0])[0] == pytest.approx(0.0)
+
+
+def test_all_zero_shares_allocate_nothing():
+    """Not a bug: zero shares across a staff means nobody there holds a save
+    role, so nobody records those saves. The headroom fallback inside
+    allocate_opportunity exists for redistribution AFTER a cap binds, not to
+    hand a pool to pitchers with no claim on it."""
+    assert M.allocate_opportunity([0.0, 0.0], 40.0, [10.0, 10.0]).sum() == 0.0
