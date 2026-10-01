@@ -422,7 +422,41 @@ def full_time_reference(volume) -> float:
     return ref if ref > 0 else 1.0
 
 
-def suggest_hitter_role(row, reference: float, position: str | None = None):
+# Thresholds for the default hitter role, as a share of a full-time workload.
+#
+# FULL_TIME_SHARE was 0.80 and produced 5.2 everyday regulars per club against
+# a real nine. The players it missed did not become bench bats — they became
+# STRONG SIDE PLATOON, which is worse than a volume error: that role carries
+# vL shares of 0.12 (LHB) and 0.45 (RHB), so labelling an everyday player a
+# platoon bat corrupts his handedness exposure, and that feeds the daily sim.
+# Paul Goldschmidt, Jazz Chisholm and Luis García were all platoon bats.
+# 0.60 yields 9.1 per club.
+FULL_TIME_SHARE = 0.60
+UTILITY_SHARE = 0.35
+
+# Platoon is a fact about USAGE, not volume, and the usage is already measured:
+# `vL_share` is the fraction of a player's plate appearances that came against
+# left-handed pitching, and the league sits at ~0.28. The tails are unambiguous
+# — among projected hitters, 44 of the 45 below 0.18 are left-handed and 29 of
+# the 30 above 0.40 are right-handed, which is precisely what a platoon looks
+# like. Inferring it from volume instead both missed the real platoon bats and
+# mislabelled regulars.
+WEAK_SIDE_VL = 0.40      # used AGAINST LHP; only ~28% of league PA are vs LHP
+STRONG_SIDE_VL = 0.18    # sits against same-handed pitching
+
+# Positions that make a player an infielder for the utility split. Utility IF
+# and Utility OF/4th OF carry different volume and platoon usage, and the
+# taxonomy says so — but without position data the heuristic could only ever
+# suggest the outfield one, so Utility IF was never assigned to anybody.
+INFIELD_POSITIONS = frozenset({"1B", "2B", "3B", "SS"})
+# A primary first baseman who plays every day is the DH/1B-DH job: the same
+# workload with no defensive injury exposure. Another role that had never
+# once been assigned, because the heuristic knew nothing about position.
+DH_POSITIONS = frozenset({"1B", "DH"})
+
+
+def suggest_hitter_role(row, reference: float, position: str | None = None,
+                        vl_share: float | None = None):
     """A default, NOT a projection.
 
     Scaled to a full-season equivalent so it survives a partial-season source
@@ -440,7 +474,9 @@ def suggest_hitter_role(row, reference: float, position: str | None = None):
         pa = row.get("Last_PA", 0) or 0
     share = float(pa) / max(reference, 1.0)      # 1.0 = a full-time workload
 
-    if str(position or "").upper() == "C":
+    pos = str(position or "").upper()
+
+    if pos == "C":
         # A catcher's ladder is compressed: the everyday job is ~500 PA, so
         # the same share of a full-time workload means a different role.
         if share >= 0.62:
@@ -449,12 +485,25 @@ def suggest_hitter_role(row, reference: float, position: str | None = None):
             return "Catcher - Tandem"
         return "Catcher - Backup"
 
-    if share >= 0.80:
+    # Platoon first, because it is about usage rather than volume and the two
+    # answer different questions. A right-hander who takes 45% of his plate
+    # appearances against left-handed pitching is a weak-side bat whatever his
+    # total — only ~28% of league PA are vs LHP, which is what caps him.
+    if vl_share is not None and not pd.isna(vl_share):
+        if float(vl_share) >= WEAK_SIDE_VL:
+            return "Weak Side Platoon"
+        if float(vl_share) <= STRONG_SIDE_VL and share >= UTILITY_SHARE:
+            return "Strong Side Platoon"
+
+    if share >= FULL_TIME_SHARE:
+        # An everyday first baseman is the DH/1B-DH job: same workload, no
+        # defensive injury exposure.
+        if pos in DH_POSITIONS:
+            return "Everyday DH / 1B-DH"
         return "Full Time"
-    if share >= 0.55:
-        return "Strong Side Platoon"
-    if share >= 0.35:
-        return "Utility OF / 4th OF"
+    if share >= UTILITY_SHARE:
+        return "Utility IF" if pos in INFIELD_POSITIONS \
+            else "Utility OF / 4th OF"
     # Bench Bat is the FLOOR for a projected-tier player, not the depth role.
     # The depth role routes a player to the 1 PA placeholder, which would
     # contradict the tier he already cleared: `pt_tier == "projected"` means he

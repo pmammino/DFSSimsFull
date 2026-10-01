@@ -260,9 +260,16 @@ def assign_default_roles(players: pd.DataFrame, kind: str, *,
     if kind == "hitter":
         pos = primary_positions(fielding) if fielding is not None else {}
         out["pt_position"] = out["PlayerId"].map(pos)
+        # vL_share is the fraction of a player's PA that came against
+        # left-handed pitching. It is what makes a platoon bat identifiable:
+        # the role is about usage, and this measures the usage directly.
+        vl = (pd.to_numeric(out["vL_share"], errors="coerce")
+              if "vL_share" in out.columns
+              else pd.Series(np.nan, index=out.index))
         roles = [
-            suggest_hitter_role(r, reference, position=r.get("pt_position"))
-            for _, r in out.iterrows()
+            suggest_hitter_role(r, reference, position=r.get("pt_position"),
+                                vl_share=vl.iloc[i])
+            for i, (_, r) in enumerate(out.iterrows())
         ]
     else:
         ranks = _staff_ranks(out, team_col=team_col)
