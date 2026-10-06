@@ -25,10 +25,13 @@ What it does today
    `Pred_R_per_PA_neutral`.
 4. **Free agents and roster reserves.** Unsigned players are carried with full
    rate lines under `FREE_AGENT_TEAM_ID`, excluded from team aggregates but
-   available for playing time and a role. A club expected to sign someone can
-   reserve part of its playing-time budget so it is deliberately
-   under-projected rather than spreading those plate appearances across the
-   players currently on hand.
+   available for playing time and a role. An unsigned player's playing time is
+   whatever his ROLE says, exactly as it is for a player on a club — give him
+   a full-time role and he gets a full-time season — and nobody is docked to
+   make room: every club is projected at its full budget with the players it
+   actually has, and the unsigned sit beside the thirty. The league total then
+   reads a season plus an offseason that has not happened yet. Assigning him a
+   club settles it at that moment, with nothing to adjust by hand.
 5. **Team wins and save / hold opportunity** (`team_wins.py`). Pythagenpat off
    the bottom-up RS and RA factors, normalized so league wins total exactly
    2,430, then converted into per-team save and hold opportunity pools.
@@ -64,6 +67,7 @@ import numpy as np
 import pandas as pd
 
 from team_context import (
+    FREE_AGENT_TEAM_ID,
     PA_PER_TEAM_GAME,
     TEAM_CONTEXT_BOTTOM_UP_WEIGHT,
     TEAM_OVERRIDE_PATH,
@@ -344,6 +348,12 @@ def reconciliation_report(hitters: pd.DataFrame, pitchers: pd.DataFrame,
                                      0.0)
                     per = vp.groupby(hitters["team_id"]).sum()
                     per = per[per.index.notna()]
+                    # Free agents are not a 31st club. Their pool is a real
+                    # total but it is not a budget, so counting it among the
+                    # clubs made the closure line read "min 5,941 max 6,464"
+                    # when all thirty clubs were in fact at 5,941.
+                    fa_pa = float(per.get(FREE_AGENT_TEAM_ID, 0.0))
+                    per = per[per.index != FREE_AGENT_TEAM_ID]
                     if len(per):
                         n_floor = int((hitters.get(
                             "pt_tier", pd.Series(dtype=object)
@@ -354,6 +364,14 @@ def reconciliation_report(hitters: pd.DataFrame, pitchers: pd.DataFrame,
                             f"(budget {162 * PA_PER_TEAM_GAME:,.0f}, "
                             f"projected only; {n_floor:,} floor players carry "
                             f"1 PA each outside it)")
+                        if fa_pa > 0:
+                            n_fa = int((hitters["team_id"]
+                                        == FREE_AGENT_TEAM_ID).sum())
+                            lines.append(
+                                f"  free agents: {n_fa} unsigned players "
+                                f"holding {fa_pa:,.0f} PA at their roles, "
+                                f"beside the {len(per)} clubs rather than "
+                                f"inside them")
     return "\n".join(lines)
 
 

@@ -180,9 +180,43 @@ def test_no_player_is_left_without_a_volume():
 # reserves — a team we expect to sign someone must be under-projected
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_a_reserve_leaves_room_for_an_unsigned_player():
-    out, diag, _ = _run(_hitters(), "hitter",
-                        reserves={NYY: {"pa_share": 0.10}})
+def test_a_reserve_leaves_room_for_an_unsigned_player(monkeypatch):
+    """A reserve is room FOR SOMEBODY, so it is sized by who is unsigned.
+
+    The share says which club gives the playing time up and the player's own
+    role says how much — see `free_agent_pool`. NYY asked to be the one that
+    pays, so NYY is the one that falls short. Only in "share" mode: by
+    default no club is docked at all.
+    """
+    from team_context import FREE_AGENT_TEAM_ID
+    monkeypatch.setattr(M, "FREE_AGENT_PLAYING_TIME", "share")
+    df = _hitters()
+    df.loc[df.index[:3], "Pred_target_team_id"] = FREE_AGENT_TEAM_ID
+    out, diag, _ = _run(df, "hitter", reserves={NYY: {"pa_share": 0.10}})
+    tot = out[out.Pred_target_team_id > 0].groupby(
+        "Pred_target_team_id")["Proj_PA"].sum()
+    fa = out[out.Pred_target_team_id == FREE_AGENT_TEAM_ID]["Proj_PA"].sum()
+    assert tot[NYY] == pytest.approx(M.TEAM_PA_BUDGET - fa)
+    assert tot[LAD] == pytest.approx(M.TEAM_PA_BUDGET), "untouched team"
+
+
+def test_a_reserve_does_not_dock_a_club_by_default():
+    """Nobody is held short for a signing that has not happened. Twenty-nine
+    of the thirty will not make it, and the one that does is not identified
+    by anything in the data — so the projection says what each club's actual
+    roster does, and the free agents sit beside the thirty.
+
+    `FREE_AGENT_PLAYING_TIME` has the two modes that do dock the clubs.
+    """
+    out, _, _ = _run(_hitters(), "hitter", reserves={NYY: {"pa_share": 0.10}})
+    tot = out.groupby("Pred_target_team_id")["Proj_PA"].sum()
+    assert tot[NYY] == pytest.approx(M.TEAM_PA_BUDGET)
+    assert tot[LAD] == pytest.approx(M.TEAM_PA_BUDGET)
+
+
+def test_pool_mode_holds_the_declared_reserve_open(monkeypatch):
+    monkeypatch.setattr(M, "FREE_AGENT_PLAYING_TIME", "pool")
+    out, _, _ = _run(_hitters(), "hitter", reserves={NYY: {"pa_share": 0.10}})
     tot = out.groupby("Pred_target_team_id")["Proj_PA"].sum()
     assert tot[NYY] == pytest.approx(M.TEAM_PA_BUDGET * 0.90)
     assert tot[LAD] == pytest.approx(M.TEAM_PA_BUDGET), "untouched team"
@@ -388,15 +422,20 @@ def test_an_override_file_without_playerid_is_ignored(tmp_path, capsys):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_free_agents_are_excluded_from_team_closure():
-    """A free agent must not take plate appearances from a club he is not on."""
+    """A free agent must not take plate appearances from a club he is not on.
+
+    Nor from the twenty-nine others. Every club closes on its own full
+    budget with the players it actually has, and the unsigned sit beside
+    them — so the league reads a season plus an unfinished offseason.
+    """
     from team_context import FREE_AGENT_TEAM_ID
     df = _hitters()
     df.loc[df.index[:3], "Pred_target_team_id"] = FREE_AGENT_TEAM_ID
     out, _, _ = _run(df, "hitter")
     clubs = out[out.Pred_target_team_id > 0]
     tot = clubs.groupby("Pred_target_team_id")["Proj_PA"].sum()
-    assert np.allclose(tot.to_numpy(), M.TEAM_PA_BUDGET)
     fa = out[out.Pred_target_team_id == FREE_AGENT_TEAM_ID]
+    assert np.allclose(tot.to_numpy(), M.TEAM_PA_BUDGET)
     assert (fa["Proj_PA"] > 1.0).all(), "still projected, just not allocated"
 
 
