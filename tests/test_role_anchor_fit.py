@@ -49,10 +49,18 @@ def test_the_two_sides_decay_at_different_rates():
 
     A club was spreading its innings over 32 arms where a real club uses
     29, and the surplus came off the top of the rotation.
+
+    The hitter value moved from 0.78 to 0.75 when the prospect arrivals went
+    in, and that is not drift: the decay says how fast a club's playing time
+    runs out past its core, so it is fitted against whoever is competing for
+    it, and arrivals put one more claimant a club into the ranking. It is
+    pinned rather than asserted loosely because it is a FITTED number — if
+    it moves again, something changed about the population and the refit
+    should be deliberate.
     """
     assert M.ROSTER_DEPTH_DECAY_PITCHER < M.ROSTER_DEPTH_DECAY_HITTER
     assert M.ROSTER_DEPTH_DECAY_PITCHER == pytest.approx(0.66)
-    assert M.ROSTER_DEPTH_DECAY_HITTER == pytest.approx(0.78)
+    assert M.ROSTER_DEPTH_DECAY_HITTER == pytest.approx(0.75)
 
 
 def test_the_innings_ceiling_is_not_above_anything_that_has_happened():

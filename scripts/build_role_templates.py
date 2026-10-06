@@ -565,6 +565,66 @@ def _load(target_year: int, out_dir: Path, kind: str) -> list[dict]:
     return recs
 
 
+# The coverage stage's own answer to "does this player have real
+# major-league evidence", kept beside `pt_tier` so a refresh never reads back
+# its own promotions. See `refresh_playing_time`.
+TIER_INPUT = "pt_tier_upstream"
+
+
+def refresh_playing_time(target_year: int, out_dir: Path, kind: str) -> None:
+    """Re-run the playing-time stage over the saved projections, in place.
+
+    The workbook mirrors the `pt_*` columns of
+    `out/*_pa_projections_<year>.csv`, which is the pipeline's own output —
+    so whatever the last full run wrote is what the sheet shows. That is
+    right when the pipeline has just run and wrong the rest of the time: the
+    usage feeds, the durability split and the prospect arrivals all changed
+    what the model says without the CSV moving, and the workbook went on
+    reporting every player as `default`.
+
+    This re-runs only the playing-time stage, which needs nothing but the CSV
+    and the feeds — no network, no cache — so the sheet can be rebuilt
+    against the current model between full runs. The rate projections are
+    untouched; only the `pt_*` columns and `Proj_PA` / `Proj_IP` / `Proj_G`
+    are rewritten.
+    """
+    import playing_time_model as PT
+
+    side = "hitter" if kind == "hitter" else "pitcher"
+    path = out_dir / f"{side}_pa_projections_{target_year}.csv"
+    if not path.exists():
+        return
+    df = pd.read_csv(path, low_memory=False)
+    # `pt_tier` is an INPUT to this stage as well as an output of it. It says
+    # whether a player has real major-league evidence behind him, which is
+    # settled upstream by the coverage stage and cannot be recovered from
+    # this file — dropping it with the rest defaults every player to
+    # "projected" and spreads the league's plate appearances over all 2,894
+    # hitters instead of the ~715 who will take them.
+    #
+    # But the stage also WRITES it, and a prospect arrival is promoted out of
+    # the floor on the way through. Refreshing twice would therefore read
+    # back a tier that already had the previous run's arrivals in it, and a
+    # player who stopped being an arrival — the feed moved, he aged out of
+    # the table — would keep a promotion nothing supports any more. So the
+    # upstream answer is kept once, in its own column, and used every time.
+    if TIER_INPUT not in df.columns:
+        df[TIER_INPUT] = df.get("pt_tier")
+    df["pt_tier"] = df[TIER_INPUT]
+    stale = [c for c in df.columns
+             if (c.startswith("pt_") and c not in ("pt_tier", TIER_INPUT))
+             or c in ("Proj_PA", "Proj_IP", "Proj_G")]
+    fielding_path = out_dir / f"fielding_history_{target_year}.csv"
+    fielding = (pd.read_csv(fielding_path, low_memory=False)
+                if fielding_path.exists() else None)
+    fresh, _, _ = PT.project_playing_time(
+        df.drop(columns=stale), kind, target_year=target_year,
+        fielding=fielding)
+    fresh[TIER_INPUT] = df[TIER_INPUT]
+    fresh.to_csv(path, index=False)
+    print(f"  refreshed playing time in {path.name}")
+
+
 def build(kind: str, target_year: int, out_dir: Path, dest: Path) -> Path:
     role_defs = HITTER_ROLES if kind == "hitter" else PITCHER_ROLES
     players = _load(target_year, out_dir, kind)
@@ -588,9 +648,16 @@ def main(argv=None) -> int:
     ap.add_argument("--target-year", type=int, default=2027)
     ap.add_argument("--out-dir", type=Path, default=ROOT / "out")
     ap.add_argument("--dest-dir", type=Path, default=ROOT / "rosters")
+    ap.add_argument("--refresh-playing-time", action="store_true",
+                    help="re-run the playing-time stage over the saved "
+                         "projections first, so the sheet shows what the "
+                         "model says today rather than what the last full "
+                         "pipeline run wrote")
     a = ap.parse_args(argv)
 
     for kind in ("hitter", "pitcher"):
+        if a.refresh_playing_time:
+            refresh_playing_time(a.target_year, a.out_dir, kind)
         build(kind, a.target_year, a.out_dir,
               a.dest_dir / f"player_roles_{kind}s_{a.target_year}.xlsx")
     return 0
