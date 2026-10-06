@@ -966,32 +966,33 @@ multiplies them, so the sheet reproduces what the model did.
 Measured end to end against the real rank curve, hitters: 0.076 with no feeds,
 0.053 with feeds, **0.013** with feeds and durability.
 
-**Pitchers keep a durability of 1.000, deliberately.** For a hitter, games
-played and playing time are very nearly the same quantity — they correlate
-**+0.973** over 2,663 real player-seasons — which is why the measure works so
-well on that side. For a pitcher they are not the same quantity and are not
-even pointed the same way: appearances and innings correlate **−0.217**,
-because a starter makes ~30 appearances for 170 innings and a reliever 65 for
-65. Within a role the sign is right (+0.769 starters, +0.865 relievers), but a
-pitcher who changes role between seasons is then judged against a cohort he no
-longer belongs to, and a reliever's 65 appearances read against a rotation's 30
-look like the ceiling of durability. Switched on it takes pitchers projected
-past 180 innings from 21 to 29 against a real 18.
+**A pitcher's innings are two numbers multiplied**, and the model used to
+carry only their product. `Proj_IP = pt_apps_exp x pt_ip_per_app_exp`: how
+often he is handed the ball, and how long he stays once he has it. Both come
+from his own record, each regressed toward the men doing the same job.
 
-Measuring it on innings instead fixes the decoupling and cannot be used: the
-evidence factor divides by durability and the raw volume multiplies it back,
-so an innings-based durability cancels itself. An upstream repair was tried
-too — `evidence_volume` is a best-of-three season and so biased high (+16.6),
-and replacing it with a weighted rate times weighted games is a better point
-estimate by every backtest — and it made both metrics *worse* on its own,
-because the maximum produces a wider spread between players and it is the
-shape within a club, not the level, that survives closure.
+That is what finally let availability work on this side. Compared league-wide,
+a pitcher's appearances and innings run at **−0.217** — a starter takes 30
+appearances for 170 innings and a reliever 65 for 65 — so a single multiplier
+could never mean anything. Inside a role the sign is right (+0.769 starters,
++0.865 relievers), and the decomposition keeps the comparison there. Félix
+Bautista comes out 28.3 appearances at 0.99 innings each: the injury is in the
+first number, and the second says he is still a late-inning arm.
 
-What would work is decomposing a pitcher's innings the way his job does:
-starts times innings per start for a rotation arm, appearances times innings
-per appearance for a bullpen one. `Proj_GS` and `pt_anchor_GS` are already
-there. That is a redesign of the pitcher volume chain rather than a constant.
-`DURABILITY_KINDS` is the switch and `durability.py` carries the numbers.
+The two halves regress at different rates, fitted separately over 913
+pitcher-seasons, and the difference is the point. Appearances take **k = 2.0**,
+the same as a hitter's games; innings per appearance take **k = 6.0**, because
+a starter goes about 5.3 innings and a reliever about 1.0 and a pitcher's own
+deviation from his cohort is mostly noise. Reusing one constant for both was
+simply wrong.
+
+Measured end to end: the pitcher rank-curve error falls from **0.0329 to
+0.0284**, and the count of pitchers projected past 180 innings from 29 to
+**21** against a real 21, 20 and 12 in 2024-26. `pt_durability` stays 1.000
+for pitchers and that is now correct rather than a gap — the appearances
+already carry every start missed, and multiplying by it would charge the
+absence twice. The roles workbook shows `Exp Apps` and `IP/App` on the pitcher
+sheet, which is where a pitcher's availability actually lives.
 
 ### Free agents
 

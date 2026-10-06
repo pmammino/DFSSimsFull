@@ -81,6 +81,22 @@ GAMES_WEIGHTS = (3.0, 2.0, 1.0)
 # spread between players to three quarters where the fit says three fifths,
 # which is a third less regression than the backtest supports.
 GAMES_PRIOR = 3.0        # the full prior, for a player with all three seasons
+
+# Innings per appearance regresses THREE TIMES HARDER than appearances do,
+# and reusing the games constant for it was simply wrong. Fitted the same
+# way over 913 pitcher-seasons — predict next season's innings per
+# appearance from the weighted mean of the last three, against the median of
+# the same kind of pitcher — the error bottoms out at k = 6.0, where it beats
+# the cohort median by 16.8%; at the games constant of 2.0 it beats it by
+# only 3.9%, and at no regression at all it is 44% WORSE than just using the
+# median.
+#
+# That ordering is the measurement telling you what the quantity is. How
+# often a man is handed the ball is mostly about him; how long he stays once
+# he has it is mostly about the job — a starter goes about 5.3 innings and a
+# reliever about 1.0, and a pitcher's own deviation from his cohort is
+# mostly noise.
+IPA_SHRINK = 6.0
 GAMES_SHRINK = 2.0
 
 # A club plays 162, and nobody appears in more.
@@ -200,6 +216,35 @@ def games_by_season(fielding: pd.DataFrame | None,
     g = (f.groupby(["Season", "PlayerId"])["G"].sum()
          .clip(upper=TEAM_GAMES).reset_index())
     return g
+
+
+def weighted_games(players: pd.DataFrame, games: pd.DataFrame, *,
+                   target_year: int) -> pd.Series:
+    """The 3/2/1 mean of recent appearances, with NO regression applied.
+
+    `predicted_games` shrinks toward a league mean, which is right for
+    durability — that question is "how does he compare with the league" —
+    and wrong for projecting a pitcher's appearances, because the league
+    mean mixes starters at about 30 with relievers at about 55. Shrinking a
+    rotation arm toward it lifted ranks 5 and 6 of the staff 18-21% above
+    the real curve while the back of the bullpen ran 10% light.
+    """
+    idx = players.index
+    if games.empty or "PlayerId" not in players.columns:
+        return pd.Series(np.nan, index=idx)
+    seasons = [target_year - i for i in range(1, len(GAMES_WEIGHTS) + 1)]
+    wide = games[games["Season"].isin(seasons)].pivot(
+        index="PlayerId", columns="Season", values="G").reindex(columns=seasons)
+    if wide.empty:
+        return pd.Series(np.nan, index=idx)
+    w = np.asarray(GAMES_WEIGHTS, dtype=float)
+    have = wide.notna().to_numpy()
+    num = np.nansum(wide.to_numpy() * w, axis=1)
+    den = (have * w).sum(axis=1)
+    wmean = pd.Series(np.where(den > 0, num / np.where(den > 0, den, 1),
+                               np.nan), index=wide.index)
+    pid = pd.to_numeric(players["PlayerId"], errors="coerce")
+    return pd.Series(pid.map(wmean).to_numpy(), index=idx)
 
 
 def predicted_games(players: pd.DataFrame, games: pd.DataFrame, *,
@@ -361,3 +406,122 @@ def durability_report(players: pd.DataFrame) -> str:
         worst = players.loc[av.nsmallest(4).index, "Name"].tolist()
         lines.append(f"      most docked: {', '.join(map(str, worst))}")
     return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pitchers: innings are appearances times innings per appearance
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# A pitcher's season is two numbers multiplied together and the model had
+# been carrying only their product. Separating them is what lets durability
+# mean anything on this side: availability governs APPEARANCES — how many
+# times he is handed the ball — and the job governs how long he stays once
+# he has it. Compare a man's appearances against others doing his job and
+# the -0.217 that makes a league-wide comparison useless disappears, because
+# a reliever's 65 is never weighed against a starter's 30.
+#
+# Backtested over 983 pitcher-seasons against the next season's innings:
+#
+#     summary            corr    bias     RMSE
+#     best season       0.615   +29.7    54.58
+#     weighted innings  0.637    +8.4    42.83
+#     apps x IP/app     0.632    +9.6    43.36
+#
+# The decomposition is level with the weighted innings as a point estimate
+# and far better than the best season. That is not why it is here — a better
+# point estimate measurably did NOT improve the rank curve when tried on
+# volume alone. It is here because it puts availability on the quantity
+# availability actually moves.
+
+def innings_per_appearance(players: pd.DataFrame,
+                           fielding: pd.DataFrame | None) -> pd.Series:
+    """A pitcher's own innings per appearance, weighted over recent seasons.
+
+    NaN for anyone without enough of a record to measure, so the caller can
+    fall back to his role's rate rather than to a number invented here.
+    """
+    idx = players.index
+    if fielding is None or fielding.empty or "PlayerId" not in players.columns:
+        return pd.Series(np.nan, index=idx)
+    need = {"Season", "PlayerId", "G", "Innings", "Pos"}
+    if not need <= set(fielding.columns):
+        return pd.Series(np.nan, index=idx)
+
+    p = (fielding[fielding["Pos"].astype(str) == "P"]
+         .groupby(["Season", "PlayerId"])
+         .agg(G=("G", "sum"), IP=("Innings", "sum")).reset_index())
+    p = p[p["G"] > 0]
+    if p.empty:
+        return pd.Series(np.nan, index=idx)
+
+    seasons = sorted(p["Season"].unique())[-len(GAMES_WEIGHTS):]
+    w = dict(zip(reversed(seasons), GAMES_WEIGHTS))
+    p = p[p["Season"].isin(w)].copy()
+    p["_w"] = p["Season"].map(w).astype(float) * p["G"]   # weight by workload
+    p["_ipa"] = p["IP"] / p["G"]
+    num = p.groupby("PlayerId").apply(
+        lambda g: np.average(g["_ipa"], weights=g["_w"]), include_groups=False)
+    pid = pd.to_numeric(players["PlayerId"], errors="coerce")
+    return pd.Series(pid.map(num).to_numpy(), index=idx)
+
+
+def expected_ipa(players: pd.DataFrame, own: pd.Series, *,
+                 role_col: str = "pt_role") -> pd.Series:
+    """Innings per appearance to project, in innings — not as a multiple.
+
+    ABSOLUTE on purpose. Scaling the role anchor's own implied rate was the
+    obvious way to write this and it imports an inconsistency the old chain
+    never exposed: the Ace anchor is 195 innings over 32 starts, which is
+    6.09 an outing, and no modern starter does that — the real figure is
+    5.32. Nothing used the `g` anchor for innings before, so the two were
+    free to disagree. Taking the rate from the record instead keeps the
+    anchor's job to what it is good at, which is saying how often a man
+    pitches.
+
+    A player's own rate, regressed toward his role cohort's median by the
+    same weight the games fit chose, and the cohort's median outright for
+    anyone with no record.
+    """
+    idx = players.index
+    roles = players[role_col].astype(str) if role_col in players.columns \
+        else pd.Series("", index=idx)
+    if own is None or not own.notna().any():
+        return pd.Series(np.nan, index=idx)
+    ref = own.groupby(roles).transform("median")
+    counts = roles.map(roles.value_counts())
+    ref = ref.where(counts >= MIN_COHORT, own.median())
+    blended = ((own * GAMES_PRIOR + ref * IPA_SHRINK)
+               / (GAMES_PRIOR + IPA_SHRINK))
+    return blended.fillna(ref).clip(lower=0.1)
+
+
+def expected_appearances(players: pd.DataFrame, predicted: pd.Series, *,
+                         role_col: str = "pt_role") -> pd.Series:
+    """Appearances to project, from the player's own record.
+
+    The ROLE anchors are not used for this, and the reason is the same one
+    that kept the anchor out of the rate: they were never fitted for it. The
+    Ace anchor says 32 starts and 195 innings, which is 6.09 an outing
+    against a real 5.32, and leaning on either number put the projected
+    rotation 14% under the real rank curve while the bullpen ran 18% over.
+    Nothing had used them this way before, so nothing had caught it.
+
+    So the role supplies only a regression TARGET — the median of the men
+    doing that job — and the player's own weighted appearances supply the
+    answer. A pitcher with no record gets his cohort's median outright.
+    """
+    idx = players.index
+    roles = players[role_col].astype(str) if role_col in players.columns \
+        else pd.Series("", index=idx)
+    if predicted is None or not predicted.notna().any():
+        return pd.Series(np.nan, index=idx)
+    ref = predicted.groupby(roles).transform("median")
+    counts = roles.map(roles.value_counts())
+    ref = ref.where(counts >= MIN_COHORT, predicted.median())
+    # Regressed toward the men doing the same job, by the same weight the
+    # games fit chose. Toward the LEAGUE would mix a starter's thirty
+    # appearances with a reliever's fifty-five, which is the error this
+    # whole decomposition exists to stop making.
+    blended = ((predicted * GAMES_PRIOR + ref * GAMES_SHRINK)
+               / (GAMES_PRIOR + GAMES_SHRINK))
+    return blended.fillna(ref).clip(lower=1.0)

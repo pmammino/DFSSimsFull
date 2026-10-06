@@ -109,6 +109,10 @@ def _legend(wb, role_defs, kind):
          "table on the Roles sheet).", False),
         ("  * Availability — YOURS to set: the share of the season you "
          "expect him healthy and on an MLB roster. 1.00 = full year.", False),
+        ("  * Exp Apps / IP/App (pitchers) — how often he is handed the "
+         "ball, and how long he stays. His innings are the two multiplied, "
+         "so for a pitcher AVAILABILITY IS EXP APPS: it is not a multiplier "
+         "on this sheet and Durability stays 1.00 for him.", False),
         ("  * Durability — the model's, from his own games-played record "
          "against others in the same role. Centred on 1.00 and allowed to "
          "go above it: a player who misses nothing beats the league-average "
@@ -258,7 +262,8 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
     if kind == "hitter":
         derived += ["Proj vL Share"]
     else:
-        derived += ["Proj GS", "Proj G", "Save Wt", "Hold Wt"]
+        derived += ["Proj GS", "Proj G", "Exp Apps", "IP/App",
+                    "Save Wt", "Hold Wt"]
     headers = meta + role_names + derived + ["Notes"]
 
     for j, h in enumerate(headers, start=1):
@@ -364,8 +369,23 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
             # Leaving the weights unscaled would hand a hurt closer a full
             # claim and quietly take saves away from the healthy arm behind
             # him.
-            for field, fmt in (("gs", "0.0"), ("g", "0.0"),
-                               ("sv", "0.000"), ("hld", "0.000")):
+            for field, fmt in (("gs", "0.0"), ("g", "0.0")):
+                col += 1
+                ar = extra_rows[field]
+                ws.cell(row=i, column=col, value=(
+                    f"=SUMPRODUCT({RC0}{i}:{RC1}{i},"
+                    f"${RC0}${ar}:${RC1}${ar})*$K{i}*$L{i}*$M{i}"
+                )).number_format = fmt
+            # Read off the model rather than derived from the anchors: these
+            # two ARE the projection now, and a formula over role anchors
+            # would quietly disagree with it.
+            for field, fmt in (("Exp Apps", "0.0"), ("IP/App", "0.00")):
+                col += 1
+                c = ws.cell(row=i, column=col, value=rec.get(field))
+                c.number_format = fmt
+                c.font = BLACK
+                c.border = BOX
+            for field, fmt in (("sv", "0.000"), ("hld", "0.000")):
                 col += 1
                 ar = extra_rows[field]
                 ws.cell(row=i, column=col, value=(
@@ -522,6 +542,16 @@ def _load(target_year: int, out_dir: Path, kind: str) -> list[dict]:
             # model had not projected.
             "Durability": (float(r["pt_durability"])
                            if pd.notna(r.get("pt_durability")) else 1.00),
+            # Where a PITCHER's availability lives. His innings are
+            # appearances times innings per appearance, so how much of the
+            # season he is there for is the first of those and not a
+            # multiplier — see `playing_time_model.raw_volumes`. Shown so the
+            # sheet says it rather than leaving a column of 1.00 and no
+            # explanation.
+            "Exp Apps": (float(r["pt_apps_exp"])
+                         if pd.notna(r.get("pt_apps_exp")) else None),
+            "IP/App": (float(r["pt_ip_per_app_exp"])
+                       if pd.notna(r.get("pt_ip_per_app_exp")) else None),
             "Notes": None,
             # Pre-fill the MIXTURE the model actually assigned, so the sheet
             # round-trips: export it unchanged and the model reads back

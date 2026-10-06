@@ -379,3 +379,136 @@ def test_one_season_is_not_an_iron_man_record():
                              D.games_by_season(_fielding(rows)),
                              target_year=2027)
     assert pred[3] < pred[0], "three seasons of 162 must beat one"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pitchers: innings are appearances times innings per appearance
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _arms(n=14, team=147, n_sp=0):
+    """n_sp of them are starters, so the ROLE cohorts that the rate is
+    regressed toward are real ones. Everyone in a bullpen is the degenerate
+    case: a lone starter among relievers is regressed toward a reliever's
+    innings per appearance, which is correct behaviour on a fixture that has
+    told the model he is a reliever."""
+    return pd.DataFrame({
+        "PlayerId": range(3000, 3000 + n),
+        "Name": [f"p{i}" for i in range(n)],
+        "Pred_target_team_id": team, "pt_tier": "projected",
+        "role": ["starter"] * n_sp + ["reliever"] * (n - n_sp),
+        "TBF_per_IP": 4.3,
+        "evidence_volume": [760.0] * n_sp + [260.0] * (n - n_sp),
+        "evidence_season": 2026.0,
+        "P_K": 0.23, "P_BB": 0.080, "P_HBP": 0.011, "P_SF": 0.006,
+        "P_HR": 0.029, "P_3B": 0.004, "P_2B": 0.041, "P_1B": 0.140,
+        "P_BIPOut": 0.466})
+
+
+def _arm_history(df, apps, ipa):
+    """apps/ipa: dict PlayerId -> value, applied to all three seasons."""
+    return pd.DataFrame([
+        {"Season": y, "PlayerId": int(p), "Pos": "P", "GS": 0,
+         "G": apps.get(int(p), 50), "Innings": apps.get(int(p), 50)
+         * ipa.get(int(p), 1.0)}
+        for y in (2024, 2025, 2026) for p in df["PlayerId"]])
+
+
+def test_a_pitchers_innings_are_his_two_numbers_multiplied():
+    """The redesign in one assertion. A starter and a reliever can take the
+    same innings by opposite routes, and a model carrying only the product
+    cannot tell them apart — which is why availability had nowhere to go."""
+    df = _arms(n=20, n_sp=8)
+    ids = list(df["PlayerId"])
+    sp, rp = ids[:8], ids[8:]
+    apps = {**{p: 30 for p in sp}, **{p: 62 for p in rp}}
+    ipa = {**{p: 5.5 for p in sp}, **{p: 1.0 for p in rp}}
+    out, _, _ = M.project_playing_time(
+        df, "pitcher", target_year=2027,
+        fielding=_arm_history(df, apps, ipa), feed_dir=None)
+    starter = out[out["PlayerId"] == sp[0]].iloc[0]
+    reliever = out[out["PlayerId"] == rp[0]].iloc[0]
+    # Opposite routes to a season: fewer turns, far longer each.
+    assert starter["pt_apps_exp"] < reliever["pt_apps_exp"]
+    assert starter["pt_ip_per_app_exp"] > reliever["pt_ip_per_app_exp"] * 2
+
+
+def test_missing_a_season_costs_a_pitcher_appearances_not_his_job():
+    """Félix Bautista, who comes out 28.3 appearances at 0.99 innings each.
+    Being hurt shows up in how often he is handed the ball; it does not make
+    him a different pitcher once he has it."""
+    df = _arms(n=12)
+    ids = list(df["PlayerId"])
+    healthy, hurt = ids[0], ids[1]
+    out, _, _ = M.project_playing_time(
+        df, "pitcher", target_year=2027,
+        fielding=_arm_history(df, {healthy: 65, hurt: 20}, {}),
+        feed_dir=None)
+    a = out[out["PlayerId"] == healthy].iloc[0]
+    b = out[out["PlayerId"] == hurt].iloc[0]
+    assert b["pt_apps_exp"] < a["pt_apps_exp"]
+    assert b["Proj_IP"] < a["Proj_IP"]
+    # Same job: the rate is what says what he does, and it is unchanged.
+    assert b["pt_ip_per_app_exp"] == pytest.approx(
+        a["pt_ip_per_app_exp"], rel=0.05)
+
+
+def test_the_absence_is_not_charged_twice_on_the_pitcher_side_either():
+    """`pt_apps_exp` is the pitcher's OWN appearance record, so it already
+    carries every start he missed. Multiplying it by a durability derived
+    from those same appearances would charge the absence a second time —
+    the fourth time that shape of mistake has turned up in this model."""
+    df = _arms(n=12)
+    out, _, _ = M.project_playing_time(
+        df, "pitcher", target_year=2027,
+        fielding=_arm_history(df, {}, {}), feed_dir=None)
+    assert (out["pt_durability"] == 1.0).all()
+    share = pd.to_numeric(out["pt_season_share"], errors="coerce")
+    assert (share <= 1.0 + 1e-9).all()
+
+
+def test_innings_per_appearance_regresses_harder_than_appearances_do():
+    """Fitted separately and they are not the same number: k = 6.0 against
+    k = 2.0. How often a man is handed the ball is mostly about him; how
+    long he stays is mostly about the job."""
+    assert D.IPA_SHRINK > D.GAMES_SHRINK * 2
+
+
+def test_a_pitcher_with_no_record_falls_back_to_his_role():
+    df = _arms(n=12)
+    out, _, _ = M.project_playing_time(df, "pitcher", target_year=2027,
+                                       fielding=None, feed_dir=None)
+    assert out["Proj_IP"].notna().all()
+    assert (out["Proj_IP"] > 0).all()
+
+
+@has_history
+def test_the_decomposition_beats_the_product_on_the_real_curve():
+    """Both calibration targets, measured end to end: the within-club rank
+    curve the anchors are fitted against, and how many pitchers clear 180
+    innings (21, 20 and 12 in the real 2024-26 seasons)."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from fit_role_anchors import real_rank_curve
+    fielding = pd.read_csv(FIELDING, low_memory=False)
+    players = pd.read_csv(ROOT / "out" / "pitcher_pa_projections_2027.csv",
+                          low_memory=False)
+    curve, _ = real_rank_curve(fielding, "pitcher")
+    ranks = [r for r in range(1, 13) if float(r) in curve.index]
+    scores = {}
+    for flag in (False, True):
+        M.PITCHER_VOLUME_DECOMPOSED = flag
+        try:
+            out, _, _ = M.project_playing_time(
+                players, "pitcher", target_year=2027, fielding=fielding,
+                feed_dir=ROOT / "feeds")
+        finally:
+            M.PITCHER_VOLUME_DECOMPOSED = True
+        pr = out[out["pt_tier"].astype(str) != "floor"]
+        m = pr.groupby(pr.groupby("Pred_target_team_id")["Proj_IP"].rank(
+            "first", ascending=False))["Proj_IP"].mean()
+        rat = np.array([m.get(float(r), np.nan) / curve.loc[float(r)]
+                        for r in ranks])
+        rat = rat[np.isfinite(rat)]
+        scores[flag] = (float(np.sqrt(((rat - 1) ** 2).mean())),
+                        int((pr["Proj_IP"] > 180).sum()))
+    assert scores[True][0] < scores[False][0], scores
+    assert abs(scores[True][1] - 17.67) <= 5, scores
