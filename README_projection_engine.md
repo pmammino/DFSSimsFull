@@ -960,8 +960,26 @@ evidence factor is divided by availability before use, because
 charging the same absence twice would take a fifth of a season off a player
 twice over.
 
+Both appear in the roles workbook as their own columns, and `Proj PA`
+multiplies them, so the sheet reproduces what the model did.
+
 Measured end to end against the real rank curve, hitters: 0.076 with no feeds,
-0.053 with feeds, **0.018** with feeds and durability.
+0.053 with feeds, **0.013** with feeds and durability.
+
+**Pitchers keep a durability of 1.000, deliberately.** The signal is there —
+11.1% better than a flat league mean, and it takes the pitcher rank curve from
+0.055 to 0.029 — but switching it on moves the count of pitchers projected
+past 180 innings from 21 to 29 against a real 18. The cause predates it: for
+291 of 946 pitchers the projection is exactly their best recent season,
+because `clip(volume / durability / anchor)` multiplied back by
+`anchor x durability` cancels both wherever the clip does not bind. Taking
+every pitcher's best of three necessarily clears 180 more often than any one
+real season (21, 20 and 12 in 2024-26), and durability widens the band enough
+to let eight more through. Capping the credit, lowering the rotation
+confidence and rebuilding the evidence factor on rate were all measured and
+none worked; the repair belongs upstream, in choosing `evidence_volume` as
+something other than a best-of-three season. `DURABILITY_KINDS` is the switch
+and `durability.py` carries the numbers.
 
 ### Free agents
 

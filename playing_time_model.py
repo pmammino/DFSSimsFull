@@ -422,7 +422,8 @@ def assign_default_roles(players: pd.DataFrame, kind: str, *,
     # appearances a game and was projected for nine of them all season
     # because one number was being asked to answer both questions.
     games = games_by_season(fielding, kind)
-    out["pt_games_pred"] = predicted_games(out, games, target_year=target_year)
+    out["pt_games_pred"] = predicted_games(out, games, target_year=target_year,
+                                           kind=kind)
     out["pt_play_rate"] = play_rate(out, games)
     out["pt_durability"] = durability(out, out["pt_games_pred"])
     out["pt_availability"] = DEFAULT_AVAILABILITY

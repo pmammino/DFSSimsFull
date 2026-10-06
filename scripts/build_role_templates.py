@@ -107,8 +107,13 @@ def _legend(wb, role_defs, kind):
          f"each player; the 'Role Prob Sum' column checks this.", False),
         ("  * Role Start — when the player takes the job (see the Timing "
          "table on the Roles sheet).", False),
-        ("  * Availability — share of the season he is healthy and on an MLB "
-         "roster. 1.00 = full year.", False),
+        ("  * Availability — YOURS to set: the share of the season you "
+         "expect him healthy and on an MLB roster. 1.00 = full year.", False),
+        ("  * Durability — the model's, from his own games-played record "
+         "against others in the same role. Centred on 1.00 and allowed to "
+         "go above it: a player who misses nothing beats the league-average "
+         "missed time his role's anchor was built from. Overwrite it if you "
+         "disagree; Proj PA multiplies both.", False),
         ("  * Pos / Bats (or Throws) — needed for the typed-slot allocation "
          "and the platoon splits.", False),
         ("", False),
@@ -248,7 +253,7 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
     last_col = "Last PA" if kind == "hitter" else "Last TBF"
     meta = ["PlayerId", "Name", "Team", "Age", hand_col, "Pos",
             last_col, "Career", "Suggested Role", "Role Start", "Role Share",
-            "Availability"]
+            "Availability", "Durability"]
     derived = [f"Proj {vol}", "Role Prob Sum"]
     if kind == "hitter":
         derived += ["Proj vL Share"]
@@ -305,7 +310,7 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
             if headers[j - 1] in (hand_col, "Pos", "Role Start",
                                   "Availability"):
                 c.fill = EXAMPLE_FILL if is_example else INPUT_FILL
-            if headers[j - 1] == "Availability":
+            if headers[j - 1] in ("Availability", "Durability"):
                 c.number_format = "0.00"
         # Role Share is looked up from the timing table, so the two stay in sync.
         tim_first = len(role_defs) + 5
@@ -327,7 +332,8 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
         col += 1
         ws.cell(row=i, column=col,
                 value=f"=SUMPRODUCT({RC0}{i}:{RC1}{i},"
-                      f"${RC0}$2:${RC1}$2)*$K{i}*$L{i}").number_format = "0.0"
+                      f"${RC0}$2:${RC1}$2)*$K{i}*$L{i}*$M{i}"
+                ).number_format = "0.0"
         col += 1
         ws.cell(row=i, column=col,
                 value=f"=SUM({RC0}{i}:{RC1}{i})").number_format = "0.00"
@@ -338,7 +344,8 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
             pa_col = get_column_letter(r1 + 1)      # the Proj PA column
             # Anchor-weighted, so the blended share reflects where the plate
             # appearances actually come from. The denominator reuses Proj PA
-            # (backing out Role Share and Availability) rather than repeating
+            # (backing out Role Share, Availability and Durability) rather than
+            # repeating
             # a third SUMPRODUCT — three per row over 600+ rows was enough to
             # time LibreOffice out during recalculation.
             ws.cell(row=i, column=col, value=(
@@ -347,7 +354,7 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
                 f'${RC0}$2:${RC1}$2),'
                 f'SUMPRODUCT({RC0}{i}:{RC1}{i},${RC0}${rr}:${RC1}${rr},'
                 f'${RC0}$2:${RC1}$2))'
-                f'/({pa_col}{i}/($K{i}*$L{i})),"")'
+                f'/({pa_col}{i}/($K{i}*$L{i}*$M{i})),"")'
             )).number_format = "0.00"
         else:
             # Every derived quantity is scaled by Role Share x Availability,
@@ -363,7 +370,7 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
                 ar = extra_rows[field]
                 ws.cell(row=i, column=col, value=(
                     f"=SUMPRODUCT({RC0}{i}:{RC1}{i},"
-                    f"${RC0}${ar}:${RC1}${ar})*$K{i}*$L{i}"
+                    f"${RC0}${ar}:${RC1}${ar})*$K{i}*$L{i}*$M{i}"
                 )).number_format = fmt
         col += 1
         c = ws.cell(row=i, column=col, value=rec.get("Notes"))
@@ -378,8 +385,10 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
             "Team": "FA", "Age": 28, hand_col: "R", "Pos": "2B",
             "Suggested Role": "Full Time",
             "Role Start": "Early Season (~May)", "Availability": 0.85,
+            "Durability": 0.92,
             "Notes": "Unsigned; job battle. 60% full-time / 30% strong-side "
-                     "platoon / 10% utility. Missed April.",
+                     "platoon / 10% utility. Missed April, and his own "
+                     "games-played record runs a little short of his role's.",
             "_probs": {"Full Time": 0.60, "Strong Side Platoon": 0.30,
                        "Utility IF": 0.10},
         }
@@ -389,6 +398,7 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
             "Team": "FA", "Age": 30, hand_col: "R", "Pos": "RP",
             "Suggested Role": "Late Inning RP (Setup)",
             "Role Start": "Opening Day", "Availability": 0.90,
+            "Durability": 1.00,
             "Notes": "70% closer / 30% setup — job not settled.",
             "_probs": {"Closer": 0.70, "Late Inning RP (Setup)": 0.30},
         }
@@ -504,6 +514,14 @@ def _load(target_year: int, out_dir: Path, kind: str) -> list[dict]:
                            else "Opening Day"),
             "Availability": (float(r["pt_availability"])
                              if pd.notna(r.get("pt_availability")) else 1.00),
+            # What the player's own games-played record says about turning
+            # up, centred on 1.0 and free to exceed it — see `durability`.
+            # Availability is the 0..1 knob a person types; this is the one
+            # the model worked out, and leaving it off the sheet both hid
+            # every injury dock and left Proj PA computing a season the
+            # model had not projected.
+            "Durability": (float(r["pt_durability"])
+                           if pd.notna(r.get("pt_durability")) else 1.00),
             "Notes": None,
             # Pre-fill the MIXTURE the model actually assigned, so the sheet
             # round-trips: export it unchanged and the model reads back

@@ -86,6 +86,58 @@ GAMES_SHRINK = 2.0
 # A club plays 162, and nobody appears in more.
 TEAM_GAMES = 162.0
 
+# What counts as having held a regular job, per kind — the bar a player must
+# clear before short seasons can be read as MISSED TIME rather than as a
+# part-time role.
+#
+# The pitcher number is not the hitter number, and using one for both is a
+# silent failure rather than a loud one. No pitcher in five seasons appeared
+# in 100 games; the maximum is 83 and the median 19, so the hitter's bar
+# excluded every pitcher in baseball and handed all of them a durability of
+# exactly 1.000. The bar below sits just under the tenth percentile of a
+# starter's season (19 appearances) so a rotation arm who held his job
+# qualifies, while the callups that make up half of all pitcher-seasons do
+# not.
+#
+# Backtested the same way as the hitters, over 631 pitcher-seasons:
+# appearances correlate 0.462 with the next season's and beat a flat league
+# mean by 11.1%, at k = 2.00 — the same regression the hitter fit chose,
+# independently. Innings score higher (0.644, 22.7%) and are the wrong
+# measure: a reliever throws 65 of them because he is a reliever, so much of
+# that correlation is roles persisting rather than health.
+REGULAR_GAMES = {"hitter": 100.0, "pitcher": 18.0}
+
+# ...and pitchers are nonetheless OFF, which is a finding rather than an
+# omission. The signal is there — 11.1% better than a flat league mean, and
+# it improves the pitcher rank curve from 0.055 to 0.029 — but switching it
+# on takes the number of pitchers projected past 180 innings from 21 to 29
+# against a real 18, which breaks a calibration check this repo already had.
+#
+# The cause is a structure that predates durability. For 291 of 946 pitchers
+# the projection is EXACTLY their best recent season, because the chain
+#
+#     evidence = clip(volume / durability / anchor, 0.55, 1.22)
+#     raw      = anchor x share x durability x evidence
+#
+# cancels both the anchor and durability wherever the clip does not bind: a
+# pitcher simply replays his best year. Taking every pitcher's best of three
+# necessarily clears 180 more often than any single real season does (21, 20
+# and 12 in 2024-26). Durability widens the band — the ceiling becomes
+# 1.22 x anchor x durability — and lets eight more of those seasons through.
+#
+# Three fixes were measured and none worked. Capping the credit at 1.00 gives
+# 27, still over. Lowering the rotation confidence makes it worse (31 at
+# 0.45). Rebuilding the evidence factor on RATE instead of volume, which
+# removes the cancellation and is the principled repair, degrades both curves
+# badly (hitters 0.0135 -> 0.0208, pitchers 0.0292 -> 0.0479) because a
+# season's volume carries real information that a per-game rate does not.
+#
+# So the honest state is: the fix belongs in how `evidence_volume` is chosen
+# upstream — a best-of-three season is the wrong summary to project forward —
+# and that is a larger change than this one. Until then pitchers keep a
+# durability of 1.000 and the run log says so.
+DURABILITY_KINDS = {"hitter"}
+
 # How far availability may move a player. The spread the fit supports is
 # roughly 0.77 to 1.22 at the tenth and ninetieth percentiles, so these bounds
 # bite only on the extremes — the iron man who has never missed a game, and
@@ -141,7 +193,7 @@ def games_by_season(fielding: pd.DataFrame | None,
 
 
 def predicted_games(players: pd.DataFrame, games: pd.DataFrame, *,
-                    target_year: int) -> pd.Series:
+                    target_year: int, kind: str = "hitter") -> pd.Series:
     """Games to expect next season: the recent weighted mean, regressed.
 
     Returns NaN for a player with no games on record at all, who must not be
@@ -171,12 +223,14 @@ def predicted_games(players: pd.DataFrame, games: pd.DataFrame, *,
     # durable player in baseball on the strength of not yet having had a
     # chance to get hurt.
     seasons = pd.Series(have.sum(axis=1).astype(float), index=wide.index)
+    if kind not in DURABILITY_KINDS:
+        return pd.Series(np.nan, index=idx)
 
     # The league term regresses toward players who are REGULARS. A bench
     # player's 60 games are his job, not his health, and averaging them in
     # would drag the reference down for a reason that has nothing to do with
     # durability.
-    regular = wide.max(axis=1) >= 100
+    regular = wide.max(axis=1) >= REGULAR_GAMES.get(kind, 100.0)
     league = float(wmean[regular].mean()) if regular.any() \
         else float(wmean.mean())
 
