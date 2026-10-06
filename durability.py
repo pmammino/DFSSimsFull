@@ -107,35 +107,45 @@ TEAM_GAMES = 162.0
 # that correlation is roles persisting rather than health.
 REGULAR_GAMES = {"hitter": 100.0, "pitcher": 18.0}
 
-# ...and pitchers are nonetheless OFF, which is a finding rather than an
-# omission. The signal is there — 11.1% better than a flat league mean, and
-# it improves the pitcher rank curve from 0.055 to 0.029 — but switching it
-# on takes the number of pitchers projected past 180 innings from 21 to 29
-# against a real 18, which breaks a calibration check this repo already had.
+# ...and pitchers are nonetheless OFF. That is a finding, and the reason is
+# not the one first guessed, so both are recorded here.
 #
-# The cause is a structure that predates durability. For 291 of 946 pitchers
-# the projection is EXACTLY their best recent season, because the chain
+# For a HITTER, games played and playing time are very nearly the same
+# quantity: across 2,663 real player-seasons they correlate +0.973. Turning
+# up is the whole of it, which is why this works so well on that side — the
+# rank curve improves from 0.076 to 0.013.
 #
-#     evidence = clip(volume / durability / anchor, 0.55, 1.22)
-#     raw      = anchor x share x durability x evidence
+# For a PITCHER they are not the same quantity and are not even pointed the
+# same way. Across 2,256 pitcher-seasons, APPEARANCES and INNINGS correlate
+# -0.217, because a starter makes about 30 appearances for 170 innings and a
+# reliever 65 for 65. Within a role the sign is right (+0.769 for starters,
+# +0.865 for relievers), but a pitcher who moves between roles across seasons
+# is then judged on a scale belonging to the job he no longer holds: a
+# reliever's 65 appearances against a rotation cohort's 30 reads as the
+# ceiling of durability, and the reverse reads as a wreck. Switched on, it
+# takes pitchers projected past 180 innings from 21 to 29 against a real 18
+# and makes the pitcher rank curve worse (0.0264 to 0.0292).
 #
-# cancels both the anchor and durability wherever the clip does not bind: a
-# pitcher simply replays his best year. Taking every pitcher's best of three
-# necessarily clears 180 more often than any single real season does (21, 20
-# and 12 in 2024-26). Durability widens the band — the ceiling becomes
-# 1.22 x anchor x durability — and lets eight more of those seasons through.
+# Measuring it on INNINGS instead fixes the decoupling and cannot be used:
+# the evidence factor already divides by durability and the raw volume
+# multiplies it back, so an innings-based durability cancels itself wherever
+# the clip does not bind, and bites only as a widened clip band.
 #
-# Three fixes were measured and none worked. Capping the credit at 1.00 gives
-# 27, still over. Lowering the rotation confidence makes it worse (31 at
-# 0.45). Rebuilding the evidence factor on RATE instead of volume, which
-# removes the cancellation and is the principled repair, degrades both curves
-# badly (hitters 0.0135 -> 0.0208, pitchers 0.0292 -> 0.0479) because a
-# season's volume carries real information that a per-game rate does not.
+# An upstream repair was tried, on the theory that the trouble was
+# `evidence_volume` being a best-of-three season and so biased high (+16.6
+# innings-worth against what pitchers actually did next). Replacing it with a
+# weighted rate times weighted games — a better point estimate by every
+# backtest, and close to unbiased — made BOTH metrics worse on its own, 21 to
+# 29 over 180 and 0.0264 to 0.0286, because the maximum produces a wider
+# spread between players and it is the SHAPE within a club, not the level,
+# that survives closure. Individual accuracy and the rank curve disagree here,
+# and the rank curve is what the gate measures.
 #
-# So the honest state is: the fix belongs in how `evidence_volume` is chosen
-# upstream — a best-of-three season is the wrong summary to project forward —
-# and that is a larger change than this one. Until then pitchers keep a
-# durability of 1.000 and the run log says so.
+# What would actually work is decomposing a pitcher's innings the way his job
+# does: starts times innings per start for a rotation arm, appearances times
+# innings per appearance for a bullpen one. The model already carries
+# Proj_GS and pt_anchor_GS. That is a redesign of the pitcher volume chain
+# rather than a constant, and it is not this change.
 DURABILITY_KINDS = {"hitter"}
 
 # How far availability may move a player. The spread the fit supports is

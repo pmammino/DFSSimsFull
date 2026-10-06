@@ -966,20 +966,32 @@ multiplies them, so the sheet reproduces what the model did.
 Measured end to end against the real rank curve, hitters: 0.076 with no feeds,
 0.053 with feeds, **0.013** with feeds and durability.
 
-**Pitchers keep a durability of 1.000, deliberately.** The signal is there —
-11.1% better than a flat league mean, and it takes the pitcher rank curve from
-0.055 to 0.029 — but switching it on moves the count of pitchers projected
-past 180 innings from 21 to 29 against a real 18. The cause predates it: for
-291 of 946 pitchers the projection is exactly their best recent season,
-because `clip(volume / durability / anchor)` multiplied back by
-`anchor x durability` cancels both wherever the clip does not bind. Taking
-every pitcher's best of three necessarily clears 180 more often than any one
-real season (21, 20 and 12 in 2024-26), and durability widens the band enough
-to let eight more through. Capping the credit, lowering the rotation
-confidence and rebuilding the evidence factor on rate were all measured and
-none worked; the repair belongs upstream, in choosing `evidence_volume` as
-something other than a best-of-three season. `DURABILITY_KINDS` is the switch
-and `durability.py` carries the numbers.
+**Pitchers keep a durability of 1.000, deliberately.** For a hitter, games
+played and playing time are very nearly the same quantity — they correlate
+**+0.973** over 2,663 real player-seasons — which is why the measure works so
+well on that side. For a pitcher they are not the same quantity and are not
+even pointed the same way: appearances and innings correlate **−0.217**,
+because a starter makes ~30 appearances for 170 innings and a reliever 65 for
+65. Within a role the sign is right (+0.769 starters, +0.865 relievers), but a
+pitcher who changes role between seasons is then judged against a cohort he no
+longer belongs to, and a reliever's 65 appearances read against a rotation's 30
+look like the ceiling of durability. Switched on it takes pitchers projected
+past 180 innings from 21 to 29 against a real 18.
+
+Measuring it on innings instead fixes the decoupling and cannot be used: the
+evidence factor divides by durability and the raw volume multiplies it back,
+so an innings-based durability cancels itself. An upstream repair was tried
+too — `evidence_volume` is a best-of-three season and so biased high (+16.6),
+and replacing it with a weighted rate times weighted games is a better point
+estimate by every backtest — and it made both metrics *worse* on its own,
+because the maximum produces a wider spread between players and it is the
+shape within a club, not the level, that survives closure.
+
+What would work is decomposing a pitcher's innings the way his job does:
+starts times innings per start for a rotation arm, appearances times innings
+per appearance for a bullpen one. `Proj_GS` and `pt_anchor_GS` are already
+there. That is a redesign of the pitcher volume chain rather than a constant.
+`DURABILITY_KINDS` is the switch and `durability.py` carries the numbers.
 
 ### Free agents
 
