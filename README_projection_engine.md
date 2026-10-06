@@ -922,8 +922,21 @@ So two numbers instead of one:
 * **`pt_availability`** says how much of the season he is there for, and is
   where the injury risk goes.
 
-Both players now read **Full Time** with a dock: Judge 0.93, Buxton 0.91,
-Matt Olson 1.15. Buxton projects 507 plate appearances rather than nine.
+Both players now read **Full Time at 1.0** with a dock: Judge 0.93, Buxton
+0.91, Matt Olson 1.15. Buxton projects 507 plate appearances rather than nine.
+
+A role mixture answers "which job does he hold" and nothing else, so a job
+nobody disputes is allowed to reach 1.0 — 486 hitters do. It used to stop at
+0.85 on the grounds that a season still offers chances to get hurt, which is
+the injury risk charged twice over now that availability carries it. 353
+hitters still carry a genuine split, where the feeds disagree or nothing
+confirms them.
+
+Where a player's own usage overrules a depth chart that buried him, the run
+log **names him** — 48 hitters, led by Stanton, Buxton, Devers, Hoskins and
+Casas. The reading this cannot make is the other one: a club that has moved
+on rather than one waiting for a man to get well. That is a person's call,
+and the override file is where it goes.
 
 **How much the dock is worth, measured.** Backtesting 2025 and 2026 over 557
 player-seasons, the 3/2/1 weighted mean of prior games beats assuming everyone
@@ -942,7 +955,7 @@ charging the same absence twice would take a fifth of a season off a player
 twice over.
 
 Measured end to end against the real rank curve, hitters: 0.076 with no feeds,
-0.053 with feeds, **0.031** with feeds and durability.
+0.053 with feeds, **0.028** with feeds and durability.
 
 ### Free agents
 

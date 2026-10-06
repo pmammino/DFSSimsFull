@@ -401,7 +401,22 @@ def resolve_ids(feed: pd.DataFrame, players: pd.DataFrame, *,
 # still leaves him a season to get hurt in, lose the job in, or be traded out
 # of — and because a role mixture that is 100% one role is exactly the claim
 # this module exists to stop making.
-AGREE = 0.85          # both feeds say the same thing
+# A job nobody disputes. Reaching 1.0 is the point: a role mixture answers
+# "which job does he hold", and nothing else. It used to stop at 0.85 on the
+# grounds that two feeds agreeing about a left fielder "still leaves him a
+# season to get hurt in, lose the job in, or be traded out of" — but getting
+# hurt is `pt_availability`'s question now, and charging for it here as well
+# is the same absence counted twice. That mistake has turned up three times
+# in this model (the batting-order multiplier, the evidence factor, and this)
+# and it is always the same shape: a second mechanism quietly re-spending a
+# signal the first one already spent.
+#
+# What is left after health moves out is losing the job and being traded, and
+# for a player whose own usage CONFIRMS the feeds there is no evidence of
+# either. Aaron Judge is a full-time player, full stop; "85% full-time, 15%
+# platoon bat" says he might platoon, which nothing in the record suggests.
+SETTLED = 1.0
+AGREE = 0.85          # both feeds say the same thing, nothing confirms it
 # ...except that a lineup spot says how SAFE the job is, and the difference is
 # not small. A real club's nine starters run from about 634 plate appearances
 # down to about 342 — a factor of 1.85 — and the spot itself only explains 4.65
@@ -432,11 +447,7 @@ DISAGREE = 0.60       # they say different things; the batting order leads
 # pitchers projected 26 of them past 180.
 DEPTH_ONLY = {"hitter": 0.70, "pitcher": 0.50}
 ORDER_ONLY = 0.75     # in a lineup but absent from the depth chart
-# A player's own usage rate against a feed that has him buried. Higher than
-# DISAGREE because the disagreement has a known cause — he was injured, the
-# depth chart reflects it, and `pt_availability` is already charging him for
-# it — so letting it also cut his role would be the same absence twice.
-RECORD_OVER_FEED = 0.75
+
 
 # RotoWire's own Stability rating on a club's top bullpen arm, read as what it
 # plainly is: the feed's confidence in its own Rank 1 call. A "Very Low"
@@ -481,6 +492,24 @@ EVERYDAY_ROLES = {"Full Time", "Everyday DH / 1B-DH", "Catcher - Primary"}
 
 def _is_everyday(role: str) -> bool:
     return str(role) in EVERYDAY_ROLES
+
+
+def _confirms(record: str | None, role: str | None) -> bool:
+    """Does a player's own usage rate back up the role a feed gave him?
+
+    Matched on WHAT KIND of job it is, not on the name. `record_read` answers
+    with three labels because a rate can tell an everyday player from a
+    part-time one and cannot tell a designated hitter from a left fielder —
+    so asking it for the exact string leaves the feed's more specific answer
+    permanently unconfirmable. Mike Trout, whose depth chart says "Everyday
+    DH / 1B-DH" and whose 4.46 plate appearances a game say "everyday", was
+    left split between a full-time job and a bench job by that mismatch.
+    """
+    if not record or not role:
+        return False
+    if _is_everyday(record):
+        return _is_everyday(role)
+    return record == role
 
 
 INFIELD = {"1B", "2B", "3B", "SS"}
@@ -597,14 +626,22 @@ def hitter_role_from_feeds(ev: dict) -> tuple[dict[str, float], str] | None:
     # Being hurt is not a job. Where the record says everyday and a feed says
     # bench, the disagreement is about HEALTH, and health belongs in
     # `pt_availability`, which docks him separately. So the record wins the
-    # role outright and keeps only the width.
+    # role OUTRIGHT, and the width that used to be kept here is gone.
+    #
+    # Keeping it was the double-count again. A quarter of Buxton on a 99-PA
+    # role cost him 135 plate appearances on top of an availability dock that
+    # had already charged him for the same injury — and it spread him onto
+    # "Injury Replacement / 26th Man", which is a statement about health
+    # wearing a role's clothes.
+    #
+    # What this gives up is the other reading of a buried regular: that his
+    # club has genuinely moved on rather than waiting for him to get well.
+    # That reading is real and this cannot see it, so every player the record
+    # overrules is NAMED in the run log, where a person can check him against
+    # the roster and write an override if the depth chart was right.
     if record and _is_everyday(record) and not _is_everyday(
             depth or lineup or ""):
-        other = depth or lineup
-        if other:
-            return _spread(record, RECORD_OVER_FEED, other,
-                           "hitter"), "feed:record+depth"
-        return _mix(record, DEPTH_ONLY["hitter"], "hitter"), "feed:record"
+        return _mix(record, SETTLED, "hitter"), "feed:record over depth"
 
     if lineup and depth:
         # Being left out of a nine-man lineup is a CAP, not a job. Read as a
@@ -618,6 +655,8 @@ def hitter_role_from_feeds(ev: dict) -> tuple[dict[str, float], str] | None:
                 lineup, "hitter"):
             return _mix(depth, AGREE, "hitter"), "feed:order+depth"
         if lineup == depth:
+            if _confirms(record, lineup):
+                return _mix(lineup, SETTLED, "hitter"), "feed:order+depth+record"
             return _mix(lineup, _agree_for(ev), "hitter"), "feed:order+depth"
         return _spread(lineup, DISAGREE, depth, "hitter"), "feed:order+depth"
     if depth:
@@ -627,8 +666,8 @@ def hitter_role_from_feeds(ev: dict) -> tuple[dict[str, float], str] | None:
         # out "Full Time 0.70 / Strong Side Platoon 0.30" — a sentence that
         # says he might be a platoon bat. His own 4.50 plate appearances a
         # game say he is not.
-        if record == depth:
-            return _mix(depth, AGREE, "hitter"), "feed:depth+record"
+        if _confirms(record, depth):
+            return _mix(depth, SETTLED, "hitter"), "feed:depth+record"
         return _mix(depth, DEPTH_ONLY["hitter"], "hitter"), "feed:depth"
     if lineup and not from_absence:
         return _mix(lineup, ORDER_ONLY, "hitter"), "feed:order"
@@ -1016,14 +1055,19 @@ def apply_feed_roles(players: pd.DataFrame, kind: str, *,
             for r, w in mix.items():
                 r = _not_depth(r, kind)
                 lifted[r] = lifted.get(r, 0.0) + w
-            if len(lifted) < len(mix):
+            collapsed = len(lifted) < len(mix)
+            if collapsed:
                 stats["un_floored"] = stats.get("un_floored", 0) + 1
-            # Collapsing two roles onto one leaves a mixture of 1.0, which is
-            # the certainty this whole module exists to stop asserting.
-            if len(lifted) == 1:
-                only = next(iter(lifted))
-                nb = _neighbour(only, kind)
-                lifted = {only: AGREE, nb: 1 - AGREE} if nb else lifted
+                # Merging two roles onto one leaves a mixture of 1.0 that
+                # nothing asserted — an artefact of the lift, not a judgement
+                # — so it is spread again. Only then: a mixture that arrived
+                # here already settled was MEANT to be 1.0, and re-spreading
+                # it put Judge back on a platoon role he had just been taken
+                # off.
+                if len(lifted) == 1:
+                    only = next(iter(lifted))
+                    nb = _neighbour(only, kind)
+                    lifted = {only: AGREE, nb: 1 - AGREE} if nb else lifted
             mix = lifted
         if not mix:
             mixes.append(out["pt_role_mix"].iloc[i])
@@ -1039,6 +1083,13 @@ def apply_feed_roles(players: pd.DataFrame, kind: str, *,
         sources.append(source)
         stats["applied"] += 1
         stats["sources"][source] = stats["sources"].get(source, 0) + 1
+        # Named, not just counted. These are the players whose own usage
+        # overruled a depth chart that had them buried, and the one reading
+        # this cannot distinguish — a club that has moved on rather than one
+        # waiting for a man to get well — is checkable only by a person.
+        if source.endswith("over depth"):
+            stats.setdefault("overruled", []).append(
+                str(out["Name"].iloc[i]) if "Name" in out.columns else "?")
 
     out["pt_role_mix"] = mixes
     out["pt_role"] = roles
@@ -1075,6 +1126,14 @@ def feed_report(stats: dict) -> str:
         lines.append("    by evidence: " + ", ".join(
             f"{k} {v}" for k, v in sorted(stats["sources"].items(),
                                           key=lambda kv: -kv[1])))
+    if stats.get("overruled"):
+        who = stats["overruled"]
+        lines.append(f"    {len(who)} player(s) kept an everyday role against "
+                     f"a depth chart that buried them, on their own usage "
+                     f"rate; the dock is in pt_availability. Check these "
+                     f"against the roster:")
+        lines.append(f"      {', '.join(who[:10])}"
+                     + (f" (+{len(who) - 10} more)" if len(who) > 10 else ""))
     if stats.get("unknown_roles"):
         lines.append(f"    WARNING: roles not in the taxonomy were produced "
                      f"and dropped: {sorted(stats['unknown_roles'])}")

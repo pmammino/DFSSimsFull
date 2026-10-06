@@ -238,7 +238,52 @@ def test_the_rate_settles_a_role_one_feed_could_not():
         {"club_has_orders": False, "depth_pos": "RF", "depth_rank": 1,
          "play_rate": 4.50})[0]
     assert with_rate["Full Time"] > thin["Full Time"]
-    assert with_rate["Full Time"] == pytest.approx(RF.AGREE)
+    assert with_rate == {"Full Time": 1.0}
+
+
+def test_a_settled_job_is_allowed_to_be_certain():
+    """A role mixture answers "which job does he hold" and nothing else.
+    Stopping at 0.85 because a season offers chances to get hurt was the
+    injury risk being charged twice — it is `pt_availability`'s now."""
+    for ev in ({"club_has_orders": False, "depth_pos": "LF", "depth_rank": 1,
+                "play_rate": 4.50},
+               {"club_has_orders": True, "spot_vs_r": 3, "spot_vs_l": 3,
+                "depth_pos": "LF", "depth_rank": 1, "play_rate": 4.40}):
+        mix, _ = RF.hitter_role_from_feeds(ev)
+        assert mix == {"Full Time": 1.0}, ev
+
+
+def test_a_confirmed_role_keeps_the_feeds_more_specific_name():
+    """A rate can tell an everyday player from a part-time one; it cannot
+    tell a designated hitter from a left fielder. Asking it for the exact
+    role name left Mike Trout — depth chart "Everyday DH / 1B-DH", 4.46
+    plate appearances a game — split between a full-time job and a bench
+    one, because the two strings did not match."""
+    mix, _ = RF.hitter_role_from_feeds(
+        {"club_has_orders": False, "depth_pos": "DH", "depth_rank": 1,
+         "play_rate": 4.46})
+    assert mix == {"Everyday DH / 1B-DH": 1.0}
+
+
+def test_settling_a_role_survives_the_un_floor_guard():
+    """The guard re-spreads a mixture of 1.0 left behind when two roles merge
+    into one. It must not touch a 1.0 that was asserted on purpose — it was
+    putting Judge straight back onto the platoon role he had been taken off."""
+    df = pd.DataFrame({
+        "PlayerId": [1], "Name": ["Settled Regular"],
+        "Pred_target_team_id": [147], "Last_PA": [600], "Career_PA": [3000],
+        "evidence_volume": [660.0], "evidence_season": [2025.0],
+        "P_K": [0.22], "P_BB": [0.085], "P_HBP": [0.011], "P_SF": [0.006],
+        "P_HR": [0.030], "P_3B": [0.004], "P_2B": [0.042], "P_1B": [0.142],
+        "P_BIPOut": [0.460]})
+    base = M.assign_default_roles(df, "hitter")
+    base["pt_play_rate"] = 4.50
+    feeds = {"depth": pd.DataFrame({
+        "name_key": [RF.name_key("Settled", "Regular")], "feed_name": ["x"],
+        "rw_id": ["1"], "feed_team": ["NYY"], "feed_team_id": [147],
+        "depth_pos": ["RF"], "depth_rank": [1]})}
+    out, _ = RF.apply_feed_roles(base, "hitter", feeds=feeds)
+    assert out["pt_role_mix"].iloc[0] == "Full Time:1"
 
 
 def test_a_part_time_rate_does_not_promote_anyone():
