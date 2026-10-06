@@ -901,6 +901,49 @@ without an MLBAM id (only the prospects feed carries one);
 the run log prints exactly which rows those are. Pass `feed_dir=None` to skip
 the feeds entirely.
 
+### Availability, and why it is not a role
+
+A season's plate appearances are the product of two unrelated things — how
+many games a player was there for, and how much he plays in a game — and
+`durability.py` keeps them apart.
+
+Byron Buxton is the case that forced it. He took 542 plate appearances in 126
+games, 4.30 a game, above the median Full Time hitter's 3.97: when he plays he
+is an everyday centre fielder. RotoWire's depth chart has him eighth among
+Minnesota's centre fielders because he is hurt, so the feeds called him a 26th
+man and the roster-depth discount finished it — **nine** plate appearances for
+the season. Aaron Judge is the same story milder: he came out "Full Time 0.70 /
+Strong Side Platoon 0.30", which says he might be a platoon bat.
+
+So two numbers instead of one:
+
+* **`pt_play_rate`** (PA per game played) says what the job is, and defends a
+  role against a depth chart that has written an injured regular off.
+* **`pt_availability`** says how much of the season he is there for, and is
+  where the injury risk goes.
+
+Both players now read **Full Time** with a dock: Judge 0.93, Buxton 0.91,
+Matt Olson 1.15. Buxton projects 507 plate appearances rather than nine.
+
+**How much the dock is worth, measured.** Backtesting 2025 and 2026 over 557
+player-seasons, the 3/2/1 weighted mean of prior games beats assuming everyone
+is league-average by **8.1%** (corr 0.428); among the most durable players it
+is 1.8%. Games played is weakly predictable, so the fitted regression is heavy
+— 60% the player, 40% the league — and the dock is correspondingly modest.
+Anyone wanting a bigger one for a fragile star is asking for more confidence
+than the record supports.
+
+Two things it deliberately does not do. It never docks a player with no record
+of being a regular — a rookie's thirty games say he was in Triple-A, not that
+he is fragile, and when a player arrives is `pt_role_start`'s question. And the
+evidence factor is divided by availability before use, because
+`evidence_volume` is a season total that already fell when he was hurt;
+charging the same absence twice would take a fifth of a season off a player
+twice over.
+
+Measured end to end against the real rank curve, hitters: 0.076 with no feeds,
+0.053 with feeds, **0.031** with feeds and durability.
+
 ### Free agents
 
 An unsigned player's playing time is whatever his role says — give him a

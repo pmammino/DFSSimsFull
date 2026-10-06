@@ -89,6 +89,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from durability import record_read
 from role_taxonomy import (DEPTH_HITTER_ROLE, DEPTH_PITCHER_ROLE,
                            format_role_mix, is_depth_role, role_anchor,
                            role_names)
@@ -431,6 +432,11 @@ DISAGREE = 0.60       # they say different things; the batting order leads
 # pitchers projected 26 of them past 180.
 DEPTH_ONLY = {"hitter": 0.70, "pitcher": 0.50}
 ORDER_ONLY = 0.75     # in a lineup but absent from the depth chart
+# A player's own usage rate against a feed that has him buried. Higher than
+# DISAGREE because the disagreement has a known cause — he was injured, the
+# depth chart reflects it, and `pt_availability` is already charging him for
+# it — so letting it also cut his role would be the same absence twice.
+RECORD_OVER_FEED = 0.75
 
 # RotoWire's own Stability rating on a club's top bullpen arm, read as what it
 # plainly is: the feed's confidence in its own Rank 1 call. A "Very Low"
@@ -469,6 +475,13 @@ STEP_DOWN_PITCHER = {
     "Bullpen Depth Arm": "Depth (no MLB IP)",
     "Rehab / Injury Return": "Bullpen Depth Arm",
 }
+
+EVERYDAY_ROLES = {"Full Time", "Everyday DH / 1B-DH", "Catcher - Primary"}
+
+
+def _is_everyday(role: str) -> bool:
+    return str(role) in EVERYDAY_ROLES
+
 
 INFIELD = {"1B", "2B", "3B", "SS"}
 OUTFIELD = {"LF", "CF", "RF", "OF"}
@@ -572,6 +585,27 @@ def hitter_role_from_feeds(ev: dict) -> tuple[dict[str, float], str] | None:
     """
     lineup, from_absence = _lineup_read(ev)
     depth = _depth_read(ev)
+    record = record_read(ev.get("play_rate"), "hitter")
+
+    # A player's OWN usage rate outranks a depth chart that has written him
+    # off. Byron Buxton takes 4.30 plate appearances per game played, above
+    # the median Full Time hitter's 3.97 — when he is in the lineup he is an
+    # everyday centre fielder. RotoWire has him eighth among Minnesota's
+    # centre fielders because he is hurt, which the feeds read as a 99-PA
+    # bench job, and he projected NINE plate appearances for the season.
+    #
+    # Being hurt is not a job. Where the record says everyday and a feed says
+    # bench, the disagreement is about HEALTH, and health belongs in
+    # `pt_availability`, which docks him separately. So the record wins the
+    # role outright and keeps only the width.
+    if record and _is_everyday(record) and not _is_everyday(
+            depth or lineup or ""):
+        other = depth or lineup
+        if other:
+            return _spread(record, RECORD_OVER_FEED, other,
+                           "hitter"), "feed:record+depth"
+        return _mix(record, DEPTH_ONLY["hitter"], "hitter"), "feed:record"
+
     if lineup and depth:
         # Being left out of a nine-man lineup is a CAP, not a job. Read as a
         # positive claim it promoted every prospect in the organisation to a
@@ -587,6 +621,14 @@ def hitter_role_from_feeds(ev: dict) -> tuple[dict[str, float], str] | None:
             return _mix(lineup, _agree_for(ev), "hitter"), "feed:order+depth"
         return _spread(lineup, DISAGREE, depth, "hitter"), "feed:order+depth"
     if depth:
+        # The record agreeing with the only feed that covers him is a second
+        # source, and settles a role the depth chart alone could not. Judge
+        # is the case: the Yankees have no current batting order, so he came
+        # out "Full Time 0.70 / Strong Side Platoon 0.30" — a sentence that
+        # says he might be a platoon bat. His own 4.50 plate appearances a
+        # game say he is not.
+        if record == depth:
+            return _mix(depth, AGREE, "hitter"), "feed:depth+record"
         return _mix(depth, DEPTH_ONLY["hitter"], "hitter"), "feed:depth"
     if lineup and not from_absence:
         return _mix(lineup, ORDER_ONLY, "hitter"), "feed:order"
@@ -855,6 +897,15 @@ def build_evidence(players: pd.DataFrame, kind: str,
         for pid, row in best.iterrows():
             ev.setdefault(int(pid), {}).update(
                 level=row["level"], prospect_rank=row["prospect_rank"])
+
+    # The player's own usage rate, which is a source like any other and the
+    # only one that is about HIM rather than about his club's plans.
+    if "pt_play_rate" in players.columns:
+        rate = pd.to_numeric(players["pt_play_rate"], errors="coerce")
+        for pid, r in zip(pd.to_numeric(players["PlayerId"], errors="coerce"),
+                          rate):
+            if pd.notna(pid) and pd.notna(r):
+                ev.setdefault(int(pid), {})["play_rate"] = float(r)
 
     tids = (pd.to_numeric(players[team_col], errors="coerce")
             if team_col in players.columns
