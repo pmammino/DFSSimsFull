@@ -925,3 +925,49 @@ def test_every_assignable_hitter_role_can_actually_be_reached():
     never = set(role_names("hitter")) - reachable - {
         "Injury Replacement / 26th Man", DEPTH_HITTER_ROLE}
     assert not never, f"still unreachable: {sorted(never)}"
+
+
+def test_the_workbook_shows_the_role_the_model_assigned(tmp_path):
+    """The sheet is a view of the assignment, not a second opinion.
+
+    It used to re-derive its own suggestion from `suggest_*_role` called
+    WITHOUT the position or the platoon share — the weaker signature from
+    before those arguments existed — while the projections beside it carried
+    `pt_role` from the playing-time model. The two disagreed badly: the
+    workbook showed four hitter roles with no catchers, no designated
+    hitters and no platoon bats, and a pitching staff with NO CLOSER on any
+    club, where the model had assigned exactly 30. Anyone opening the sheet
+    to adjust a role was editing different labels from the ones the numbers
+    came from.
+    """
+    openpyxl = pytest.importorskip("openpyxl")
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    import build_role_templates as b
+
+    out = tmp_path / "out"
+    out.mkdir()
+    assigned = {}
+    for kind, frame in (("hitter", _hitters()), ("pitcher", _pitchers())):
+        df, _, _ = M.project_playing_time(frame, kind, target_year=2027)
+        df["Name"] = [f"p{i}" for i in range(len(df))]
+        assigned[kind] = dict(zip(df["PlayerId"].astype(int), df["pt_role"]))
+        df.to_csv(out / f"{kind}_pa_projections_2027.csv", index=False)
+
+    dest = tmp_path / "rosters"
+    dest.mkdir()
+    for kind in ("hitter", "pitcher"):
+        path = b.build(kind, 2027, out, dest / f"roles_{kind}.xlsx")
+        ws = openpyxl.load_workbook(path)["Assignments"]
+        header = [c.value for c in ws[1]]
+        i_id = header.index("PlayerId")
+        i_role = header.index("Suggested Role")
+        seen = 0
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            pid = row[i_id]
+            if not isinstance(pid, (int, float)) or int(pid) not in assigned[kind]:
+                continue        # the anchor rows and the example row
+            seen += 1
+            assert row[i_role] == assigned[kind][int(pid)], (
+                f"{kind} {pid}: workbook says {row[i_role]!r}, the model "
+                f"assigned {assigned[kind][int(pid)]!r}")
+        assert seen > 0, "no player rows were compared"
