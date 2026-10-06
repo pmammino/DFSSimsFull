@@ -64,6 +64,7 @@ import numpy as np
 import pandas as pd
 
 from team_context import (
+    FREE_AGENT_TEAM_ID,
     PA_PER_TEAM_GAME,
     TEAM_CONTEXT_BOTTOM_UP_WEIGHT,
     TEAM_OVERRIDE_PATH,
@@ -344,6 +345,12 @@ def reconciliation_report(hitters: pd.DataFrame, pitchers: pd.DataFrame,
                                      0.0)
                     per = vp.groupby(hitters["team_id"]).sum()
                     per = per[per.index.notna()]
+                    # Free agents are not a 31st club. Their pool is a real
+                    # total but it is not a budget, so counting it among the
+                    # clubs made the closure line read "min 5,941 max 6,464"
+                    # when all thirty clubs were in fact at 5,941.
+                    fa_pa = float(per.get(FREE_AGENT_TEAM_ID, 0.0))
+                    per = per[per.index != FREE_AGENT_TEAM_ID]
                     if len(per):
                         n_floor = int((hitters.get(
                             "pt_tier", pd.Series(dtype=object)
@@ -354,6 +361,13 @@ def reconciliation_report(hitters: pd.DataFrame, pitchers: pd.DataFrame,
                             f"(budget {162 * PA_PER_TEAM_GAME:,.0f}, "
                             f"projected only; {n_floor:,} floor players carry "
                             f"1 PA each outside it)")
+                        if fa_pa > 0:
+                            n_fa = int((hitters["team_id"]
+                                        == FREE_AGENT_TEAM_ID).sum())
+                            lines.append(
+                                f"  free agents: {n_fa} unsigned players "
+                                f"holding {fa_pa:,.0f} PA, which comes out of "
+                                f"what the clubs reserved for signings")
     return "\n".join(lines)
 
 

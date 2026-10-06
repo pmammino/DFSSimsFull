@@ -81,7 +81,17 @@
     "A reserve says 'this club's playing time is not all accounted for'. It does",
     "NOT say 'this club is better than its roster looks' -- the quality of a",
     "player nobody has signed is unknowable, so reserves never touch the rate",
-    "projections."
+    "projections.",
+    "",
+    "WITH reserves, the free agents close onto the reserved pool exactly as a",
+    "club's players close onto its budget, and league playing time stays whole.",
+    "",
+    "WITHOUT them, a free agent keeps his full role volume -- the 'what he does",
+    "if he signs and plays this role' line, which is the useful number for a",
+    "player nobody has signed -- and the league total then runs OVER by that",
+    "much, because 30 full clubs plus unsigned players is more baseball than",
+    "gets played. The run log says so, and verify_refresh fails the league",
+    "total check past 2%. Either mode is legitimate; just know which you are in."
   ],
 
   "reserves": [

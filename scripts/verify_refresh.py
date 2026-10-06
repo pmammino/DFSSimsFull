@@ -105,7 +105,7 @@ def check_team_identity(checks: Checks, h: pd.DataFrame,
     merging Chi/Los/New/San. This also broke same-name resolution on the daily
     path, so it is not a cosmetic check.
     """
-    from team_context import TEAM_ABBR_BY_ID
+    from team_context import FREE_AGENT_TEAM_ID, TEAM_ABBR_BY_ID
 
     mlb = set(TEAM_ABBR_BY_ID.values())
     for label, df in (("hitters", h), ("pitchers", p)):
@@ -230,9 +230,11 @@ def check_extra_base_hits(checks: Checks, h: pd.DataFrame) -> None:
 
 
 def check_playing_time(checks: Checks, h: pd.DataFrame,
-                       p: pd.DataFrame) -> None:
+                       p: pd.DataFrame, target_year: int = 2027) -> None:
     """Tiers present, and floor-tier players carry exactly the floor."""
     from pipeline_config import PT_FLOOR_IP, PT_FLOOR_PA
+    from team_context import (FREE_AGENT_TEAM_ID, TEAM_OVERRIDE_PATH,
+                              load_roster_reserves)
 
     for label, df, col, floor in (("hitters", h, "Proj_PA", PT_FLOOR_PA),
                                   ("pitchers", p, "Proj_IP", PT_FLOOR_IP)):
@@ -282,12 +284,51 @@ def check_playing_time(checks: Checks, h: pd.DataFrame,
                 v = v.where(df["pt_tier"].astype(str) != "floor", 0.0)
             per = v.groupby(df[tcol]).sum()
             per = per[per.index.notna() & (per.index > 0)]
+            # A club that has RESERVED playing time for a signing it has not
+            # made is supposed to fall short, by exactly what it reserved.
+            # Judging it against the full budget turns a correct projection
+            # into a FAIL, so the target is the budget net of the reserve.
+            share_key = "pa_share" if col == "Proj_PA" else "ip_share"
+            reserves = load_roster_reserves(TEAM_OVERRIDE_PATH(target_year))
+            target = pd.Series(
+                {int(t): budget * (1.0 - float(
+                    (reserves.get(int(t), {}) or {}).get(share_key, 0.0) or 0.0))
+                 for t in per.index})
             if len(per):
-                worst = float((per - budget).abs().max())
+                off = (per - target.reindex(per.index)).abs()
+                worst = float(off.max())
+                n_res = sum(1 for t in per.index
+                            if (reserves.get(int(t), {}) or {}).get(share_key))
                 checks.add(PASS if worst <= budget * 0.02 else FAIL,
                            f"{col} team closure",
-                           f"{len(per)} clubs, worst off budget by "
-                           f"{worst:,.1f} of {budget:,.0f} (projected only)")
+                           f"{len(per)} clubs, worst off target by "
+                           f"{worst:,.1f} of {budget:,.0f} (projected only"
+                           + (f", {n_res} reserving for a signing)" if n_res
+                              else ")"))
+
+            # Per-club closure says nothing about FREE AGENTS, who are not on
+            # a club and so are not in `per` at all. Their playing time is
+            # real and has to come out of what the clubs reserved for the
+            # signings they have not made — so the league total is the check
+            # that sees them. Without it, 40 unsigned regulars carrying a full
+            # season each push the league 15% over and every per-club row
+            # still reads PASS.
+            league = float(v.sum())
+            # Against the clubs actually present, not a hardcoded 30: a
+            # missing club is what the team-label check is for, and baking
+            # the count in here only makes this check brittle.
+            expect = budget * float(len(per))
+            n_fa = int((pd.to_numeric(df[tcol], errors="coerce")
+                        == FREE_AGENT_TEAM_ID).sum())
+            gap = league / expect - 1.0
+            status = PASS if abs(gap) <= 0.02 else FAIL
+            checks.add(status, f"{col} league total",
+                       f"{league:,.0f} vs {expect:,.0f} ({gap:+.2%}), "
+                       f"{n_fa} free agent(s)"
+                       + ("" if status == PASS else
+                          " — free agents need a reserved share to close "
+                          "onto (load_roster_reserves), or they are playing "
+                          "on top of 30 full clubs"))
 
 
 def check_fielding(checks: Checks, out_dir, target_year: int) -> None:
@@ -604,7 +645,7 @@ def main(argv=None) -> int:
     checks = Checks()
     check_team_identity(checks, h, p)
     check_extra_base_hits(checks, h)
-    check_playing_time(checks, h, p)
+    check_playing_time(checks, h, p, a.target_year)
     check_pool_composition(checks, h, p)
     check_physically_possible(checks, h, p)
     check_league_calibration(checks, h, p)
