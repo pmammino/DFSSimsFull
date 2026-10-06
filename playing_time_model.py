@@ -96,6 +96,11 @@ TEAM_IP_BUDGET = 162.0 * 9.0                  # 1,458
 # club — 5,354 across the league against the 4,859 that exist.
 TEAM_GS_BUDGET = 162.0
 
+# Where the RotoWire usage feeds live. See `role_feeds`: depth charts, batting
+# orders, bullpen pecking orders and the prospect list, which between them say
+# what a player's job is far better than his own volume history can.
+FEED_DIR = "feeds"
+
 # How much playing time an UNSIGNED player gets, and who pays for it.
 #
 # All three modes give him his ROLE at the league's own scale — a full-time
@@ -988,16 +993,29 @@ def project_playing_time(players: pd.DataFrame, kind: str, *,
                          roster_path: str | Path = "rosters",
                          reserves: dict | None = None,
                          team_col: str = "Pred_target_team_id",
+                         feed_dir: str | Path | None = FEED_DIR,
                          ) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """Defaults -> overrides -> raw volume -> team closure.
+    """Defaults -> usage feeds -> overrides -> raw volume -> team closure.
 
     Satisfies `playing_time.PlayingTimeModel`: returns Proj_PA/Proj_IP, Proj_G,
     pt_tier and pt_source per player, closing on the team and hence the league
     budget.
+
+    The feeds sit in the middle on purpose. A depth chart and a batting order
+    know more about a player's job than a guess from last season's volume
+    does, and less than a person who has typed a row in the override file —
+    so they beat the first and lose to the second. Pass `feed_dir=None` to
+    skip them; a player no feed covers keeps his heuristic default either way.
     """
     stats: dict = {}
     out = assign_default_roles(players, kind, fielding=fielding,
                                team_col=team_col)
+    if feed_dir is not None:
+        from role_feeds import apply_feed_roles
+        out, stats["feeds"] = apply_feed_roles(
+            out, kind, feed_dir=feed_dir, team_col=team_col,
+            alias_path=Path(roster_path) / f"player_id_aliases_"
+                                           f"{target_year}.csv")
     ov = load_role_overrides(role_override_path(kind, target_year, roster_path),
                              kind)
     out, stats["overrides"] = apply_role_overrides(out, ov, kind=kind)
@@ -1052,6 +1070,10 @@ def playing_time_report(out: pd.DataFrame, team_diag: pd.DataFrame,
     vol = "Proj_PA" if is_pa else "Proj_IP"
     budget = TEAM_PA_BUDGET if is_pa else TEAM_IP_BUDGET
     lines = [f"  {kind}s: {len(out)} players"]
+
+    if stats.get("feeds"):
+        from role_feeds import feed_report
+        lines.append(feed_report(stats["feeds"]).replace("\n  ", "\n    "))
 
     ov = stats.get("overrides", {})
     if ov.get("matched") or ov.get("unmatched"):

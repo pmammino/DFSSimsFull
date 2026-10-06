@@ -860,6 +860,47 @@ because a catcher is matched to a catcher slot rather than merely out-ranking an
 outfielder. The budget to fill is `162 × PA_PER_TEAM_GAME`, in full, for
 every club.
 
+### Roles from usage feeds
+
+Four RotoWire files in `feeds/` decide what a player's job is: `depth.xml`
+(every club's depth chart, ranked within a position group), `orders.xml` (a
+batting order against each hand), `closers.xml` (the bullpen pecking order,
+with RotoWire's own Stability rating) and `prospects.xml` (the top 400, with a
+league level). `role_feeds.py` turns them into ROLE MIXTURES.
+
+The design idea is that **a mixture's width is how much the feeds disagree**,
+not an opinion. A left fielder batting third against both hands who is also
+the depth chart's rank-1 left fielder comes out ~0.90 on his role; a player one
+feed calls a starter and the other leaves out of the lineup comes out split
+0.60/0.40 between the two answers; a closer the feed itself rates "Very Low"
+stability comes out 0.50 rather than 0.92; a committee is written as the
+three-way split it is. Nothing invents a spread to look humble.
+
+Two things calibrated against the real within-club rank curve
+(`scripts/fit_role_anchors.real_rank_curve`), both of which the first guess got
+wrong:
+
+* **How far down the position ladder a real job goes** (`DEPTH_RANK_ROLE`).
+  Dropping to the 26th man at rank 4 and out of the league at rank 5 put the
+  top five of each club 6-9% above the real curve and starved ranks 9-16.
+* **Job security falls down the batting order** (`AGREE_BY_SPOT`). A club's
+  nine starters run from ~634 plate appearances to ~342, and the spot itself
+  only explains 4.65 against 3.97 a game; the rest is that the number-three
+  hitter still has the job in September. Spending the spot a SECOND time as a
+  per-game multiplier double-counted it and measurably made things worse.
+
+Measured end to end, against the real rank curve: hitters improve from 0.076
+to 0.053 and pitchers from 0.052 to 0.041. 1,589 players carry a mixture where
+none did before, and roles the heuristic could not see at all get populated —
+62 weak-side platoons, 50 strong-side, 83 setup men, 121 swing arms.
+
+The feeds sit between the heuristic default and the override file, so a human
+who types a row in `rosters/hitter_roles_<year>.csv` still wins. Names join
+without an MLBAM id (only the prospects feed carries one);
+`rosters/player_id_aliases_<year>.csv` settles what the name join misses, and
+the run log prints exactly which rows those are. Pass `feed_dir=None` to skip
+the feeds entirely.
+
 ### Free agents
 
 An unsigned player's playing time is whatever his role says — give him a
