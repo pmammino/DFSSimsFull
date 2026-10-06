@@ -25,10 +25,12 @@ What it does today
    `Pred_R_per_PA_neutral`.
 4. **Free agents and roster reserves.** Unsigned players are carried with full
    rate lines under `FREE_AGENT_TEAM_ID`, excluded from team aggregates but
-   available for playing time and a role. A club expected to sign someone can
-   reserve part of its playing-time budget so it is deliberately
-   under-projected rather than spreading those plate appearances across the
-   players currently on hand.
+   available for playing time and a role. An unsigned player's playing time is
+   whatever his ROLE says, exactly as it is for a player on a club — give him
+   a full-time role and he gets a full-time season — and the thirty clubs then
+   give up precisely what the unsigned class holds between them, so the league
+   still totals the baseball that actually gets played. The roster file's
+   reserved shares say WHICH clubs give it up, not how much.
 5. **Team wins and save / hold opportunity** (`team_wins.py`). Pythagenpat off
    the bottom-up RS and RA factors, normalized so league wins total exactly
    2,430, then converted into per-team save and hold opportunity pools.
@@ -366,8 +368,9 @@ def reconciliation_report(hitters: pd.DataFrame, pitchers: pd.DataFrame,
                                         == FREE_AGENT_TEAM_ID).sum())
                             lines.append(
                                 f"  free agents: {n_fa} unsigned players "
-                                f"holding {fa_pa:,.0f} PA, which comes out of "
-                                f"what the clubs reserved for signings")
+                                f"holding {fa_pa:,.0f} PA at their roles, "
+                                f"which the clubs give up between them "
+                                f"({fa_pa / len(per):,.0f} PA each)")
     return "\n".join(lines)
 
 

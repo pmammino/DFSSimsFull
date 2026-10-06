@@ -857,10 +857,18 @@ per team:  1 primary C (or a tandem)   ~8 everyday spots   4-5 bench
 
 Typed slots make the allocation much better-posed than talent rank alone,
 because a catcher is matched to a catcher slot rather than merely out-ranking an
-outfielder. The budget to fill is
-`162 × PA_PER_TEAM_GAME × (1 − pa_reserve_share)` — see **Free agents and
-roster reserves** below, which is how a club expected to sign someone is left
-deliberately under-projected.
+outfielder. The budget to fill is `162 × PA_PER_TEAM_GAME` less the club's
+slice of what the **free agents** hold.
+
+An unsigned player's playing time is whatever his role says — give him a
+full-time role and he gets a full-time season, because being unsigned is not
+information about how much he will play once he signs. The thirty clubs then
+give up exactly what the unsigned class holds between them, so the league
+still totals the baseball that gets played (`free_agent_pool` in
+`playing_time_model.py` solves the two against each other in closed form, and
+the result is that a free agent is scaled at the same rate everybody else is).
+The roster file's `pa_share` / `ip_share` entries say *which* clubs give the
+playing time up, not how much.
 
 ### Saves and holds
 

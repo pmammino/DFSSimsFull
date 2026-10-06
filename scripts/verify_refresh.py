@@ -233,6 +233,7 @@ def check_playing_time(checks: Checks, h: pd.DataFrame,
                        p: pd.DataFrame, target_year: int = 2027) -> None:
     """Tiers present, and floor-tier players carry exactly the floor."""
     from pipeline_config import PT_FLOOR_IP, PT_FLOOR_PA
+    from playing_time_model import _reserve_by_club
     from team_context import (FREE_AGENT_TEAM_ID, TEAM_OVERRIDE_PATH,
                               load_roster_reserves)
 
@@ -288,23 +289,33 @@ def check_playing_time(checks: Checks, h: pd.DataFrame,
             # made is supposed to fall short, by exactly what it reserved.
             # Judging it against the full budget turns a correct projection
             # into a FAIL, so the target is the budget net of the reserve.
+            #
+            # The reserve is read off the projection, not out of the roster
+            # file: what the clubs hold back is now DERIVED from the free
+            # agents' own roles (see `free_agent_pool`), so the file's
+            # declared share says which clubs give the playing time up, not
+            # how much. Reading the file here would fail a correct projection
+            # whenever a user declares 3.5% and the unsigned class needs 6%.
             share_key = "pa_share" if col == "Proj_PA" else "ip_share"
             reserves = load_roster_reserves(TEAM_OVERRIDE_PATH(target_year))
-            target = pd.Series(
-                {int(t): budget * (1.0 - float(
-                    (reserves.get(int(t), {}) or {}).get(share_key, 0.0) or 0.0))
-                 for t in per.index})
+            fa_total = float(v[pd.to_numeric(df[tcol], errors="coerce")
+                               == FREE_AGENT_TEAM_ID].sum())
+            declared = {int(t): float(
+                (reserves.get(int(t), {}) or {}).get(share_key, 0.0) or 0.0)
+                for t in per.index}
+            # The same split the model used, so the two cannot drift apart.
+            held = _reserve_by_club(fa_total, declared, budget)
+            target = pd.Series({t: budget - held.get(t, 0.0)
+                                for t in per.index})
             if len(per):
                 off = (per - target.reindex(per.index)).abs()
                 worst = float(off.max())
-                n_res = sum(1 for t in per.index
-                            if (reserves.get(int(t), {}) or {}).get(share_key))
                 checks.add(PASS if worst <= budget * 0.02 else FAIL,
                            f"{col} team closure",
                            f"{len(per)} clubs, worst off target by "
                            f"{worst:,.1f} of {budget:,.0f} (projected only"
-                           + (f", {n_res} reserving for a signing)" if n_res
-                              else ")"))
+                           + (f", {fa_total:,.0f} reserved for free agents)"
+                              if fa_total > 0 else ")"))
 
             # Per-club closure says nothing about FREE AGENTS, who are not on
             # a club and so are not in `per` at all. Their playing time is
