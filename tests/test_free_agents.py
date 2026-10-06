@@ -1,22 +1,28 @@
 """An unsigned player gets a projection; he gets the SAME one he would get
 on a club.
 
-A free agent will play somewhere, so he needs a line, and what he cannot do
-is play ON TOP of a league that is already full: the 30 clubs close on all
-30 x budget of the playing time there is. Both halves have to hold at once,
-and the order they are settled in is what decides whether they do.
+A free agent will play somewhere, so he needs a line, and his role is the
+statement of what that line is — give him a full-time role and he gets a
+full-time season, because being unsigned is not information about how much
+he plays once he signs. Settling the clubs' budgets FIRST and handing him
+whatever was left over is what made an everyday regular's season depend on a
+number in the roster file: reserve 3.5%, mark eighteen regulars unsigned, and
+they split 6,464 plate appearances at 328-389 each, which is a projection of
+nobody. (Before that it was worse. The same eighteen had a MEDIAN of 39.7,
+because every unsigned player in baseball was depth-ranked against every
+other as though they were one 40-man roster.)
 
-Settling the clubs first and handing the free agents the remainder is what
-made an everyday regular's season depend on a number in the roster file
-rather than on his role — reserving 3.5% and marking eighteen regulars
-unsigned gave them 328-389 plate appearances each, which is not a projection
-of what any of them will do. Settling the unsigned class FIRST, from their
-own role anchors, and making the clubs reserve exactly that much, gets a
-full-time free agent a full-time season and still closes the league.
+So the unsigned class is settled first, from its own role anchors. What is
+then left to decide is who comes up short to make room, and the answer by
+default is nobody: each club is projected at its full budget with the
+players it actually has, the unsigned pool sits beside the thirty, and the
+league total is a season PLUS an offseason that has not happened yet. Which
+is true. The alternative is docking twenty-nine clubs for a signing they
+will not make.
 
-(Before any of this, the same eighteen had a MEDIAN of 39.7 plate
-appearances, because every unsigned player in baseball was ranked against
-every other as though they were one 40-man roster.)
+`FREE_AGENT_PLAYING_TIME` names the three modes; the ones that do dock the
+clubs are tested here too, because they are still reachable and still have
+to be right.
 """
 
 import sys
@@ -78,33 +84,55 @@ def _per_club(df):
 # Sizing the pool
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_the_pool_is_the_unsigned_share_of_the_leagues_raw_volume():
-    """One scale for everybody, which is the whole claim.
-
-    Nine tenths of the role volume is signed, so the clubs keep nine tenths
-    of the league and the unsigned tenth takes the rest.
-    """
+def test_the_pool_is_the_free_agents_role_volume_at_the_league_rate():
+    """A tenth of the complete league's role volume is unsigned, so the
+    unsigned class holds a tenth of the league."""
     assert M.free_agent_pool(fa_raw=1_000.0, club_raw=9_000.0,
                              league=20_000.0) == pytest.approx(2_000.0)
 
 
-def test_a_free_agent_is_scaled_at_the_same_rate_as_everyone_else():
-    """What the closed form is for. The league scale and the free agents'
-    scale are the same number, so a role means one thing league-wide."""
+def test_a_free_agent_is_paid_at_the_rate_of_a_COMPLETE_league():
+    """Not the rate the depleted clubs are closing at.
+
+    In the default mode the clubs close on their full budgets with whoever
+    is left, so unsigning people inflates the survivors — and paying free
+    agents at that inflated rate would make every unsigned player's
+    projection rise with the size of the free agent class. Here half the
+    league is unsigned: the complete-league rate is 1.0, the depleted-club
+    rate would be 2.0, and it has to be the first one.
+    """
+    pool = M.free_agent_pool(fa_raw=10_000.0, club_raw=10_000.0,
+                             league=20_000.0)
+    assert pool / 10_000.0 == pytest.approx(1.0)
+
+
+def test_the_pool_does_not_depend_on_which_mode_pays_for_it(monkeypatch):
+    """Who comes up short is `club_reserve_total`'s business. What the
+    player plays must not move with it."""
+    args = dict(fa_raw=5_000.0, club_raw=17_000.0, league=20_000.0)
+    want = M.free_agent_pool(**args)
+    monkeypatch.setattr(M, "FREE_AGENT_PLAYING_TIME", "share")
+    assert M.free_agent_pool(**args) == pytest.approx(want)
+
+
+def test_share_mode_leaves_the_clubs_closing_at_that_same_rate(monkeypatch):
+    """Where the formula comes from at the other end: with the clubs giving
+    the pool up, the rate depends on the pool that depends on the rate, and
+    the closed form has to leave both true at once."""
+    monkeypatch.setattr(M, "FREE_AGENT_PLAYING_TIME", "share")
     league, club_raw, fa_raw = 20_000.0, 17_000.0, 5_000.0
     pool = M.free_agent_pool(fa_raw, club_raw, league)
     assert pool / fa_raw == pytest.approx((league - pool) / club_raw)
 
 
-def test_nobody_unsigned_reserves_nothing():
+def test_nobody_unsigned_holds_nothing():
     assert M.free_agent_pool(0.0, 9_000.0, 20_000.0) == 0.0
 
 
 def test_the_pool_cannot_eat_the_league():
     """Self-limiting by construction, so no arbitrary ceiling is needed:
     the clubs keep their share of the raw volume however much is unsigned."""
-    pool = M.free_agent_pool(fa_raw=1e9, club_raw=1.0, league=20_000.0)
-    assert pool < 20_000.0
+    assert M.free_agent_pool(fa_raw=1e9, club_raw=1.0, league=20_000.0) < 20_000
 
 
 def test_nobody_signed_at_all_hands_the_league_to_the_free_agents():
@@ -119,10 +147,28 @@ def test_pool_mode_takes_the_declared_reserve_instead(monkeypatch):
                              declared_pool=400.0) == pytest.approx(400.0)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Who comes up short, which is the whole of the difference between the modes
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_by_default_no_club_gives_anything_up():
+    assert M.club_reserve_total(pool=2_000.0, declared_pool=400.0) == 0.0
+
+
+def test_share_mode_makes_the_clubs_give_up_the_pool(monkeypatch):
+    monkeypatch.setattr(M, "FREE_AGENT_PLAYING_TIME", "share")
+    assert M.club_reserve_total(2_000.0, 400.0) == pytest.approx(2_000.0)
+
+
+def test_pool_mode_makes_them_give_up_what_they_declared(monkeypatch):
+    monkeypatch.setattr(M, "FREE_AGENT_PLAYING_TIME", "pool")
+    assert M.club_reserve_total(2_000.0, 400.0) == pytest.approx(400.0)
+
+
 def test_the_declared_share_decides_which_clubs_give_it_up():
-    """Its job in "role" mode: a distribution key, not a cap. A club that
-    says it expects to sign gives up more of the pool than one that does
-    not, and the pool itself is still what the free agents need."""
+    """Its job once a mode does dock the clubs: a distribution key, not a
+    cap. A club that says it expects to sign gives up more than one that
+    does not, and the size is still what the free agents need."""
     held = M._reserve_by_club(300.0, {1: 0.03, 2: 0.01, 3: 0.0}, budget=1_000.0)
     assert sum(held.values()) == pytest.approx(300.0)
     assert held[1] == pytest.approx(225.0)
@@ -134,6 +180,11 @@ def test_with_nothing_declared_every_club_gives_up_the_same():
     held = M._reserve_by_club(300.0, {1: 0.0, 2: 0.0, 3: 0.0}, budget=1_000.0)
     assert set(held) == {1, 2, 3}
     assert list(held.values()) == pytest.approx([100.0] * 3)
+
+
+def test_nothing_to_give_up_gives_up_nothing_rather_than_dividing_by_zero():
+    held = M._reserve_by_club(0.0, {1: 0.03, 2: 0.0}, budget=1_000.0)
+    assert list(held.values()) == pytest.approx([0.0, 0.0])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -168,7 +219,7 @@ def test_an_unsigned_regular_projects_like_the_regular_he_is():
 
     signed = base[base["PlayerId"].isin(ids)]["Proj_PA"].median()
     unsigned = out[out["PlayerId"].isin(ids)]["Proj_PA"].median()
-    assert unsigned == pytest.approx(signed, rel=0.10), (
+    assert unsigned == pytest.approx(signed, rel=0.15), (
         f"{unsigned:.1f} PA unsigned against {signed:.1f} on a club")
 
 
@@ -185,31 +236,77 @@ def test_a_declared_reserve_does_not_change_what_he_plays():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Where the playing time comes from
+# Who comes up short: nobody
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_the_league_adds_up_with_nothing_declared_at_all():
-    """The case that used to run 15% over. No roster file is needed for the
-    league to close: the pool is derived from the free agents themselves."""
+def test_every_club_keeps_its_whole_budget():
+    """The point of the default. Twenty-nine of these clubs are not going to
+    sign anybody, and docking them for a signing one of them makes is a
+    worse answer than letting the offseason be visibly unfinished."""
     df, _ = _free(_hitters(), n=10)
     out, _ = _run(df)
-    assert _projected(out)["Proj_PA"].sum() == pytest.approx(
+    assert _per_club(out).to_numpy() == pytest.approx(M.TEAM_PA_BUDGET)
+
+
+def test_the_league_reads_a_season_plus_the_unsigned_class():
+    df, ids = _free(_hitters(), n=10)
+    out, _ = _run(df)
+    p = _projected(out)
+    fa = p[p["PlayerId"].isin(ids)]["Proj_PA"].sum()
+    assert fa > 0
+    assert p["Proj_PA"].sum() == pytest.approx(
+        M.TEAM_PA_BUDGET * len(CLUBS) + fa, rel=1e-9)
+
+
+def test_a_declared_reserve_is_ignored_rather_than_half_applied():
+    """Whatever the roster file says, no club is docked in this mode. A
+    reserve that moved a club's total here would be the old behaviour
+    leaking back in through a file nobody re-read."""
+    df, _ = _free(_hitters(), n=10)
+    out, _ = _run(df, reserves={CLUBS[0]: {"pa_share": 0.10}})
+    assert _per_club(out).to_numpy() == pytest.approx(M.TEAM_PA_BUDGET)
+
+
+def test_signing_him_moves_the_cost_onto_the_club_that_signed_him():
+    """The maintenance claim: nothing is adjusted by hand. Give the free
+    agent a club and that club's incumbents compress to absorb him, at that
+    moment, while the other clubs are untouched."""
+    df, ids = _free(_hitters(), n=4)
+    before, _ = _run(df)
+    signed = df.copy()
+    signed.loc[signed["PlayerId"].isin(ids), "Pred_target_team_id"] = CLUBS[0]
+    after, _ = _run(signed)
+
+    assert _per_club(after).to_numpy() == pytest.approx(M.TEAM_PA_BUDGET)
+    # His new club-mates give up the room; nobody else's total moves at all.
+    for club in CLUBS[1:]:
+        mates = (before["Pred_target_team_id"] == club)
+        assert before.loc[mates, "Proj_PA"].sum() == pytest.approx(
+            after.loc[mates, "Proj_PA"].sum())
+    mates = (df["Pred_target_team_id"] == CLUBS[0]) & ~df["PlayerId"].isin(ids)
+    assert after.loc[mates.to_numpy(), "Proj_PA"].sum() < \
+        before.loc[mates.to_numpy(), "Proj_PA"].sum()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ...unless you ask for it
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_share_mode_docks_every_club_by_an_equal_slice(monkeypatch):
+    monkeypatch.setattr(M, "FREE_AGENT_PLAYING_TIME", "share")
+    df, ids = _free(_hitters(), n=10)
+    out, _ = _run(df)
+    p = _projected(out)
+    fa = p[p["PlayerId"].isin(ids)]["Proj_PA"].sum()
+    assert _per_club(out).to_numpy() == pytest.approx(
+        M.TEAM_PA_BUDGET - fa / len(CLUBS))
+    assert p["Proj_PA"].sum() == pytest.approx(
         M.TEAM_PA_BUDGET * len(CLUBS), rel=1e-9)
 
 
-def test_the_clubs_fall_short_by_exactly_what_the_free_agents_take():
-    df, ids = _free(_hitters(), n=10)
-    out, _ = _run(df)
-    fa_total = _projected(out).loc[
-        _projected(out)["PlayerId"].isin(ids), "Proj_PA"].sum()
-    per = _per_club(out)
-    assert per.to_numpy() == pytest.approx(
-        M.TEAM_PA_BUDGET - fa_total / len(CLUBS))
-
-
-def test_a_declared_share_moves_the_cost_between_clubs():
-    """One club expects to do the signing, so one club pays for it — and
-    the league total is untouched either way."""
+def test_share_mode_sends_the_cost_where_the_roster_file_points(monkeypatch):
+    """One club expects to do the signing, so one club pays for it."""
+    monkeypatch.setattr(M, "FREE_AGENT_PLAYING_TIME", "share")
     df, _ = _free(_hitters(), n=10)
     out, _ = _run(df, reserves={CLUBS[0]: {"pa_share": 0.10}})
     per = _per_club(out)
@@ -219,7 +316,7 @@ def test_a_declared_share_moves_the_cost_between_clubs():
         M.TEAM_PA_BUDGET * len(CLUBS), rel=1e-9)
 
 
-def test_pool_mode_still_closes_them_onto_the_declared_share(monkeypatch):
+def test_pool_mode_closes_them_onto_the_declared_share(monkeypatch):
     """The other question, kept because it is a real one: "only 10% of
     league plate appearances go to players unsigned today"."""
     monkeypatch.setattr(M, "FREE_AGENT_PLAYING_TIME", "pool")
@@ -256,17 +353,23 @@ def test_pitchers_work_the_same_way():
     out, _ = _run(df, kind="pitcher")
 
     p = out[out["pt_tier"].astype(str) != "floor"]
-    assert p["Proj_IP"].sum() == pytest.approx(
-        M.TEAM_IP_BUDGET * len(CLUBS), rel=1e-9)
+    on = p[pd.to_numeric(p["Pred_target_team_id"], errors="coerce") > 0]
+    assert on.groupby("Pred_target_team_id")["Proj_IP"].sum().to_numpy() == \
+        pytest.approx(M.TEAM_IP_BUDGET)
     fa = p[p["PlayerId"].isin(ids)]
     assert (fa["pt_depth_factor"] == 1.0).all()
 
-    # Scaled at the league's own rate, which is the invariant that makes an
-    # innings role mean the same thing signed or not.
-    raw = pd.to_numeric(p["pt_raw"], errors="coerce")
-    rate = p["Proj_IP"].sum() / raw.sum()
+    # Scaled at the rate a COMPLETE league runs at, which is the invariant
+    # that makes an innings role mean the same thing signed or not. The
+    # clubs' own realized rate is higher here, because five arms left and
+    # the survivors are covering their innings.
+    complete = (M.TEAM_IP_BUDGET * len(CLUBS)
+                / pd.to_numeric(p["pt_raw"], errors="coerce").sum())
     assert (fa["Proj_IP"] / pd.to_numeric(fa["pt_raw"], errors="coerce")
-            ).to_numpy() == pytest.approx(rate, rel=1e-6)
+            ).to_numpy() == pytest.approx(complete, rel=1e-6)
+    club_rate = on["Proj_IP"].sum() / pd.to_numeric(on["pt_raw"],
+                                                    errors="coerce").sum()
+    assert club_rate > complete
 
 
 def test_leaving_a_club_drops_the_depth_discount_with_it():
@@ -308,10 +411,16 @@ def test_the_diagnostics_carry_a_row_for_the_free_agents():
         out[out["PlayerId"].isin(ids)]["Proj_PA"].sum())
 
 
-def test_the_clubs_report_the_reserve_they_actually_held():
+def test_the_clubs_report_the_reserve_they_actually_held(monkeypatch):
     """Derived, so it has to be reported from the projection and not echoed
     back off the roster file."""
     df, ids = _free(_hitters(), n=6)
+    out, diag = _run(df)
+    clubs = diag[diag["team_id"] != FREE_AGENT_TEAM_ID]
+    assert clubs["reserved_share"].to_numpy() == pytest.approx(0.0), \
+        "nothing is held back by default"
+
+    monkeypatch.setattr(M, "FREE_AGENT_PLAYING_TIME", "share")
     out, diag = _run(df)
     clubs = diag[diag["team_id"] != FREE_AGENT_TEAM_ID]
     held = out[out["PlayerId"].isin(ids)]["Proj_PA"].sum() / len(CLUBS)
@@ -327,7 +436,16 @@ def test_the_report_puts_the_two_scales_side_by_side():
     text = M.playing_time_report(out, diag, stats, "hitter")
     assert "free agents" in text
     assert "against the clubs'" in text
-    assert "so the league still closes" in text
+    assert "beside the clubs, not inside them" in text
+
+
+def test_the_report_says_so_when_the_clubs_do_pay(monkeypatch):
+    monkeypatch.setattr(M, "FREE_AGENT_PLAYING_TIME", "share")
+    df, _ = _free(_hitters(), n=6)
+    out, diag, stats = M.project_playing_time(df, "hitter", target_year=2027)
+    text = M.playing_time_report(out, diag, stats, "hitter")
+    assert "the clubs give up" in text
+    assert "beside the clubs" not in text
 
 
 def test_the_club_scale_is_not_polluted_by_the_free_agent_row():

@@ -96,25 +96,42 @@ TEAM_IP_BUDGET = 162.0 * 9.0                  # 1,458
 # club — 5,354 across the league against the 4,859 that exist.
 TEAM_GS_BUDGET = 162.0
 
-# How much playing time an UNSIGNED player gets.
+# How much playing time an UNSIGNED player gets, and who pays for it.
 #
-#   "role" — the same scale the rest of the league gets. His role's anchor is
-#            the statement of what he does, exactly as it is for a player on a
-#            club, and the clubs then reserve precisely what the unsigned class
-#            takes. A free agent given a full-time role therefore gets a
-#            full-time season, and the league still adds up.
+# All three modes give him his ROLE at the league's own scale — a full-time
+# role is a full-time season whether or not anybody has signed him. They
+# differ on which clubs come up short to make room.
 #
-#   "pool" — he closes onto the share the clubs declared in the roster file,
-#            however little that is. This says something different and
-#            sometimes useful: "only 2% of league plate appearances will go to
-#            players who are unsigned today, divide it among them."
+#   "open"  — nobody does. Every club is projected at its full budget with the
+#             players it actually has, the unsigned class is a pool beside the
+#             thirty, and the league reads 30 x budget PLUS that pool.
 #
-# "role" is the default because the other one answers a question nobody asked
-# of a projection. Reserving 3.5% and marking eighteen everyday regulars
-# unsigned gave them 328-389 plate appearances each — not a projection of what
-# any of them will do, just 6,464 PA cut eighteen ways. The number a season
-# projection needs is what the player does once he signs.
-FREE_AGENT_PLAYING_TIME = "role"
+#   "share" — all thirty give up an equal slice of exactly what the unsigned
+#             class holds (or an unequal one, if the roster file says which
+#             clubs expect to sign). The league reads 30 x budget.
+#
+#   "pool"  — the clubs give up what the roster file declared and the free
+#             agents divide that, however little it is. A different question,
+#             and sometimes a real one: "only 2% of league plate appearances
+#             will go to players who are unsigned today."
+#
+# "open" is the default because a mid-offseason league HAS more claimants than
+# it has playing time, and that is a fact about the offseason rather than an
+# error to be hidden. "share" hides it by docking twenty-nine clubs for a
+# signing they will not make — with eighteen bats unsigned, every club gave up
+# 268 PA so that one of them could have Judge. "open" leaves each club correct
+# for the roster it actually has, leaves Judge correct for the role he will
+# actually play, and lets the sum say what is true: this offseason is not
+# finished. When he signs, he moves into that club's budget and its incumbents
+# compress at that moment, with nothing to adjust by hand.
+#
+# What made docking look necessary was the idea that an incumbent would soak
+# up the plate appearances headed for the free agent. That is a worry about
+# clubs being filled UP to their budget, and they are not: the median club
+# carries 7,639 PA of role volume against a 6,156 budget, so the closure is
+# already compressing every incumbent by a fifth. Docking adds a second,
+# smaller squeeze on top, aimed at an arbitrarily chosen victim.
+FREE_AGENT_PLAYING_TIME = "open"
 
 # Per-player ceilings, as physical bounds rather than opinions. The most PA
 # anyone has taken in a season is ~778 (Jimmy Rollins 2007); the most IP in the
@@ -675,27 +692,38 @@ def _close_one_team(raw: np.ndarray, target: float,
 def free_agent_pool(fa_raw: float, club_raw: float, league: float,
                     declared_pool: float = 0.0,
                     mode: str | None = None) -> float:
-    """How much league playing time the unsigned class takes.
+    """How much playing time the unsigned class holds, in total.
 
-    This is the number the clubs then have to reserve, and in "role" mode it
-    is derived rather than declared — which is the whole point. A free agent's
-    projection is what his ROLE says he does; how much the clubs hold back is
-    the consequence of that, not a cap on it.
+    A free agent is scaled at the rate a COMPLETE league runs at — the one
+    the thirty clubs would close at if every unsigned player were already
+    spread across them:
 
-    The two are circular if you let them be. A free agent should be scaled by
-    the same factor everyone else is scaled by, or a full-time role means
-    something different depending on whether a club has signed him yet; but
-    that league scale `s` depends on how much the free agents take, which
-    depends on `s`. It resolves in closed form, because what the clubs have
-    left is the league net of the pool:
+        s = league / (club_raw + fa_raw)
+
+    which is the rate he will in fact be paid at, once he signs and his new
+    club's roster closes around him. The pool is `s * fa_raw`, the unsigned
+    class's share of the league's raw role volume.
+
+    Deliberately NOT the rate the depleted clubs are closing at. In "open"
+    mode the thirty clubs close on their full budgets with the players they
+    still have, so unsigning people INFLATES what the survivors get — nine
+    bats covering 6,156 plate appearances are each credited with some of the
+    absent man's. Paying free agents at that inflated rate would make every
+    unsigned player's projection rise with the size of the free agent class,
+    which is the original disease wearing different clothes. In a toy league
+    with twenty of forty-eight players unsigned it pinned all twenty at the
+    760-PA ceiling.
+
+    The same formula also resolves "share" mode's circularity, where the
+    clubs give the pool up and so the rate depends on the pool that depends
+    on the rate. What the clubs have left is the league net of the pool:
 
         s = (league - s*fa_raw) / club_raw   =>   s = league / (club_raw + fa_raw)
 
-    so the pool is `league * fa_raw / (club_raw + fa_raw)` — the unsigned
-    class's share of the league's raw role volume. It is self-limiting: the
-    clubs keep `league * club_raw / (club_raw + fa_raw)`, which is positive
+    the same expression, arrived at from the other end. It is self-limiting:
+    the clubs keep `league * club_raw / (club_raw + fa_raw)`, positive
     whenever anyone is signed at all, so no arbitrary ceiling is needed to
-    stop the free agents eating the league.
+    stop free agents eating the league.
 
     In "pool" mode the declared reserve IS the answer, and a free agent gets
     whatever share of it his role earns him.
@@ -716,24 +744,40 @@ def free_agent_pool(fa_raw: float, club_raw: float, league: float,
     return float(league) * fa_raw / (club_raw + fa_raw)
 
 
-def _reserve_by_club(pool: float, declared: dict[int, float],
-                     budget: float) -> dict[int, float]:
-    """Split the free agents' pool across the clubs that give it up.
+def club_reserve_total(pool: float, declared_pool: float,
+                       mode: str | None = None) -> float:
+    """How much the thirty clubs give up between them.
 
-    A declared `pa_share`/`ip_share` is read as WHICH clubs expect to sign,
-    not how much the player will play — the pool's size is already settled by
-    `free_agent_pool`. With nothing declared, free agency is nobody's problem
-    in particular and every club gives up an equal slice.
+    The whole of the difference between the modes lives here, which is why it
+    is one function and not a branch buried in the allocator.
     """
-    if not declared or pool <= 0:
-        n = max(len(declared), 1)
-        return {t: pool / n for t in declared}
+    mode = str(mode or FREE_AGENT_PLAYING_TIME).lower()
+    if mode == "pool":
+        return max(float(declared_pool), 0.0)
+    if mode == "share":
+        return max(float(pool), 0.0)
+    return 0.0
+
+
+def _reserve_by_club(reserved: float, declared: dict[int, float],
+                     budget: float) -> dict[int, float]:
+    """Split what the clubs give up across the clubs that give it up.
+
+    A declared `pa_share`/`ip_share` is read as WHICH clubs expect to sign and
+    in what proportion, not how much any unsigned player gets to play — the
+    size is already settled by `free_agent_pool`. With nothing declared, free
+    agency is nobody's problem in particular and every club gives up an equal
+    slice. In the default "open" mode nothing is given up at all and this
+    returns zeros.
+    """
+    if not declared or reserved <= 0:
+        return {t: 0.0 if reserved <= 0 else reserved / len(declared)
+                for t in declared}
     weights = {t: budget * max(float(s), 0.0) for t, s in declared.items()}
     total = sum(weights.values())
     if total <= 0:
-        n = len(declared)
-        return {t: pool / n for t in declared}
-    return {t: pool * w / total for t, w in weights.items()}
+        return {t: reserved / len(declared) for t in declared}
+    return {t: reserved * w / total for t, w in weights.items()}
 
 
 def allocate_playing_time(players: pd.DataFrame, kind: str, *,
@@ -794,14 +838,15 @@ def allocate_playing_time(players: pd.DataFrame, kind: str, *,
     on_a_club = teams.notna() & (teams != FREE_AGENT_TEAM_ID)
     off = ~on_a_club & ~at_floor
 
-    # ── What the unsigned class takes, settled BEFORE any club closes ────
+    # ── What the unsigned class holds, settled BEFORE any club closes ────
     #
     # The order matters and it is the fix. Deciding the clubs' targets first
     # and handing the free agents what was left over is what made an everyday
     # regular's season depend on a number in the roster file rather than on
     # his role. The pool is derived from the free agents' own role volume
-    # (`free_agent_pool`), the clubs give up exactly that much, and a
-    # full-time role is a full-time season whoever is or is not paying for it.
+    # (`free_agent_pool`), so a full-time role is a full-time season whoever
+    # is or is not paying for it — and by default nobody is: the clubs keep
+    # their full budgets and the pool sits beside them.
     def _raw(mask) -> np.ndarray:
         if not mask.any():
             return np.zeros(0)
@@ -812,10 +857,11 @@ def allocate_playing_time(players: pd.DataFrame, kind: str, *,
     club_ids = [int(t) for t in sorted(teams[on_a_club].dropna().unique())]
     declared = {t: float((reserves.get(t, {}) or {}).get(share_key, 0.0) or 0.0)
                 for t in club_ids}
-    fa_pool = free_agent_pool(
-        fa_raw.sum(), _raw(on_a_club & ~at_floor).sum(),
-        budget * len(club_ids), sum(budget * s for s in declared.values()))
-    reserved_by_club = _reserve_by_club(fa_pool, declared, budget)
+    declared_pool = sum(budget * s for s in declared.values())
+    fa_pool = free_agent_pool(fa_raw.sum(), _raw(on_a_club & ~at_floor).sum(),
+                              budget * len(club_ids), declared_pool)
+    reserved_by_club = _reserve_by_club(
+        club_reserve_total(fa_pool, declared_pool), declared, budget)
 
     rows = []
     for team_id, idx in out[on_a_club].groupby(teams[on_a_club]).groups.items():
@@ -1058,16 +1104,18 @@ def playing_time_report(out: pd.DataFrame, team_diag: pd.DataFrame,
                 line += (f", scale {r['scale']:.3f} against the clubs' "
                          f"{sc.mean():.3f}")
             lines.append(line)
-            if pd.notna(r["target"]) and r["target"] > 0:
+            if (res > 0).any():
                 lines.append(
-                    f"    ^ the clubs reserved {r['target']:,.0f} {unit} for "
-                    f"them ({res.mean():.2%} of a budget each), so the league "
-                    f"still closes.")
+                    f"    ^ the clubs give up {(res * budget).sum():,.0f} "
+                    f"{unit} between them ({res.mean():.2%} of a budget "
+                    f"each), so the league closes at {budget * len(clubs):,.0f}"
+                    f" ({FREE_AGENT_PLAYING_TIME!r} mode).")
             else:
                 lines.append(
-                    f"    ^ nothing reserved for them, so the league total is "
-                    f"over by that much. Set FREE_AGENT_PLAYING_TIME='role' "
-                    f"and the clubs will hold back what these players take.")
+                    f"    ^ beside the clubs, not inside them: every club is "
+                    f"projected at its full {budget:,.0f}, so the league reads "
+                    f"{budget * len(clubs) + got.sum():,.0f} — a season plus "
+                    f"an offseason that has not happened yet.")
         elif (res > 0).any():
             lines.append(f"    reserved for signings: {(res > 0).sum()} "
                          f"team(s), no free agents in the set to take it")

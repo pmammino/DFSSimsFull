@@ -72,21 +72,34 @@
     "  pa_share        relative weight for the hitter PA given up, 0 to 0.5",
     "  ip_share        relative weight for the pitcher IP given up, 0 to 0.5",
     "",
-    "YOU DO NOT HAVE TO FILL THIS IN. How much the clubs hold back is worked",
-    "out from the free agents themselves: an unsigned player's playing time is",
-    "whatever his ROLE says, exactly as it is for a player on a club, and the",
-    "clubs then give up precisely that much between them. Give a player a",
-    "full-time role and he gets a full-time season whether or not anybody has",
-    "signed him, and the league still adds up to the baseball that gets played.",
+    "LEAVE THIS BLOCK EMPTY. It does nothing in the default mode, and that is",
+    "the point: you should never have to move playing time between clubs as the",
+    "offseason goes on.",
     "",
-    "What this block does is decide WHICH clubs give it up. With nothing here,",
-    "free agency is nobody's problem in particular and every club gives up an",
-    "equal slice. Name a club -- 'NYY is the one shopping for a corner",
-    "outfielder' -- and it gives up proportionally more. The shares are",
-    "weights relative to each other, not amounts: the size of the pool is",
-    "already settled by the players in it, so writing 0.10 for one club and",
-    "nothing for the rest sends the whole pool to that club whatever 0.10",
-    "would have come to.",
+    "An unsigned player's playing time is whatever his ROLE says, exactly as it",
+    "is for a player on a club -- give a free agent a full-time role and he gets",
+    "a full-time season. Every club is projected at its FULL budget with the",
+    "players it actually has, and the unsigned sit beside the thirty rather than",
+    "inside them. So the league total reads a season plus an offseason that has",
+    "not happened yet, which is true, instead of docking twenty-nine clubs for a",
+    "signing one of them will make.",
+    "",
+    "When he signs, assign him above and it settles itself at that moment: he",
+    "moves into that club's budget, that club's incumbents compress to make room,",
+    "the other twenty-nine are untouched, and the league total falls back to",
+    "exactly 30 x budget. Nothing here needs editing, before or after.",
+    "",
+    "The two modes that DO make clubs come up short are in playing_time_model.py",
+    "under FREE_AGENT_PLAYING_TIME, and this block is for them:",
+    "",
+    "  'share'  the clubs give up exactly what the unsigned class holds. The",
+    "           shares here then say WHICH clubs give it up and in what",
+    "           proportion -- relative weights, not amounts, since the size is",
+    "           already settled by the players in the pool. With nothing",
+    "           declared, every club gives up an equal slice.",
+    "  'pool'   the clubs hold back the declared share whether or not anybody is",
+    "           there to take it, and the free agents divide that between them",
+    "           however little it is. The shares are read literally here.",
     "",
     "Hitters and pitchers reserve independently -- a club shopping for a",
     "starter is not necessarily shopping for a bat.",
@@ -94,26 +107,19 @@
     "A reserve says 'this club's playing time is not all accounted for'. It does",
     "NOT say 'this club is better than its roster looks' -- the quality of a",
     "player nobody has signed is unknowable, so reserves never touch the rate",
-    "projections.",
-    "",
-    "Reserving for a signing when the data holds NO free agents does nothing:",
-    "the clubs would fall short and no player would gain, which is just a",
-    "smaller league. Set FREE_AGENT_PLAYING_TIME = 'pool' in",
-    "playing_time_model.py for the literal reading, where the declared share is",
-    "held open whether or not anyone is there to take it, and the free agents",
-    "that do exist divide it between them however little it is."
+    "projections."
   ],
 
   "reserves": [
     {
       "team": "NYY",
       "pa_share": 0.10,
-      "note": "EXAMPLE ONLY -- expected to sign a corner outfielder. Delete this block."
+      "note": "EXAMPLE ONLY -- ignored in the default mode; see the comment above. Delete this block."
     },
     {
       "team": "SD",
       "ip_share": 0.12,
-      "note": "EXAMPLE ONLY -- expected to sign a mid-rotation starter. Delete this block."
+      "note": "EXAMPLE ONLY -- ignored in the default mode; see the comment above. Delete this block."
     }
   ]
 }

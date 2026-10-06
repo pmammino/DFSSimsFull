@@ -73,6 +73,15 @@ OFFENSE_DEFENSE_MAX_GAP = 0.01
 # residual we have named and not yet resolved.
 VOLUME_MAX_GAP = 0.015
 
+# How much of the projected league the UNSIGNED class may hold before it is
+# a data problem rather than an offseason. Free agents sit beside the thirty
+# clubs by default, so their total is not bounded by any budget and nothing
+# else in this file would notice a roster feed that lost its team ids and
+# marked everybody a free agent. A real top-of-market December leaves maybe a
+# tenth of league playing time unsigned; 25% is well clear of that and still
+# catches the failure, which is always enormous when it happens.
+FREE_AGENT_MAX_LEAGUE_SHARE = 0.25
+
 PASS, FAIL, WARN = "PASS", "FAIL", "WARN"
 
 
@@ -233,7 +242,7 @@ def check_playing_time(checks: Checks, h: pd.DataFrame,
                        p: pd.DataFrame, target_year: int = 2027) -> None:
     """Tiers present, and floor-tier players carry exactly the floor."""
     from pipeline_config import PT_FLOOR_IP, PT_FLOOR_PA
-    from playing_time_model import _reserve_by_club
+    from playing_time_model import _reserve_by_club, club_reserve_total
     from team_context import (FREE_AGENT_TEAM_ID, TEAM_OVERRIDE_PATH,
                               load_roster_reserves)
 
@@ -290,12 +299,12 @@ def check_playing_time(checks: Checks, h: pd.DataFrame,
             # Judging it against the full budget turns a correct projection
             # into a FAIL, so the target is the budget net of the reserve.
             #
-            # The reserve is read off the projection, not out of the roster
-            # file: what the clubs hold back is now DERIVED from the free
-            # agents' own roles (see `free_agent_pool`), so the file's
-            # declared share says which clubs give the playing time up, not
-            # how much. Reading the file here would fail a correct projection
-            # whenever a user declares 3.5% and the unsigned class needs 6%.
+            # How much that is comes from the model, not from the roster
+            # file: the file's declared share says WHICH clubs give playing
+            # time up and in what proportion, and the mode says whether any
+            # of them do at all (by default none do — see
+            # FREE_AGENT_PLAYING_TIME). Reading the file for the amount
+            # would fail a correct projection whenever the two disagree.
             share_key = "pa_share" if col == "Proj_PA" else "ip_share"
             reserves = load_roster_reserves(TEAM_OVERRIDE_PATH(target_year))
             fa_total = float(v[pd.to_numeric(df[tcol], errors="coerce")
@@ -303,8 +312,10 @@ def check_playing_time(checks: Checks, h: pd.DataFrame,
             declared = {int(t): float(
                 (reserves.get(int(t), {}) or {}).get(share_key, 0.0) or 0.0)
                 for t in per.index}
-            # The same split the model used, so the two cannot drift apart.
-            held = _reserve_by_club(fa_total, declared, budget)
+            # The same two functions the model used, so they cannot drift.
+            reserved = club_reserve_total(
+                fa_total, sum(budget * s for s in declared.values()))
+            held = _reserve_by_club(reserved, declared, budget)
             target = pd.Series({t: budget - held.get(t, 0.0)
                                 for t in per.index})
             if len(per):
@@ -314,32 +325,50 @@ def check_playing_time(checks: Checks, h: pd.DataFrame,
                            f"{col} team closure",
                            f"{len(per)} clubs, worst off target by "
                            f"{worst:,.1f} of {budget:,.0f} (projected only"
-                           + (f", {fa_total:,.0f} reserved for free agents)"
-                              if fa_total > 0 else ")"))
+                           + (f", {reserved:,.0f} reserved for signings)"
+                              if reserved > 0 else ")"))
 
-            # Per-club closure says nothing about FREE AGENTS, who are not on
-            # a club and so are not in `per` at all. Their playing time is
-            # real and has to come out of what the clubs reserved for the
-            # signings they have not made — so the league total is the check
-            # that sees them. Without it, 40 unsigned regulars carrying a full
+            # The league total, which is where free agents become visible:
+            # they are not on a club, so per-club closure cannot see them at
+            # all. Without this check, 40 unsigned regulars carrying a full
             # season each push the league 15% over and every per-club row
             # still reads PASS.
+            #
+            # What it measures is the CLUBS' total, against the clubs
+            # actually present rather than a hardcoded 30 (a missing club is
+            # what the team-label check is for). An unsigned player playing
+            # "on top of" the thirty is not an error to catch here any more —
+            # it is the default and it is what a mid-offseason league looks
+            # like. The error that replaces it is a club whose own roster
+            # does not close, and that is this row.
             league = float(v.sum())
-            # Against the clubs actually present, not a hardcoded 30: a
-            # missing club is what the team-label check is for, and baking
-            # the count in here only makes this check brittle.
-            expect = budget * float(len(per))
+            on_club = float(per.sum())
+            expect = budget * float(len(per)) - reserved
             n_fa = int((pd.to_numeric(df[tcol], errors="coerce")
                         == FREE_AGENT_TEAM_ID).sum())
-            gap = league / expect - 1.0
+            gap = on_club / expect - 1.0 if expect > 0 else 0.0
             status = PASS if abs(gap) <= 0.02 else FAIL
             checks.add(status, f"{col} league total",
-                       f"{league:,.0f} vs {expect:,.0f} ({gap:+.2%}), "
-                       f"{n_fa} free agent(s)"
+                       f"{on_club:,.0f} vs {expect:,.0f} ({gap:+.2%}) across "
+                       f"{len(per)} clubs"
                        + ("" if status == PASS else
-                          " — free agents need a reserved share to close "
-                          "onto (load_roster_reserves), or they are playing "
-                          "on top of 30 full clubs"))
+                          " — the clubs do not close on their own budgets"))
+
+            # The unsigned class as its own line. It is allowed to be large —
+            # an offseason that has not happened yet genuinely has more
+            # claimants than there are innings — but not unbounded: a whole
+            # league marked unsigned is a roster file that went wrong, not a
+            # projection, and it would otherwise pass every check above
+            # without appearing in any of them.
+            if n_fa or fa_total > 0:
+                share = fa_total / league if league > 0 else 0.0
+                ok = share <= FREE_AGENT_MAX_LEAGUE_SHARE
+                checks.add(PASS if ok else FAIL, f"{col} free agents",
+                           f"{n_fa} unsigned holding {fa_total:,.0f} "
+                           f"({share:.1%} of the projected league)"
+                           + ("" if ok else
+                              f" — over {FREE_AGENT_MAX_LEAGUE_SHARE:.0%}; "
+                              "check the roster file's team assignments"))
 
 
 def check_fielding(checks: Checks, out_dir, target_year: int) -> None:
@@ -619,14 +648,33 @@ def check_league_calibration(checks: Checks, h: pd.DataFrame,
 
     # Runs scored must equal runs allowed, which needs the VOLUMES to agree
     # as well as the rates: every plate appearance is one batter faced.
-    pa_total = float(np.nansum(np.asarray(wh, dtype=float)))
-    tbf_total = float(np.nansum(np.asarray(wp_all, dtype=float)))
+    #
+    # Over the CLUBS only. A free agent's plate appearances are not faced by
+    # anybody, because the games he will play in are the ones currently
+    # allocated to the thirty clubs — he has no opponent until he signs. The
+    # unsigned class is also arbitrarily composed: mark eighteen bats and
+    # twelve arms and the two sides differ by ~1,400 PA, which is a fact
+    # about who is unsigned and not about the three budget constants this
+    # check exists to police. Tying them would be worse than ignoring them,
+    # since it would make a hitter's projection move with the pitcher market.
+    from team_context import FREE_AGENT_TEAM_ID as _FA
+
+    def _club_only(df, w):
+        w = np.asarray(w, dtype=float)
+        tcol = "Pred_target_team_id"
+        if tcol not in df.columns:
+            return w
+        on = (pd.to_numeric(df[tcol], errors="coerce") != _FA).to_numpy()
+        return np.where(on, w, 0.0)
+
+    pa_total = float(np.nansum(_club_only(h, wh)))
+    tbf_total = float(np.nansum(_club_only(p, wp_all)))
     if pa_total > 0 and tbf_total > 0:
         vol = tbf_total / pa_total - 1.0
         status = PASS if abs(vol) <= VOLUME_MAX_GAP else FAIL
         checks.add(status, "PA vs batters faced",
                    f"{pa_total:,.0f} PA vs {tbf_total:,.0f} faced "
-                   f"({vol:+.2%})"
+                   f"({vol:+.2%}, clubs only)"
                    + ("" if status == PASS else
                       " — TEAM_PA_BUDGET, TEAM_IP_BUDGET and "
                       "TBF_PER_IP_CALIBRATION are not mutually consistent"))

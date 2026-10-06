@@ -281,17 +281,21 @@ def load_roster_reserves(path: str | Path) -> dict[int, dict[str, float]]:
     not acquired. Hitters and pitchers reserve independently, since a team
     shopping for a starter is not necessarily shopping for a bat.
 
-    The reserved share is the natural counterpart to `FREE_AGENT_TEAM_ID`: the
-    free agents hold the plate appearances, the reserves hold the space for
-    them, and the two have to balance league-wide.
+    IN THE DEFAULT MODE THIS FILE'S RESERVES DO NOTHING, and that is the
+    point — see `FREE_AGENT_PLAYING_TIME`. No club is docked for a signing it
+    has not made: each is projected at its full budget with the players it
+    actually has, the unsigned sit beside the thirty, and the league total is
+    a season plus an offseason that has not happened yet. Assign the player a
+    club when he signs and it settles itself at that moment, with nothing
+    here to edit either side of it.
 
-    They balance by construction rather than by hand. `free_agent_pool` sizes
-    the space from the free agents' own role anchors, so what is read here is
+    The modes that do dock the clubs read this file, and what they read is
     WHICH clubs give the playing time up and in what proportion — not how
-    much, and not how much any unsigned player gets to play. Reading it the
-    other way round is what made a full-time free agent's season depend on a
-    number in this file: reserve 3.5% and eighteen everyday regulars split
-    6,464 plate appearances, which is nobody's projection of anything.
+    much, and not how much any unsigned player gets to play, which is settled
+    by his own role anchor in `free_agent_pool`. Reading it the other way
+    round is what made a full-time free agent's season depend on a number in
+    this file: reserve 3.5% and eighteen everyday regulars split 6,464 plate
+    appearances, which is nobody's projection of anything.
     """
     p = Path(path)
     if not p.exists():

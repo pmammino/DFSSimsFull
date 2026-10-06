@@ -857,18 +857,37 @@ per team:  1 primary C (or a tandem)   ~8 everyday spots   4-5 bench
 
 Typed slots make the allocation much better-posed than talent rank alone,
 because a catcher is matched to a catcher slot rather than merely out-ranking an
-outfielder. The budget to fill is `162 × PA_PER_TEAM_GAME` less the club's
-slice of what the **free agents** hold.
+outfielder. The budget to fill is `162 × PA_PER_TEAM_GAME`, in full, for
+every club.
+
+### Free agents
 
 An unsigned player's playing time is whatever his role says — give him a
 full-time role and he gets a full-time season, because being unsigned is not
-information about how much he will play once he signs. The thirty clubs then
-give up exactly what the unsigned class holds between them, so the league
-still totals the baseball that gets played (`free_agent_pool` in
-`playing_time_model.py` solves the two against each other in closed form, and
-the result is that a free agent is scaled at the same rate everybody else is).
-The roster file's `pa_share` / `ip_share` entries say *which* clubs give the
-playing time up, not how much.
+information about how much he will play once he signs. He is paid at the rate
+a *complete* league runs at (`free_agent_pool` in `playing_time_model.py`),
+which is the rate he will actually be paid at once he signs and his new club's
+roster closes around him.
+
+Nobody is docked to make room for him. Each club is projected at its full
+budget with the players it actually has, the unsigned sit **beside** the
+thirty rather than inside them, and the league total reads a season plus an
+offseason that has not happened yet — which is true, and better than docking
+twenty-nine clubs for a signing one of them will make. Assign him a club when
+he signs and it settles itself at that moment: his new club's incumbents
+compress, the other twenty-nine are untouched, the league falls back to
+`30 × budget`, and nothing in the roster file needs editing either side of it.
+
+Measured on the 2027 set, taking the largest full-time bat and unsigning him:
+598.1 PA with every club still at 6,156 and the league at 185,278; signed to
+San Francisco, 708.0 PA with the Giants' other bats at 5,448 and the league
+back at exactly 184,680.
+
+`FREE_AGENT_PLAYING_TIME` has two other modes — `"share"`, where the clubs do
+give up what the unsigned class holds, and `"pool"`, where they hold back
+whatever the roster file declares. Only those two read the file's `pa_share` /
+`ip_share` entries, and what they read is *which* clubs give the playing time
+up, not how much.
 
 ### Saves and holds
 
