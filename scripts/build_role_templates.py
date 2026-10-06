@@ -63,10 +63,25 @@ BOX = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 # own copy — and two copies of a table nobody diffs drift, with a renamed role
 # failing as a silent lookup miss rather than an error.
 from role_taxonomy import (  # noqa: E402
-    HITTER_ROLES, PITCHER_ROLES, TIMING, full_time_reference,
+    HITTER_ROLES, PITCHER_ROLES, TIMING, full_time_reference, parse_role_mix,
     suggest_hitter_role as _suggest_hitter_role,
     suggest_pitcher_role as _suggest_pitcher_role,
 )
+
+
+def _probabilities(r, kind: str) -> dict[str, float]:
+    """The role probabilities to pre-fill, from the mixture the model holds.
+
+    `pt_role_mix` is the real answer and `pt_role` is only its heaviest
+    component, so a player the usage feeds put at 0.6 regular / 0.4 bench
+    would otherwise be written into the sheet as a settled regular — the
+    sheet showing more certainty than the projection beside it.
+    """
+    mix = parse_role_mix(r.get("pt_role_mix"), kind)
+    if mix:
+        return mix
+    role = r["pt_role"] if pd.notna(r.get("pt_role")) else None
+    return {role: 1.0} if role else {}
 
 
 def _style_header(ws, row, ncols):
@@ -490,13 +505,14 @@ def _load(target_year: int, out_dir: Path, kind: str) -> list[dict]:
             "Availability": (float(r["pt_availability"])
                              if pd.notna(r.get("pt_availability")) else 1.00),
             "Notes": None,
-            # Pre-fill the assignment as a probability of 1 on its own role,
-            # so the sheet round-trips: export it unchanged and the model
-            # reads back exactly what it assigned. A person expressing a job
-            # battle edits these cells into a split — 0.6 / 0.3 / 0.1 — and
-            # the model blends the anchors rather than picking one.
-            "_probs": ({_role: 1.0} if (_role := (
-                r["pt_role"] if pd.notna(r.get("pt_role")) else None)) else {}),
+            # Pre-fill the MIXTURE the model actually assigned, so the sheet
+            # round-trips: export it unchanged and the model reads back
+            # exactly what it had. `pt_role_mix` is where the usage feeds put
+            # a job battle — 0.6 / 0.3 / 0.1 — and writing 1.0 on the modal
+            # role instead would hide the one thing the sheet exists to show,
+            # turning "nobody has settled this job" into "this is his job".
+            # A person edits these cells to express a split of their own.
+            "_probs": _probabilities(r, kind),
         })
     return recs
 
