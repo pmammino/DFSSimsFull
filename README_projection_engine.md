@@ -919,10 +919,16 @@ So two numbers instead of one:
 
 * **`pt_play_rate`** (PA per game played) says what the job is, and defends a
   role against a depth chart that has written an injured regular off.
-* **`pt_availability`** says how much of the season he is there for, and is
-  where the injury risk goes.
+* **`pt_durability`** says how much of the season he is there for, and is
+  where the injury risk goes. It is centred on 1.0 and allowed to EXCEED it,
+  which is why it is not `pt_availability` — that stays the 0..1 knob a
+  person types. The anchors were fitted to real accumulated playing time, so
+  they already contain league-average missed time, and a player who misses
+  nothing beats the average his anchor was built from. Clipping the two
+  together threw that away: Matt Olson, 162 games in each of three seasons,
+  earned 1.15 and was handed 1.00.
 
-Both players now read **Full Time at 1.0** with a dock: Judge 0.93, Buxton
+Both players now read **Full Time at 1.0** with a dock: Judge 0.94, Buxton
 0.91, Matt Olson 1.15. Buxton projects 507 plate appearances rather than nine.
 
 A role mixture answers "which job does he hold" and nothing else, so a job
@@ -955,7 +961,7 @@ charging the same absence twice would take a fifth of a season off a player
 twice over.
 
 Measured end to end against the real rank curve, hitters: 0.076 with no feeds,
-0.053 with feeds, **0.028** with feeds and durability.
+0.053 with feeds, **0.018** with feeds and durability.
 
 ### Free agents
 

@@ -85,7 +85,7 @@ from role_taxonomy import (
     suggest_pitcher_role,
     timing_share,
 )
-from durability import (availability, games_by_season, play_rate,
+from durability import (durability, games_by_season, play_rate,
                         predicted_games)
 from team_context import FREE_AGENT_TEAM_ID, PA_PER_TEAM_GAME
 
@@ -424,7 +424,8 @@ def assign_default_roles(players: pd.DataFrame, kind: str, *,
     games = games_by_season(fielding, kind)
     out["pt_games_pred"] = predicted_games(out, games, target_year=target_year)
     out["pt_play_rate"] = play_rate(out, games)
-    out["pt_availability"] = availability(out, out["pt_games_pred"])
+    out["pt_durability"] = durability(out, out["pt_games_pred"])
+    out["pt_availability"] = DEFAULT_AVAILABILITY
     # Always present, empty for a settled player, so a consumer never has to
     # ask whether the column exists.
     out["pt_role_mix"] = ""
@@ -482,16 +483,16 @@ def _evidence_factor(players: pd.DataFrame, kind: str) -> pd.Series:
 
     # NET OF THE GAMES HE MISSED, where we know how many. `evidence_volume`
     # is a season's total, so it falls when a player is hurt — and
-    # `pt_availability` now docks him for exactly the same absence. Spending
+    # `pt_durability` now docks him for exactly the same absence. Spending
     # it twice is the mistake the batting-order factor made in `role_feeds`,
     # and it is worse here, because the two compound: a player who misses a
     # fifth of a season would lose a fifth twice over. Dividing the evidence
     # by his own availability restores what he WOULD have accumulated at that
     # rate over a full season, which is the thing the anchor is comparable to.
-    avail = (pd.to_numeric(players.get("pt_availability"), errors="coerce")
-             if "pt_availability" in players.columns
-             else pd.Series(np.nan, index=players.index))
-    ev = ev / avail.where(avail > 0).fillna(1.0)
+    dur = (pd.to_numeric(players.get("pt_durability"), errors="coerce")
+           if "pt_durability" in players.columns
+           else pd.Series(np.nan, index=players.index))
+    ev = ev / dur.where(dur > 0).fillna(1.0)
 
     factor = (ev / anchor.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
     # No evidence -> 1.0, i.e. take the role at face value.
@@ -664,7 +665,15 @@ def raw_volumes(players: pd.DataFrame, kind: str,
     # The spread BETWEEN the roles a person named — the uncertainty they
     # expressed by declining to pick one. Zero for a settled player.
     out["pt_role_sd"] = np.asarray(sd, dtype=float)
-    out["pt_season_share"] = share * avail
+    # The 0..1 share a person declares, times what his own record says about
+    # turning up. Kept apart because they are different claims and only the
+    # first is bounded by one: a player who has missed nothing beats the
+    # league-average missed time his anchor was built from.
+    dur = (pd.to_numeric(out["pt_durability"], errors="coerce").fillna(1.0)
+           if "pt_durability" in out.columns
+           else pd.Series(1.0, index=out.index))
+    out["pt_durability"] = dur
+    out["pt_season_share"] = share * avail * dur
     out["pt_evidence_factor"] = _evidence_factor(out, kind)
     out["pt_raw"] = (out["pt_anchor"] * out["pt_season_share"]
                      * out["pt_evidence_factor"])
@@ -1043,12 +1052,13 @@ def project_playing_time(players: pd.DataFrame, kind: str, *,
                                            f"{target_year}.csv")
     ov = load_role_overrides(role_override_path(kind, target_year, roster_path),
                              kind)
-    # Availability is measured against others holding the SAME job, so it has
+    # Durability is measured against others holding the SAME job, so it has
     # to be recomputed once the feeds have settled what the job is. Buxton
     # judged as a 26th man looks more durable than average; judged as the
     # everyday centre fielder he is, he is correctly docked.
     if "pt_games_pred" in out.columns:
-        out["pt_availability"] = availability(out, out["pt_games_pred"])
+        out["pt_durability"] = durability(out, out["pt_games_pred"])
+    out["pt_availability"] = DEFAULT_AVAILABILITY
     out, stats["overrides"] = apply_role_overrides(out, ov, kind=kind)
     out = raw_volumes(out, kind, team_col=team_col)
     out, team_diag = allocate_playing_time(out, kind, team_col=team_col,

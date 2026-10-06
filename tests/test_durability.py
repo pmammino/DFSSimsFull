@@ -140,7 +140,7 @@ def test_a_rookie_is_not_fragile_he_was_in_the_minors():
 # Availability
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_availability_is_measured_against_the_same_job():
+def test_durability_is_measured_against_the_same_job():
     """A bench player's 60 games are his job. Judged against the league he
     looks fragile; judged against other bench players he is ordinary — and
     the role anchors were fitted to real accumulated playing time, so they
@@ -150,7 +150,7 @@ def test_availability_is_measured_against_the_same_job():
         "PlayerId": range(1, 2 * n + 1),
         "pt_role": ["Full Time"] * n + ["Bench Bat"] * n})
     pred = pd.Series([150.0] * (n - 1) + [90.0] + [60.0] * n)
-    av = D.availability(players, pred)
+    av = D.durability(players, pred)
     assert av.iloc[n - 1] < 0.95, "90 games is short for a regular"
     assert av.iloc[n:].eq(av.iloc[n]).all()
     assert av.iloc[n] == pytest.approx(1.0), "ordinary for a bench bat"
@@ -163,24 +163,24 @@ def test_a_role_too_small_to_measure_is_not_docked():
     players = pd.DataFrame({
         "PlayerId": range(1, 12),
         "pt_role": ["Full Time"] * 9 + ["Catcher - Tandem"] * 2})
-    av = D.availability(players, pd.Series([150.0] * 9 + [70.0, 70.0]))
+    av = D.durability(players, pd.Series([150.0] * 9 + [70.0, 70.0]))
     assert av.iloc[9:].eq(1.0).all()
 
 
 def test_no_record_is_not_a_dock():
     players = pd.DataFrame({"PlayerId": [1, 2],
                             "pt_role": ["Full Time", "Full Time"]})
-    av = D.availability(players, pd.Series([np.nan, np.nan]))
+    av = D.durability(players, pd.Series([np.nan, np.nan]))
     assert av.eq(1.0).all()
 
 
-def test_availability_is_bounded():
+def test_durability_is_bounded():
     players = pd.DataFrame({"PlayerId": range(9),
                             "pt_role": ["Full Time"] * 9})
     pred = pd.Series([162.0] * 8 + [1.0])
-    av = D.availability(players, pred)
-    assert av.max() <= D.AVAILABILITY_MAX + 1e-9
-    assert av.min() >= D.AVAILABILITY_MIN - 1e-9
+    av = D.durability(players, pred)
+    assert av.max() <= D.DURABILITY_MAX + 1e-9
+    assert av.min() >= D.DURABILITY_MIN - 1e-9
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -297,13 +297,13 @@ def test_a_part_time_rate_does_not_promote_anyone():
 
 def test_the_absence_is_not_charged_twice():
     """`evidence_volume` is a season TOTAL, so it already falls when a player
-    is hurt — and availability docks him for the same absence. Compounding
+    is hurt — and durability docks him for the same absence. Compounding
     them would take a fifth of a season off a player twice, which is the
     mistake the batting-order factor made in `role_feeds`."""
     base = pd.DataFrame({
         "PlayerId": [1], "pt_anchor": [630.0], "evidence_volume": [500.0],
-        "pt_availability": [1.0]})
-    docked = base.assign(pt_availability=[0.80])
+        "pt_durability": [1.0]})
+    docked = base.assign(pt_durability=[0.80])
     full = M._evidence_factor(base, "hitter")[0]
     part = M._evidence_factor(docked, "hitter")[0]
     assert part > full, "a docked player's RATE evidence must not also fall"
@@ -337,6 +337,45 @@ def test_the_real_players_come_out_the_way_the_record_reads():
     # Buxton used to project NINE plate appearances here.
     assert buxton["Proj_PA"] > 400, buxton["Proj_PA"]
     # And the injury risk shows up where it belongs, not in the role.
-    assert judge["pt_availability"] < 0.98
-    assert buxton["pt_availability"] < judge["pt_availability"]
-    assert olson["pt_availability"] > 1.0
+    assert judge["pt_durability"] < 0.98
+    assert buxton["pt_durability"] < judge["pt_durability"]
+    assert olson["pt_durability"] > 1.0
+
+
+def test_the_iron_man_credit_is_actually_spent():
+    """`raw_volumes` clipped availability into [0, 1], which silently threw
+    away every credit above one. Matt Olson — 162 games in each of the last
+    three seasons — earned 1.15 and was handed 1.00, losing his whole
+    iron-man bonus, while Mike Trout's 0.974 dock passed through untouched.
+    Trout out-projected him, which is how this was noticed.
+
+    The two are different claims and only one is bounded by one, so they are
+    different columns: `pt_availability` is the 0..1 knob a person types, and
+    `pt_durability` is what the record says about turning up.
+    """
+    df = pd.DataFrame({
+        "PlayerId": [1, 2], "Name": ["Iron Man", "Fragile"],
+        "pt_anchor": [630.0, 630.0], "pt_role": ["Full Time"] * 2,
+        "pt_role_start": ["Opening Day"] * 2,
+        "pt_availability": [1.0, 1.0], "pt_durability": [1.15, 0.90],
+        "pt_role_mix": ["", ""], "BatSide": ["R", "R"]})
+    out = M.raw_volumes(df, "hitter")
+    assert out["pt_raw"].iloc[0] > out["pt_raw"].iloc[1]
+    assert out["pt_raw"].iloc[0] == pytest.approx(630.0 * 1.15, rel=1e-6)
+
+
+def test_one_season_is_not_an_iron_man_record():
+    """The shrink was fitted on players with three prior seasons, so handing
+    a player with one the same prior treats a single year as though it were
+    three — and one season is where the noise is. Kevin McGonigle, a rookie
+    with 2026 and nothing else, came out at the 1.15 ceiling: the most
+    durable player in baseball on the strength of not having had a chance to
+    get hurt yet."""
+    rows = (_three_seasons(1, 162, 162, 162)
+            + _three_seasons(2, 120, 120, 120)
+            + _three_seasons(3, 110, 110, 110)
+            + [(4, 2026, "CF", 162)])          # one season, a full one
+    pred = D.predicted_games(pd.DataFrame({"PlayerId": [1, 2, 3, 4]}),
+                             D.games_by_season(_fielding(rows)),
+                             target_year=2027)
+    assert pred[3] < pred[0], "three seasons of 162 must beat one"

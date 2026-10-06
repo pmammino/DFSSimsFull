@@ -80,7 +80,7 @@ GAMES_WEIGHTS = (3.0, 2.0, 1.0)
 # as a whole is believed. Using the weight sum (6) by mistake shrank the
 # spread between players to three quarters where the fit says three fifths,
 # which is a third less regression than the backtest supports.
-GAMES_PRIOR = 3.0
+GAMES_PRIOR = 3.0        # the full prior, for a player with all three seasons
 GAMES_SHRINK = 2.0
 
 # A club plays 162, and nobody appears in more.
@@ -90,8 +90,8 @@ TEAM_GAMES = 162.0
 # roughly 0.77 to 1.22 at the tenth and ninetieth percentiles, so these bounds
 # bite only on the extremes — the iron man who has never missed a game, and
 # the player whose last three seasons are mostly rehab.
-AVAILABILITY_MIN = 0.55
-AVAILABILITY_MAX = 1.15
+DURABILITY_MIN = 0.55
+DURABILITY_MAX = 1.15
 
 # Below this many games in his evidence season a player's PA-per-game is
 # noise: a September callup with nine games tells you nothing about his job.
@@ -163,6 +163,14 @@ def predicted_games(players: pd.DataFrame, games: pd.DataFrame, *,
     den = (have * w).sum(axis=1)
     wmean = pd.Series(np.where(den > 0, num / np.where(den > 0, den, 1),
                                np.nan), index=wide.index)
+    # How many seasons actually stand behind that mean. The regression
+    # constant was fitted on players with all THREE, so giving a player with
+    # one the same prior treats a single season as though it were three —
+    # and one season is exactly where the noise is. Kevin McGonigle, a rookie
+    # with 2026 and nothing else, came out at the 1.15 ceiling: the most
+    # durable player in baseball on the strength of not yet having had a
+    # chance to get hurt.
+    seasons = pd.Series(have.sum(axis=1).astype(float), index=wide.index)
 
     # The league term regresses toward players who are REGULARS. A bench
     # player's 60 games are his job, not his health, and averaging them in
@@ -186,8 +194,8 @@ def predicted_games(players: pd.DataFrame, games: pd.DataFrame, *,
     wmean = wmean.where(regular)
     if not np.isfinite(league):
         return pd.Series(np.nan, index=idx)
-    shrunk = ((wmean * GAMES_PRIOR + league * GAMES_SHRINK)
-              / (GAMES_PRIOR + GAMES_SHRINK))
+    prior = seasons.clip(upper=GAMES_PRIOR)
+    shrunk = (wmean * prior + league * GAMES_SHRINK) / (prior + GAMES_SHRINK)
     pid = pd.to_numeric(players["PlayerId"], errors="coerce")
     return pd.Series(pid.map(shrunk).to_numpy(), index=idx)
 
@@ -217,13 +225,25 @@ def play_rate(players: pd.DataFrame, games: pd.DataFrame) -> pd.Series:
         return pd.Series(vol / played, index=idx)
 
 
-def availability(players: pd.DataFrame, predicted: pd.Series, *,
-                 role_col: str = "pt_role") -> pd.Series:
+def durability(players: pd.DataFrame, predicted: pd.Series, *,
+               role_col: str = "pt_role") -> pd.Series:
     """How much of the season a player is there for, against his OWN ROLE.
 
+    Centred on 1.0 and allowed to exceed it, which is why this is not
+    `pt_availability`. That column is a 0..1 knob a person types — "he will
+    miss April" — and the role anchors were fitted to real accumulated
+    playing time, so they already contain league-average missed time. A
+    player who misses NOTHING beats the average his anchor was built from,
+    and the only way to say so is a multiplier above one.
+
+    Clipping this into [0, 1] threw that away silently: Matt Olson, who has
+    played 162 games in each of the last three seasons, earned 1.15 and was
+    handed 1.00, losing his entire iron-man credit — while Mike Trout's 0.974
+    dock passed through untouched. Trout out-projected him by 62 plate
+    appearances.
+
     1.0 for anyone with no games on record, which is the right default: no
-    history is not evidence of fragility, and an availability of less than one
-    has to be earned.
+    history is not evidence of fragility, and a dock has to be earned.
     """
     idx = players.index
     out = pd.Series(1.0, index=idx)
@@ -241,7 +261,7 @@ def availability(players: pd.DataFrame, predicted: pd.Series, *,
     ref = ref.where(counts >= MIN_COHORT)
     with np.errstate(invalid="ignore", divide="ignore"):
         rel = predicted / ref.replace(0, np.nan)
-    return rel.fillna(1.0).clip(AVAILABILITY_MIN, AVAILABILITY_MAX)
+    return rel.fillna(1.0).clip(DURABILITY_MIN, DURABILITY_MAX)
 
 
 def record_read(rate: float, kind: str = "hitter") -> str | None:
@@ -266,11 +286,11 @@ def record_read(rate: float, kind: str = "hitter") -> str | None:
 
 def durability_report(players: pd.DataFrame) -> str:
     """What the dock came to, and for whom."""
-    av = pd.to_numeric(players.get("pt_availability"), errors="coerce")
+    av = pd.to_numeric(players.get("pt_durability"), errors="coerce")
     if av is None or not av.notna().any():
-        return "    availability: not computed (no games history)"
+        return "    durability: not computed (no games history)"
     docked = av < 0.995
-    lines = [f"    availability: {int(docked.sum()):,} docked, "
+    lines = [f"    durability: {int(docked.sum()):,} docked, "
              f"p10 {av.quantile(0.10):.3f} median {av.median():.3f} "
              f"p90 {av.quantile(0.90):.3f}"]
     if docked.any() and "Name" in players.columns:
