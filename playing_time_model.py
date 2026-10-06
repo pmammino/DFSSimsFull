@@ -85,6 +85,9 @@ from role_taxonomy import (
     suggest_pitcher_role,
     timing_share,
 )
+from durability import (durability, expected_appearances,
+                        expected_ipa, games_by_season, weighted_games,
+                        innings_per_appearance, play_rate, predicted_games)
 from team_context import FREE_AGENT_TEAM_ID, PA_PER_TEAM_GAME
 
 # Team budgets over a 162-game season.
@@ -95,6 +98,11 @@ TEAM_IP_BUDGET = 162.0 * 9.0                  # 1,458
 # starting pitcher. Unclosed, the staff collectively started 178.5 games a
 # club — 5,354 across the league against the 4,859 that exist.
 TEAM_GS_BUDGET = 162.0
+
+# Where the RotoWire usage feeds live. See `role_feeds`: depth charts, batting
+# orders, bullpen pecking orders and the prospect list, which between them say
+# what a player's job is far better than his own volume history can.
+FEED_DIR = "feeds"
 
 # How much playing time an UNSIGNED player gets, and who pays for it.
 #
@@ -132,6 +140,25 @@ TEAM_GS_BUDGET = 162.0
 # already compressing every incumbent by a fifth. Docking adds a second,
 # smaller squeeze on top, aimed at an arbitrarily chosen victim.
 FREE_AGENT_PLAYING_TIME = "open"
+
+# Project a pitcher's innings as APPEARANCES x INNINGS PER APPEARANCE rather
+# than as one number. See `durability` and `raw_volumes`: it is what lets
+# availability apply to the quantity availability governs.
+PITCHER_VOLUME_DECOMPOSED = True
+
+# How far a pitcher's appearances times his innings per appearance may carry
+# him from his ROLE's innings anchor. Its own constant, because it bounds a
+# different quantity from the one EVIDENCE_FACTOR_MIN/MAX were fitted on — a
+# product of two projected terms rather than a season total over an anchor —
+# and the old pair are not transferable just because they were lying about.
+#
+# Chosen against both calibration targets at once. The real within-club rank
+# curve cannot separate it from the old [0.55, 1.22] (0.0284 against 0.0283,
+# which is noise), so the top-end count breaks the tie: the real league puts
+# 21, 20 and 12 pitchers past 180 innings in 2024-26, and this band gives 21
+# where the looser one gives 23. Tighter still costs the curve — [0.65, 1.22]
+# is 0.0412 — so the floor stays where it was.
+PITCHER_BAND = (0.55, 1.05)
 
 # Per-player ceilings, as physical bounds rather than opinions. The most PA
 # anyone has taken in a season is ~778 (Jimmy Rollins 2007); the most IP in the
@@ -369,6 +396,7 @@ def _staff_ranks(players: pd.DataFrame, *, team_col: str) -> pd.Series:
 def assign_default_roles(players: pd.DataFrame, kind: str, *,
                          fielding: pd.DataFrame | None = None,
                          team_col: str = "Pred_target_team_id",
+                         target_year: int = 2027,
                          ) -> pd.DataFrame:
     """Give every player a role, a start time and an availability.
 
@@ -407,8 +435,23 @@ def assign_default_roles(players: pd.DataFrame, kind: str, *,
 
     out["pt_role"] = roles
     out["pt_role_start"] = DEFAULT_TIMING
-    out["pt_availability"] = DEFAULT_AVAILABILITY
     out["pt_role_source"] = "default"
+
+    # How often he is there, and what he does when he is. Kept apart on
+    # purpose — see `durability`, and Byron Buxton, who takes 4.30 plate
+    # appearances a game and was projected for nine of them all season
+    # because one number was being asked to answer both questions.
+    games = games_by_season(fielding, kind)
+    out["pt_games_pred"] = predicted_games(out, games, target_year=target_year,
+                                           kind=kind)
+    out["pt_play_rate"] = play_rate(out, games)
+    out["pt_games_wmean"] = weighted_games(out, games, target_year=target_year)
+    out["pt_durability"] = durability(out, out["pt_games_pred"])
+    out["pt_availability"] = DEFAULT_AVAILABILITY
+    if kind == "pitcher":
+        out["pt_ip_per_app"] = innings_per_appearance(out, fielding)
+        out["pt_ip_per_app_exp"] = expected_ipa(out, out["pt_ip_per_app"])
+        out["pt_apps_exp"] = expected_appearances(out, out["pt_games_wmean"])
     # Always present, empty for a settled player, so a consumer never has to
     # ask whether the column exists.
     out["pt_role_mix"] = ""
@@ -463,6 +506,20 @@ def _evidence_factor(players: pd.DataFrame, kind: str) -> pd.Series:
         tbf_per_ip = tbf_per_ip.where(tbf_per_ip > 1.0, 4.3)
         ev = ev / tbf_per_ip
     anchor = pd.to_numeric(players["pt_anchor"], errors="coerce")
+
+    # NET OF THE GAMES HE MISSED, where we know how many. `evidence_volume`
+    # is a season's total, so it falls when a player is hurt — and
+    # `pt_durability` now docks him for exactly the same absence. Spending
+    # it twice is the mistake the batting-order factor made in `role_feeds`,
+    # and it is worse here, because the two compound: a player who misses a
+    # fifth of a season would lose a fifth twice over. Dividing the evidence
+    # by his own availability restores what he WOULD have accumulated at that
+    # rate over a full season, which is the thing the anchor is comparable to.
+    dur = (pd.to_numeric(players.get("pt_durability"), errors="coerce")
+           if "pt_durability" in players.columns
+           else pd.Series(np.nan, index=players.index))
+    ev = ev / dur.where(dur > 0).fillna(1.0)
+
     factor = (ev / anchor.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
     # No evidence -> 1.0, i.e. take the role at face value.
     return factor.fillna(1.0).clip(EVIDENCE_FACTOR_MIN, EVIDENCE_FACTOR_MAX)
@@ -634,11 +691,23 @@ def raw_volumes(players: pd.DataFrame, kind: str,
     # The spread BETWEEN the roles a person named — the uncertainty they
     # expressed by declining to pick one. Zero for a settled player.
     out["pt_role_sd"] = np.asarray(sd, dtype=float)
-    out["pt_season_share"] = share * avail
+    # The 0..1 share a person declares, times what his own record says about
+    # turning up. Kept apart because they are different claims and only the
+    # first is bounded by one: a player who has missed nothing beats the
+    # league-average missed time his anchor was built from.
+    dur = (pd.to_numeric(out["pt_durability"], errors="coerce").fillna(1.0)
+           if "pt_durability" in out.columns
+           else pd.Series(1.0, index=out.index))
+    out["pt_durability"] = dur
+    # For a decomposed pitcher the season share is timing and the declared
+    # availability only: how much of the season he is actually there for is
+    # already inside `pt_apps_exp`, which is his own appearance record. The
+    # column has to agree with `pt_raw` or every consumer that re-derives a
+    # projection from it — the roles workbook above all — silently charges
+    # the absence a second time.
+    decomposed = kind == "pitcher" and PITCHER_VOLUME_DECOMPOSED
+    out["pt_season_share"] = share * avail * (1.0 if decomposed else dur)
     out["pt_evidence_factor"] = _evidence_factor(out, kind)
-    out["pt_raw"] = (out["pt_anchor"] * out["pt_season_share"]
-                     * out["pt_evidence_factor"])
-    out = apply_roster_depth(out, kind, team_col=team_col)
     if kind == "pitcher":
         out["pt_anchor_GS"] = gs
         out["pt_anchor_G"] = g
@@ -646,6 +715,63 @@ def raw_volumes(players: pd.DataFrame, kind: str,
         out["pt_hold_share"] = hld
     else:
         out["Proj_vL_share"] = vl
+
+    if kind == "pitcher" and PITCHER_VOLUME_DECOMPOSED:
+        # Innings are APPEARANCES times INNINGS PER APPEARANCE, and the two
+        # answer different questions. How often a pitcher is handed the ball
+        # is availability's business; how long he stays once he has it is his
+        # job's. Carrying only their product is what stopped durability
+        # working on this side — compared league-wide, appearances and
+        # innings run at -0.217, because a starter takes 30 appearances for
+        # 170 innings and a reliever 65 for 65.
+        #
+        # Multiplying the ROLE's appearance anchor by durability keeps the
+        # comparison inside the job, where the sign is right (+0.769 for
+        # starters, +0.865 for relievers), and the pitcher's own innings per
+        # appearance then converts it back to innings.
+        # The evidence factor does NOT appear in this product, and that is
+        # the whole of the redesign rather than an oversight. It is a season
+        # TOTAL divided by a season total, so multiplying it in here would
+        # put the two halves back together again after taking them apart —
+        # and the halves are already present: `pt_durability` carries how
+        # often he is handed the ball and `pt_ip_per_app_rel` how long he
+        # stays. It stays computed, because the report and the workbook read
+        # it, and it is simply not spent twice.
+        anchor_apps = pd.to_numeric(out["pt_anchor_G"], errors="coerce")
+        apps = (pd.to_numeric(out["pt_apps_exp"], errors="coerce")
+                if "pt_apps_exp" in out.columns
+                else pd.Series(np.nan, index=out.index)).fillna(anchor_apps)
+        out["pt_apps_exp"] = apps
+        # The role's own implied rate stands in where a pitcher has no
+        # record to read one from.
+        fallback = (out["pt_anchor"]
+                    / anchor_apps.where(anchor_apps > 0)).fillna(0.0)
+        ipa = (pd.to_numeric(out["pt_ip_per_app_exp"], errors="coerce")
+               if "pt_ip_per_app_exp" in out.columns
+               else pd.Series(np.nan, index=out.index)).fillna(fallback)
+        out["pt_ip_per_app_exp"] = ipa
+        raw = apps.fillna(0.0) * ipa
+        # The ROLE as a bound, not as a multiplier. Appearances and innings
+        # per appearance are each regressed 60/40 toward the men doing the
+        # same job, and a pitcher above his cohort on both compounds the two
+        # — 1.1 x 1.1 — which put the top three of a staff 5-9% over the real
+        # curve with nothing to stop it. The evidence factor used to supply
+        # that bound as a side effect of its own clip; now that it is out of
+        # the product, the band is stated directly, and it is the same one:
+        # a role says what is possible and the record says where inside it.
+        lo = out["pt_anchor"] * PITCHER_BAND[0]
+        hi = out["pt_anchor"] * PITCHER_BAND[1]
+        # Timing and the declared availability, but NOT durability: the
+        # appearances above are the pitcher's own, so they already carry
+        # every start he missed. Multiplying by a durability derived from
+        # those same appearances charges the absence twice — the fourth time
+        # that shape of mistake has appeared in this model, and the first
+        # time it was mine rather than inherited.
+        out["pt_raw"] = np.clip(raw, lo, hi) * out["pt_season_share"]
+    else:
+        out["pt_raw"] = (out["pt_anchor"] * out["pt_season_share"]
+                         * out["pt_evidence_factor"])
+    out = apply_roster_depth(out, kind, team_col=team_col)
     return out
 
 
@@ -988,18 +1114,46 @@ def project_playing_time(players: pd.DataFrame, kind: str, *,
                          roster_path: str | Path = "rosters",
                          reserves: dict | None = None,
                          team_col: str = "Pred_target_team_id",
+                         feed_dir: str | Path | None = FEED_DIR,
                          ) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """Defaults -> overrides -> raw volume -> team closure.
+    """Defaults -> usage feeds -> overrides -> raw volume -> team closure.
 
     Satisfies `playing_time.PlayingTimeModel`: returns Proj_PA/Proj_IP, Proj_G,
     pt_tier and pt_source per player, closing on the team and hence the league
     budget.
+
+    The feeds sit in the middle on purpose. A depth chart and a batting order
+    know more about a player's job than a guess from last season's volume
+    does, and less than a person who has typed a row in the override file —
+    so they beat the first and lose to the second. Pass `feed_dir=None` to
+    skip them; a player no feed covers keeps his heuristic default either way.
     """
     stats: dict = {}
     out = assign_default_roles(players, kind, fielding=fielding,
-                               team_col=team_col)
+                               team_col=team_col, target_year=target_year)
+    if feed_dir is not None:
+        from role_feeds import apply_feed_roles
+        out, stats["feeds"] = apply_feed_roles(
+            out, kind, feed_dir=feed_dir, team_col=team_col,
+            alias_path=Path(roster_path) / f"player_id_aliases_"
+                                           f"{target_year}.csv")
     ov = load_role_overrides(role_override_path(kind, target_year, roster_path),
                              kind)
+    # Durability is measured against others holding the SAME job, so it has
+    # to be recomputed once the feeds have settled what the job is. Buxton
+    # judged as a 26th man looks more durable than average; judged as the
+    # everyday centre fielder he is, he is correctly docked.
+    if "pt_games_pred" in out.columns:
+        out["pt_durability"] = durability(out, out["pt_games_pred"])
+    # Both references are the player's ROLE cohort, so both have to be
+    # recomputed once the feeds have settled what the role is.
+    if kind == "pitcher" and "pt_ip_per_app" in out.columns:
+        out["pt_ip_per_app_exp"] = expected_ipa(out, out["pt_ip_per_app"])
+        out["pt_apps_exp"] = expected_appearances(out, out["pt_games_wmean"])
+    out["pt_availability"] = DEFAULT_AVAILABILITY
+    if kind == "pitcher":
+        out["pt_ip_per_app"] = innings_per_appearance(out, fielding)
+        out["pt_ip_per_app_exp"] = expected_ipa(out, out["pt_ip_per_app"])
     out, stats["overrides"] = apply_role_overrides(out, ov, kind=kind)
     out = raw_volumes(out, kind, team_col=team_col)
     out, team_diag = allocate_playing_time(out, kind, team_col=team_col,
@@ -1052,6 +1206,10 @@ def playing_time_report(out: pd.DataFrame, team_diag: pd.DataFrame,
     vol = "Proj_PA" if is_pa else "Proj_IP"
     budget = TEAM_PA_BUDGET if is_pa else TEAM_IP_BUDGET
     lines = [f"  {kind}s: {len(out)} players"]
+
+    if stats.get("feeds"):
+        from role_feeds import feed_report
+        lines.append(feed_report(stats["feeds"]).replace("\n  ", "\n    "))
 
     ov = stats.get("overrides", {})
     if ov.get("matched") or ov.get("unmatched"):

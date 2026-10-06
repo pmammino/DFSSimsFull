@@ -1,0 +1,19 @@
+# Hand-written fixes for players the RotoWire feeds' NAME join cannot resolve.
+#
+# Copy to rosters/player_id_aliases_<target_year>.csv and edit. Lines starting
+# with '#' are ignored, as is any row without both columns.
+#
+# None of the feeds carries an MLBAM id except prospects.xml, and that for 261
+# of its 400, so everything else joins on a normalized name (accents stripped,
+# punctuation and Jr./Sr./II dropped, lowercased). Measured against the 2027
+# set that resolves 100% of current batting-order hitters, 99.6% of bullpen
+# arms and 88% of depth-chart players. What is left is two kinds of row:
+#
+#   * a player whose RotoWire spelling differs from his MLBAM one
+#   * a name two players in the same pool share, which the model DROPS rather
+#     than guessing at -- guessing hands one man's job to the other
+#
+# Both are named in the run log under "role feeds", so the list of rows worth
+# adding here is printed every run.
+name_key,PlayerId
+# jose ferrer,681911

@@ -63,10 +63,25 @@ BOX = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 # own copy — and two copies of a table nobody diffs drift, with a renamed role
 # failing as a silent lookup miss rather than an error.
 from role_taxonomy import (  # noqa: E402
-    HITTER_ROLES, PITCHER_ROLES, TIMING, full_time_reference,
+    HITTER_ROLES, PITCHER_ROLES, TIMING, full_time_reference, parse_role_mix,
     suggest_hitter_role as _suggest_hitter_role,
     suggest_pitcher_role as _suggest_pitcher_role,
 )
+
+
+def _probabilities(r, kind: str) -> dict[str, float]:
+    """The role probabilities to pre-fill, from the mixture the model holds.
+
+    `pt_role_mix` is the real answer and `pt_role` is only its heaviest
+    component, so a player the usage feeds put at 0.6 regular / 0.4 bench
+    would otherwise be written into the sheet as a settled regular — the
+    sheet showing more certainty than the projection beside it.
+    """
+    mix = parse_role_mix(r.get("pt_role_mix"), kind)
+    if mix:
+        return mix
+    role = r["pt_role"] if pd.notna(r.get("pt_role")) else None
+    return {role: 1.0} if role else {}
 
 
 def _style_header(ws, row, ncols):
@@ -92,8 +107,17 @@ def _legend(wb, role_defs, kind):
          f"each player; the 'Role Prob Sum' column checks this.", False),
         ("  * Role Start — when the player takes the job (see the Timing "
          "table on the Roles sheet).", False),
-        ("  * Availability — share of the season he is healthy and on an MLB "
-         "roster. 1.00 = full year.", False),
+        ("  * Availability — YOURS to set: the share of the season you "
+         "expect him healthy and on an MLB roster. 1.00 = full year.", False),
+        ("  * Exp Apps / IP/App (pitchers) — how often he is handed the "
+         "ball, and how long he stays. His innings are the two multiplied, "
+         "so for a pitcher AVAILABILITY IS EXP APPS: it is not a multiplier "
+         "on this sheet and Durability stays 1.00 for him.", False),
+        ("  * Durability — the model's, from his own games-played record "
+         "against others in the same role. Centred on 1.00 and allowed to "
+         "go above it: a player who misses nothing beats the league-average "
+         "missed time his role's anchor was built from. Overwrite it if you "
+         "disagree; Proj PA multiplies both.", False),
         ("  * Pos / Bats (or Throws) — needed for the typed-slot allocation "
          "and the platoon splits.", False),
         ("", False),
@@ -233,12 +257,13 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
     last_col = "Last PA" if kind == "hitter" else "Last TBF"
     meta = ["PlayerId", "Name", "Team", "Age", hand_col, "Pos",
             last_col, "Career", "Suggested Role", "Role Start", "Role Share",
-            "Availability"]
+            "Availability", "Durability"]
     derived = [f"Proj {vol}", "Role Prob Sum"]
     if kind == "hitter":
         derived += ["Proj vL Share"]
     else:
-        derived += ["Proj GS", "Proj G", "Save Wt", "Hold Wt"]
+        derived += ["Proj GS", "Proj G", "Exp Apps", "IP/App",
+                    "Save Wt", "Hold Wt"]
     headers = meta + role_names + derived + ["Notes"]
 
     for j, h in enumerate(headers, start=1):
@@ -290,7 +315,7 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
             if headers[j - 1] in (hand_col, "Pos", "Role Start",
                                   "Availability"):
                 c.fill = EXAMPLE_FILL if is_example else INPUT_FILL
-            if headers[j - 1] == "Availability":
+            if headers[j - 1] in ("Availability", "Durability"):
                 c.number_format = "0.00"
         # Role Share is looked up from the timing table, so the two stay in sync.
         tim_first = len(role_defs) + 5
@@ -312,7 +337,8 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
         col += 1
         ws.cell(row=i, column=col,
                 value=f"=SUMPRODUCT({RC0}{i}:{RC1}{i},"
-                      f"${RC0}$2:${RC1}$2)*$K{i}*$L{i}").number_format = "0.0"
+                      f"${RC0}$2:${RC1}$2)*$K{i}*$L{i}*$M{i}"
+                ).number_format = "0.0"
         col += 1
         ws.cell(row=i, column=col,
                 value=f"=SUM({RC0}{i}:{RC1}{i})").number_format = "0.00"
@@ -323,7 +349,8 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
             pa_col = get_column_letter(r1 + 1)      # the Proj PA column
             # Anchor-weighted, so the blended share reflects where the plate
             # appearances actually come from. The denominator reuses Proj PA
-            # (backing out Role Share and Availability) rather than repeating
+            # (backing out Role Share, Availability and Durability) rather than
+            # repeating
             # a third SUMPRODUCT — three per row over 600+ rows was enough to
             # time LibreOffice out during recalculation.
             ws.cell(row=i, column=col, value=(
@@ -332,7 +359,7 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
                 f'${RC0}$2:${RC1}$2),'
                 f'SUMPRODUCT({RC0}{i}:{RC1}{i},${RC0}${rr}:${RC1}${rr},'
                 f'${RC0}$2:${RC1}$2))'
-                f'/({pa_col}{i}/($K{i}*$L{i})),"")'
+                f'/({pa_col}{i}/($K{i}*$L{i}*$M{i})),"")'
             )).number_format = "0.00"
         else:
             # Every derived quantity is scaled by Role Share x Availability,
@@ -342,13 +369,28 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
             # Leaving the weights unscaled would hand a hurt closer a full
             # claim and quietly take saves away from the healthy arm behind
             # him.
-            for field, fmt in (("gs", "0.0"), ("g", "0.0"),
-                               ("sv", "0.000"), ("hld", "0.000")):
+            for field, fmt in (("gs", "0.0"), ("g", "0.0")):
                 col += 1
                 ar = extra_rows[field]
                 ws.cell(row=i, column=col, value=(
                     f"=SUMPRODUCT({RC0}{i}:{RC1}{i},"
-                    f"${RC0}${ar}:${RC1}${ar})*$K{i}*$L{i}"
+                    f"${RC0}${ar}:${RC1}${ar})*$K{i}*$L{i}*$M{i}"
+                )).number_format = fmt
+            # Read off the model rather than derived from the anchors: these
+            # two ARE the projection now, and a formula over role anchors
+            # would quietly disagree with it.
+            for field, fmt in (("Exp Apps", "0.0"), ("IP/App", "0.00")):
+                col += 1
+                c = ws.cell(row=i, column=col, value=rec.get(field))
+                c.number_format = fmt
+                c.font = BLACK
+                c.border = BOX
+            for field, fmt in (("sv", "0.000"), ("hld", "0.000")):
+                col += 1
+                ar = extra_rows[field]
+                ws.cell(row=i, column=col, value=(
+                    f"=SUMPRODUCT({RC0}{i}:{RC1}{i},"
+                    f"${RC0}${ar}:${RC1}${ar})*$K{i}*$L{i}*$M{i}"
                 )).number_format = fmt
         col += 1
         c = ws.cell(row=i, column=col, value=rec.get("Notes"))
@@ -363,8 +405,10 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
             "Team": "FA", "Age": 28, hand_col: "R", "Pos": "2B",
             "Suggested Role": "Full Time",
             "Role Start": "Early Season (~May)", "Availability": 0.85,
+            "Durability": 0.92,
             "Notes": "Unsigned; job battle. 60% full-time / 30% strong-side "
-                     "platoon / 10% utility. Missed April.",
+                     "platoon / 10% utility. Missed April, and his own "
+                     "games-played record runs a little short of his role's.",
             "_probs": {"Full Time": 0.60, "Strong Side Platoon": 0.30,
                        "Utility IF": 0.10},
         }
@@ -374,6 +418,7 @@ def _assignments(wb, players, role_defs, kind, roles_ws_name="Roles"):
             "Team": "FA", "Age": 30, hand_col: "R", "Pos": "RP",
             "Suggested Role": "Late Inning RP (Setup)",
             "Role Start": "Opening Day", "Availability": 0.90,
+            "Durability": 1.00,
             "Notes": "70% closer / 30% setup — job not settled.",
             "_probs": {"Closer": 0.70, "Late Inning RP (Setup)": 0.30},
         }
@@ -489,14 +534,33 @@ def _load(target_year: int, out_dir: Path, kind: str) -> list[dict]:
                            else "Opening Day"),
             "Availability": (float(r["pt_availability"])
                              if pd.notna(r.get("pt_availability")) else 1.00),
+            # What the player's own games-played record says about turning
+            # up, centred on 1.0 and free to exceed it — see `durability`.
+            # Availability is the 0..1 knob a person types; this is the one
+            # the model worked out, and leaving it off the sheet both hid
+            # every injury dock and left Proj PA computing a season the
+            # model had not projected.
+            "Durability": (float(r["pt_durability"])
+                           if pd.notna(r.get("pt_durability")) else 1.00),
+            # Where a PITCHER's availability lives. His innings are
+            # appearances times innings per appearance, so how much of the
+            # season he is there for is the first of those and not a
+            # multiplier — see `playing_time_model.raw_volumes`. Shown so the
+            # sheet says it rather than leaving a column of 1.00 and no
+            # explanation.
+            "Exp Apps": (float(r["pt_apps_exp"])
+                         if pd.notna(r.get("pt_apps_exp")) else None),
+            "IP/App": (float(r["pt_ip_per_app_exp"])
+                       if pd.notna(r.get("pt_ip_per_app_exp")) else None),
             "Notes": None,
-            # Pre-fill the assignment as a probability of 1 on its own role,
-            # so the sheet round-trips: export it unchanged and the model
-            # reads back exactly what it assigned. A person expressing a job
-            # battle edits these cells into a split — 0.6 / 0.3 / 0.1 — and
-            # the model blends the anchors rather than picking one.
-            "_probs": ({_role: 1.0} if (_role := (
-                r["pt_role"] if pd.notna(r.get("pt_role")) else None)) else {}),
+            # Pre-fill the MIXTURE the model actually assigned, so the sheet
+            # round-trips: export it unchanged and the model reads back
+            # exactly what it had. `pt_role_mix` is where the usage feeds put
+            # a job battle — 0.6 / 0.3 / 0.1 — and writing 1.0 on the modal
+            # role instead would hide the one thing the sheet exists to show,
+            # turning "nobody has settled this job" into "this is his job".
+            # A person edits these cells to express a split of their own.
+            "_probs": _probabilities(r, kind),
         })
     return recs
 

@@ -860,6 +860,140 @@ because a catcher is matched to a catcher slot rather than merely out-ranking an
 outfielder. The budget to fill is `162 × PA_PER_TEAM_GAME`, in full, for
 every club.
 
+### Roles from usage feeds
+
+Four RotoWire files in `feeds/` decide what a player's job is: `depth.xml`
+(every club's depth chart, ranked within a position group), `orders.xml` (a
+batting order against each hand), `closers.xml` (the bullpen pecking order,
+with RotoWire's own Stability rating) and `prospects.xml` (the top 400, with a
+league level). `role_feeds.py` turns them into ROLE MIXTURES.
+
+The design idea is that **a mixture's width is how much the feeds disagree**,
+not an opinion. A left fielder batting third against both hands who is also
+the depth chart's rank-1 left fielder comes out ~0.90 on his role; a player one
+feed calls a starter and the other leaves out of the lineup comes out split
+0.60/0.40 between the two answers; a closer the feed itself rates "Very Low"
+stability comes out 0.50 rather than 0.92; a committee is written as the
+three-way split it is. Nothing invents a spread to look humble.
+
+Two things calibrated against the real within-club rank curve
+(`scripts/fit_role_anchors.real_rank_curve`), both of which the first guess got
+wrong:
+
+* **How far down the position ladder a real job goes** (`DEPTH_RANK_ROLE`).
+  Dropping to the 26th man at rank 4 and out of the league at rank 5 put the
+  top five of each club 6-9% above the real curve and starved ranks 9-16.
+* **Job security falls down the batting order** (`AGREE_BY_SPOT`). A club's
+  nine starters run from ~634 plate appearances to ~342, and the spot itself
+  only explains 4.65 against 3.97 a game; the rest is that the number-three
+  hitter still has the job in September. Spending the spot a SECOND time as a
+  per-game multiplier double-counted it and measurably made things worse.
+
+Measured end to end, against the real rank curve: hitters improve from 0.076
+to 0.053 and pitchers from 0.052 to 0.041. 1,589 players carry a mixture where
+none did before, and roles the heuristic could not see at all get populated —
+62 weak-side platoons, 50 strong-side, 83 setup men, 121 swing arms.
+
+The feeds sit between the heuristic default and the override file, so a human
+who types a row in `rosters/hitter_roles_<year>.csv` still wins. Names join
+without an MLBAM id (only the prospects feed carries one);
+`rosters/player_id_aliases_<year>.csv` settles what the name join misses, and
+the run log prints exactly which rows those are. Pass `feed_dir=None` to skip
+the feeds entirely.
+
+### Availability, and why it is not a role
+
+A season's plate appearances are the product of two unrelated things — how
+many games a player was there for, and how much he plays in a game — and
+`durability.py` keeps them apart.
+
+Byron Buxton is the case that forced it. He took 542 plate appearances in 126
+games, 4.30 a game, above the median Full Time hitter's 3.97: when he plays he
+is an everyday centre fielder. RotoWire's depth chart has him eighth among
+Minnesota's centre fielders because he is hurt, so the feeds called him a 26th
+man and the roster-depth discount finished it — **nine** plate appearances for
+the season. Aaron Judge is the same story milder: he came out "Full Time 0.70 /
+Strong Side Platoon 0.30", which says he might be a platoon bat.
+
+So two numbers instead of one:
+
+* **`pt_play_rate`** (PA per game played) says what the job is, and defends a
+  role against a depth chart that has written an injured regular off.
+* **`pt_durability`** says how much of the season he is there for, and is
+  where the injury risk goes. It is centred on 1.0 and allowed to EXCEED it,
+  which is why it is not `pt_availability` — that stays the 0..1 knob a
+  person types. The anchors were fitted to real accumulated playing time, so
+  they already contain league-average missed time, and a player who misses
+  nothing beats the average his anchor was built from. Clipping the two
+  together threw that away: Matt Olson, 162 games in each of three seasons,
+  earned 1.15 and was handed 1.00.
+
+Both players now read **Full Time at 1.0** with a dock: Judge 0.94, Buxton
+0.91, Matt Olson 1.15. Buxton projects 507 plate appearances rather than nine.
+
+A role mixture answers "which job does he hold" and nothing else, so a job
+nobody disputes is allowed to reach 1.0 — 486 hitters do. It used to stop at
+0.85 on the grounds that a season still offers chances to get hurt, which is
+the injury risk charged twice over now that availability carries it. 353
+hitters still carry a genuine split, where the feeds disagree or nothing
+confirms them.
+
+Where a player's own usage overrules a depth chart that buried him, the run
+log **names him** — 48 hitters, led by Stanton, Buxton, Devers, Hoskins and
+Casas. The reading this cannot make is the other one: a club that has moved
+on rather than one waiting for a man to get well. That is a person's call,
+and the override file is where it goes.
+
+**How much the dock is worth, measured.** Backtesting 2025 and 2026 over 557
+player-seasons, the 3/2/1 weighted mean of prior games beats assuming everyone
+is league-average by **8.1%** (corr 0.428); among the most durable players it
+is 1.8%. Games played is weakly predictable, so the fitted regression is heavy
+— 60% the player, 40% the league — and the dock is correspondingly modest.
+Anyone wanting a bigger one for a fragile star is asking for more confidence
+than the record supports.
+
+Two things it deliberately does not do. It never docks a player with no record
+of being a regular — a rookie's thirty games say he was in Triple-A, not that
+he is fragile, and when a player arrives is `pt_role_start`'s question. And the
+evidence factor is divided by availability before use, because
+`evidence_volume` is a season total that already fell when he was hurt;
+charging the same absence twice would take a fifth of a season off a player
+twice over.
+
+Both appear in the roles workbook as their own columns, and `Proj PA`
+multiplies them, so the sheet reproduces what the model did.
+
+Measured end to end against the real rank curve, hitters: 0.076 with no feeds,
+0.053 with feeds, **0.013** with feeds and durability.
+
+**A pitcher's innings are two numbers multiplied**, and the model used to
+carry only their product. `Proj_IP = pt_apps_exp x pt_ip_per_app_exp`: how
+often he is handed the ball, and how long he stays once he has it. Both come
+from his own record, each regressed toward the men doing the same job.
+
+That is what finally let availability work on this side. Compared league-wide,
+a pitcher's appearances and innings run at **−0.217** — a starter takes 30
+appearances for 170 innings and a reliever 65 for 65 — so a single multiplier
+could never mean anything. Inside a role the sign is right (+0.769 starters,
++0.865 relievers), and the decomposition keeps the comparison there. Félix
+Bautista comes out 28.3 appearances at 0.99 innings each: the injury is in the
+first number, and the second says he is still a late-inning arm.
+
+The two halves regress at different rates, fitted separately over 913
+pitcher-seasons, and the difference is the point. Appearances take **k = 2.0**,
+the same as a hitter's games; innings per appearance take **k = 6.0**, because
+a starter goes about 5.3 innings and a reliever about 1.0 and a pitcher's own
+deviation from his cohort is mostly noise. Reusing one constant for both was
+simply wrong.
+
+Measured end to end: the pitcher rank-curve error falls from **0.0329 to
+0.0284**, and the count of pitchers projected past 180 innings from 29 to
+**21** against a real 21, 20 and 12 in 2024-26. `pt_durability` stays 1.000
+for pitchers and that is now correct rather than a gap — the appearances
+already carry every start missed, and multiplying by it would charge the
+absence twice. The roles workbook shows `Exp Apps` and `IP/App` on the pitcher
+sheet, which is where a pitcher's availability actually lives.
+
 ### Free agents
 
 An unsigned player's playing time is whatever his role says — give him a

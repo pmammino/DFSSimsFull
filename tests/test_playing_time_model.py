@@ -737,10 +737,18 @@ def test_saves_cannot_exceed_what_the_innings_allow():
     closer = out[out.pt_role == "Closer"].iloc[0]
     full_share = float(closer["Proj_SV_share"])
 
-    # Same club, but the closer is barely available.
-    thin = df.copy()
-    thin.loc[thin.Name == "rp0", "evidence_volume"] = 30.0
-    out2, _, _ = _run(thin, "pitcher")
+    # Same club, but the closer is barely available. A pitcher's innings are
+    # APPEARANCES times innings per appearance now, so the lever is how often
+    # he is handed the ball — a season total no longer drives it, which is
+    # the whole of the decomposition.
+    fielding = pd.DataFrame([
+        {"Season": y, "PlayerId": int(pid), "Pos": "P",
+         "G": (6 if name == "rp0" else 60), "GS": 0,
+         "Innings": (6.0 if name == "rp0" else 60.0)}
+        for y in (2024, 2025, 2026)
+        for pid, name in zip(df["PlayerId"], df["Name"])
+        if str(name).startswith("rp")])
+    out2, _, _ = _run(df, "pitcher", fielding=fielding)
     c2 = out2[out2.pt_role == "Closer"]
     if len(c2):
         assert float(c2.iloc[0]["Proj_SV_share"]) < full_share, (

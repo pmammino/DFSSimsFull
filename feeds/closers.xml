@@ -1,0 +1,3093 @@
+This XML file does not appear to have any style information associated with it. The document tree is shown below.
+<Teams LastUpdated="2026-09-30T06:48:00-07:00">
+<Team Id="1" Code="ANA">
+<Name>Los Angeles Angels</Name>
+<Nickname>Angels</Nickname>
+<Player Rank="1" Stability="Very Low" Health="" Role="Committee" Id="18027">
+<FirstName>Ben</FirstName>
+<LastName>Joyce</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/ben-joyce-18027</Link>
+<StatsId/>
+<StatsGlobalId>1397029</StatsGlobalId>
+<SportsDataId>7bc80ba7-450a-40b0-8864-0e0138b61ede</SportsDataId>
+<SportRadarId>7bc80ba7-450a-40b0-8864-0e0138b61ede</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Committee" Id="16921">
+<FirstName>Ryan</FirstName>
+<LastName>Watson</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/ryan-watson-16921</Link>
+<StatsId/>
+<StatsGlobalId>918960</StatsGlobalId>
+<SportsDataId>f179bec5-2f31-47ff-9c62-1c2d54c0c279</SportsDataId>
+<SportRadarId>f179bec5-2f31-47ff-9c62-1c2d54c0c279</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="20034">
+<FirstName>Jose</FirstName>
+<LastName>Fermin</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jose-fermin-20034</Link>
+<StatsId/>
+<StatsGlobalId>1507943</StatsGlobalId>
+<SportsDataId>785efb0f-72d7-44bf-85f8-104931f67a49</SportsDataId>
+<SportRadarId>785efb0f-72d7-44bf-85f8-104931f67a49</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="17309">
+<FirstName>Sam</FirstName>
+<LastName>Bachman</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/sam-bachman-17309</Link>
+<StatsId>12452</StatsId>
+<StatsGlobalId>1310752</StatsGlobalId>
+<SportsDataId>100688be-d63e-4b2f-a511-ebb9c6c7de35</SportsDataId>
+<SportRadarId>100688be-d63e-4b2f-a511-ebb9c6c7de35</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="17502">
+<FirstName>Luke</FirstName>
+<LastName>Murphy</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/luke-murphy-17502</Link>
+<StatsId/>
+<StatsGlobalId>1316759</StatsGlobalId>
+<SportsDataId>264d289f-f3b9-40a0-ab5d-74c6533fce29</SportsDataId>
+<SportRadarId>264d289f-f3b9-40a0-ab5d-74c6533fce29</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="17286">
+<FirstName>Tayler</FirstName>
+<LastName>Saucedo</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tayler-saucedo-17286</Link>
+<StatsId>12208</StatsId>
+<StatsGlobalId>875298</StatsGlobalId>
+<SportsDataId>eb18a549-a572-4f11-8780-9d872e7da67c</SportsDataId>
+<SportRadarId>eb18a549-a572-4f11-8780-9d872e7da67c</SportRadarId>
+</Player>
+<Player Rank="7" Role="Middle Reliever" Id="18775">
+<FirstName>Sammy</FirstName>
+<LastName>Peralta</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/sammy-peralta-18775</Link>
+<StatsId/>
+<StatsGlobalId>1170042</StatsGlobalId>
+<SportsDataId>eaea23a2-1852-4b8e-b95c-656c2ccc836b</SportsDataId>
+<SportRadarId>eaea23a2-1852-4b8e-b95c-656c2ccc836b</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="19942">
+<FirstName>Mitch</FirstName>
+<LastName>Farris</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/mitch-farris-19942</Link>
+<StatsId/>
+<StatsGlobalId>1455270</StatsGlobalId>
+<SportsDataId>8070370c-f7c3-4911-9e1a-b39604d1bfc8</SportsDataId>
+<SportRadarId>8070370c-f7c3-4911-9e1a-b39604d1bfc8</SportRadarId>
+</Player>
+<Player Rank="9" Role="Multi-Inning" Id="15821">
+<FirstName>Blake</FirstName>
+<LastName>Weiman</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/blake-weiman-15821</Link>
+<StatsId/>
+<StatsGlobalId>1055221</StatsGlobalId>
+<SportsDataId>3b69773a-6dc7-4fe2-aa36-b603c75cebe3</SportsDataId>
+<SportRadarId>3b69773a-6dc7-4fe2-aa36-b603c75cebe3</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/16) Not only do the Angels rank dead-last in MLB with 24 saves, they're 1 of only 3 teams with fewer than 30. Los Angeles was very active at the trade deadline, dealing away relievers Ryan Zeferjahn, Kirby Yates and Brent Suter after previously DFA'ing Jordan Romano. That means nearly half of the team's saves have come from players no longer pitching for the Angels. Since then, Ben Joyce, Ryan Watson and Samy Natera have taken on the bulk of high-leverage work in the late innings. Joyce didn't make his 2026 season debut until August, but the flamethrowing right-hander now leads Los Angeles with 5 saves. He's likely to finish out 2026 as the Angels' closer, but the team probably won't have a reliever with double-digit saves this season. ]]>
+</Analysis>
+<StatsId>LAA</StatsId>
+<StatsGlobalId>227</StatsGlobalId>
+<SportsDataId>4f735188-37c8-473d-ae32-1f7e34ccf892</SportsDataId>
+<SportRadarId>4f735188-37c8-473d-ae32-1f7e34ccf892</SportRadarId>
+</Team>
+<Team Id="67" Code="ATH">
+<Name>Sacramento Athletics</Name>
+<Nickname>Athletics</Nickname>
+<Player Rank="1" Stability="Very Low" Health="" Role="Committee" Id="15516">
+<FirstName>Hogan</FirstName>
+<LastName>Harris</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/hogan-harris-15516</Link>
+<StatsId>12718</StatsId>
+<StatsGlobalId>1118858</StatsGlobalId>
+<SportsDataId>9e5efb71-0369-4528-a8ae-50e6d4539fd1</SportsDataId>
+<SportRadarId>9e5efb71-0369-4528-a8ae-50e6d4539fd1</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Committee" Id="13995">
+<FirstName>Elvis</FirstName>
+<LastName>Alvarado</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/elvis-alvarado-13995</Link>
+<StatsId/>
+<StatsGlobalId>919291</StatsGlobalId>
+<SportsDataId>221b2527-fb5b-4b78-9afa-d6a7ae92cf1e</SportsDataId>
+<SportRadarId>221b2527-fb5b-4b78-9afa-d6a7ae92cf1e</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="15224">
+<FirstName>Luis</FirstName>
+<LastName>Medina</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/luis-medina-15224</Link>
+<StatsId>11354</StatsId>
+<StatsGlobalId>928510</StatsGlobalId>
+<SportsDataId>a75a7e3e-81b2-449a-8364-eb73b1c39d1f</SportsDataId>
+<SportRadarId>a75a7e3e-81b2-449a-8364-eb73b1c39d1f</SportRadarId>
+</Player>
+<Player Rank="4" Role="Multi-Inning" Id="13412">
+<FirstName>Scott</FirstName>
+<LastName>Blewett</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/scott-blewett-13412</Link>
+<StatsId>10488</StatsId>
+<StatsGlobalId>828695</StatsGlobalId>
+<SportsDataId>6d3c33e8-1ef8-4f53-b5a2-cf226b53fe86</SportsDataId>
+<SportRadarId>6d3c33e8-1ef8-4f53-b5a2-cf226b53fe86</SportRadarId>
+</Player>
+<Player Rank="5" Role="Multi-Inning" Id="19461">
+<FirstName>Chris</FirstName>
+<LastName>Roycroft</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/chris-roycroft-19461</Link>
+<StatsId/>
+<StatsGlobalId>1393693</StatsGlobalId>
+<SportsDataId>836d8df3-344d-46f7-8cdc-5faee264d9f7</SportsDataId>
+<SportRadarId>836d8df3-344d-46f7-8cdc-5faee264d9f7</SportRadarId>
+</Player>
+<Player Rank="6" Role="Multi-Inning" Id="15817">
+<FirstName>Geoff</FirstName>
+<LastName>Hartlieb</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/geoff-hartlieb-15817</Link>
+<StatsId>11587</StatsId>
+<StatsGlobalId>876291</StatsGlobalId>
+<SportsDataId>8a487201-5788-4858-bb62-6300d0793689</SportsDataId>
+<SportRadarId>8a487201-5788-4858-bb62-6300d0793689</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="20414">
+<FirstName>Yunior</FirstName>
+<LastName>Tur</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/yunior-tur-20414</Link>
+<StatsId/>
+<StatsGlobalId>1449247</StatsGlobalId>
+<SportsDataId>011840ed-54e6-4dc2-b73d-7b29edd6d5d1</SportsDataId>
+<SportRadarId>011840ed-54e6-4dc2-b73d-7b29edd6d5d1</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="15533">
+<FirstName>Drew</FirstName>
+<LastName>Rom</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/drew-rom-15533</Link>
+<StatsId>12754</StatsId>
+<StatsGlobalId>1118871</StatsGlobalId>
+<SportsDataId>0f4978b2-11a8-42c4-af98-e7c8a9b42365</SportsDataId>
+<SportRadarId>0f4978b2-11a8-42c4-af98-e7c8a9b42365</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/15) Eight different Athletics have recorded saves under Mark Kotsay in 2026, though Hogan Harris is the only one currently in double-digits (15). While Harris currently tops this hierarchy, Kotsay has frequently called upon others for save chances throughout the campaign. Here is the breakdown of 2026 Athletics saves by month, which illustrates Harris wasn't the team's primary option for saves until the second-half:March - Mark Leiter (1)April - Joel Kuhnel (4), Jack Perkins (3), Leiter (2), Hogan Harris (1)May - Harris (3), Scott Barlow (2), Leiter (1)June - Elvis Alvarado (2), Mason Barnett (2), Harris (2), Justin Sterner (1)July - Harris (3)August - Harris (4), Alvarado (3)September (thru 9/14) - Harris (2), Alvarado (1)Since July, Harris has racked up 9 of the team's 13 saves for a 69% team save share over that span. 10 of the A's final 12 games are against AL playoff contenders, so saves may be tough to come by for this team over the final 2 weeks of the season. ]]>
+</Analysis>
+<StatsId>ATH</StatsId>
+<StatsGlobalId>235</StatsGlobalId>
+<SportsDataId>27a59d3b-ff7c-48ea-b016-4798f560f5e1</SportsDataId>
+<SportRadarId>27a59d3b-ff7c-48ea-b016-4798f560f5e1</SportRadarId>
+</Team>
+<Team Id="2" Code="ATL">
+<Name>Atlanta Braves</Name>
+<Nickname>Braves</Nickname>
+<Player Rank="1" Stability="High" Health="" Role="Closer" Id="13217">
+<FirstName>Raisel</FirstName>
+<LastName>Iglesias</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/raisel-iglesias-13217</Link>
+<StatsId>9902</StatsId>
+<StatsGlobalId>830702</StatsGlobalId>
+<SportsDataId>0fb79498-c05b-4330-b0d0-7777c4341de2</SportsDataId>
+<SportRadarId>0fb79498-c05b-4330-b0d0-7777c4341de2</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="17146">
+<FirstName>Robert</FirstName>
+<LastName>Suarez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/robert-suarez-17146</Link>
+<StatsId>12354</StatsId>
+<StatsGlobalId>869798</StatsGlobalId>
+<SportsDataId>1c172560-1d12-4223-ae7d-a31122a531e1</SportsDataId>
+<SportRadarId>1c172560-1d12-4223-ae7d-a31122a531e1</SportRadarId>
+</Player>
+<Player Rank="3" Role="Multi-Inning" Id="18747">
+<FirstName>Didier</FirstName>
+<LastName>Fuentes</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/didier-fuentes-18747</Link>
+<StatsId/>
+<StatsGlobalId>1445327</StatsGlobalId>
+<SportsDataId>87482134-cb59-42e7-88f4-c81807c07918</SportsDataId>
+<SportRadarId>87482134-cb59-42e7-88f4-c81807c07918</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="15964">
+<FirstName>Dylan</FirstName>
+<LastName>Lee</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/dylan-lee-15964</Link>
+<StatsId>12275</StatsId>
+<StatsGlobalId>918185</StatsGlobalId>
+<SportsDataId>15b6b15b-12d2-45c0-9bc7-ddc17a5fa52b</SportsDataId>
+<SportRadarId>15b6b15b-12d2-45c0-9bc7-ddc17a5fa52b</SportRadarId>
+</Player>
+<Player Rank="5" Role="Setup Man" Id="17460">
+<FirstName>Dylan</FirstName>
+<LastName>Dodd</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/dylan-dodd-17460</Link>
+<StatsId>12367</StatsId>
+<StatsGlobalId>1316874</StatsGlobalId>
+<SportsDataId>8ebfaa01-0895-4b7f-b3c1-a6bd52bb4378</SportsDataId>
+<SportRadarId>8ebfaa01-0895-4b7f-b3c1-a6bd52bb4378</SportRadarId>
+</Player>
+<Player Rank="6" Role="Multi-Inning" Id="13302">
+<FirstName>Brent</FirstName>
+<LastName>Suter</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/brent-suter-13302</Link>
+<StatsId>10370</StatsId>
+<StatsGlobalId>621681</StatsGlobalId>
+<SportsDataId>e26ad1fe-6f72-4747-be95-5dce2271eaa7</SportsDataId>
+<SportRadarId>e26ad1fe-6f72-4747-be95-5dce2271eaa7</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="16727">
+<FirstName>Victor</FirstName>
+<LastName>Mederos</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/victor-mederos-16727</Link>
+<StatsId/>
+<StatsGlobalId>1217260</StatsGlobalId>
+<SportsDataId>e01fc5fc-a2a1-4e7c-8ae6-8ca4a1644ca2</SportsDataId>
+<SportRadarId>e01fc5fc-a2a1-4e7c-8ae6-8ca4a1644ca2</SportRadarId>
+</Player>
+<Player Rank="8" Role="Middle Reliever" Id="17690">
+<FirstName>Ray</FirstName>
+<LastName>Kerr</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/ray-kerr-17690</Link>
+<StatsId>12293</StatsId>
+<StatsGlobalId>1075331</StatsGlobalId>
+<SportsDataId>9db4432a-3b93-4018-a2fb-dff249147bae</SportsDataId>
+<SportRadarId>9db4432a-3b93-4018-a2fb-dff249147bae</SportRadarId>
+</Player>
+<Player Rank="9" Role="Multi-Inning" Id="17490">
+<FirstName>AJ</FirstName>
+<LastName>Smith-Shawver</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/aj-smith-shawver-17490</Link>
+<StatsId>12366</StatsId>
+<StatsGlobalId>1316769</StatsGlobalId>
+<SportsDataId>d9026eb2-ed6d-427e-87e1-eaa4dbd82d70</SportsDataId>
+<SportRadarId>d9026eb2-ed6d-427e-87e1-eaa4dbd82d70</SportRadarId>
+</Player>
+<Player Rank="10" Role="Multi-Inning" Id="17965">
+<FirstName>Owen</FirstName>
+<LastName>Murphy</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/owen-murphy-17965</Link>
+<StatsId/>
+<StatsGlobalId>1396601</StatsGlobalId>
+<SportsDataId>94f299e8-eda4-431b-b414-73e1310cdad8</SportsDataId>
+<SportRadarId>94f299e8-eda4-431b-b414-73e1310cdad8</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/15) After a disappointing 2025, Atlanta is back on top of the NL East division (+4.5 games) with two weeks remaining in the 2026 campaign. The strength of Atlanta's bullpen is big reason why, as their 3.42 collective ERA ranks 3rd. While 10 different Braves have recorded saves this season, 12-year veteran, Raisel Iglesias, has accounted for the majority of them, racking up 32 (8th) through mid-September. His 69% team save share isn't as high as his past two campaigns, but Iglesias continues to get the job done in the ninth inning when called upon. Robert Suarez (elbow) has been out since late-June, but could be back before the end of the season and playoffs. Didier Fuentes has emerged as a reliable multi-inning setup man while also picking up a few saves along the way. ]]>
+</Analysis>
+<StatsId>ATL</StatsId>
+<StatsGlobalId>239</StatsGlobalId>
+<SportsDataId>12079497-e414-450a-8bf2-29f91de646bf</SportsDataId>
+<SportRadarId>12079497-e414-450a-8bf2-29f91de646bf</SportRadarId>
+</Team>
+<Team Id="30" Code="AZ">
+<Name>Arizona Diamondbacks</Name>
+<Nickname>Diamondbacks</Nickname>
+<Player Rank="1" Stability="Very Low" Health="" Role="Committee" Id="16424">
+<FirstName>Kevin</FirstName>
+<LastName>Ginkel</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/kevin-ginkel-16424</Link>
+<StatsId>11626</StatsId>
+<StatsGlobalId>829213</StatsGlobalId>
+<SportsDataId>016e7b25-5855-447a-aa10-10372bcc1fa3</SportsDataId>
+<SportRadarId>016e7b25-5855-447a-aa10-10372bcc1fa3</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Committee" Id="20080">
+<FirstName>Juan</FirstName>
+<LastName>Morillo</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/juan-morillo-20080</Link>
+<StatsId>13267</StatsId>
+<StatsGlobalId>917772</StatsGlobalId>
+<SportsDataId>1b799dfa-5365-44d1-9e3b-1bfeae99e047</SportsDataId>
+<SportRadarId>1b799dfa-5365-44d1-9e3b-1bfeae99e047</SportRadarId>
+</Player>
+<Player Rank="3" Role="Committee" Id="19861">
+<FirstName>Brandyn</FirstName>
+<LastName>Garcia</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/brandyn-garcia-19861</Link>
+<StatsId/>
+<StatsGlobalId>1455163</StatsGlobalId>
+<SportsDataId>9c5eff8b-7b89-4608-9396-ad8921d88433</SportsDataId>
+<SportRadarId>9c5eff8b-7b89-4608-9396-ad8921d88433</SportRadarId>
+</Player>
+<Player Rank="4" Role="Committee" Id="16573">
+<FirstName>Justin</FirstName>
+<LastName>Martinez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/justin-martinez-16573</Link>
+<StatsId>12750</StatsId>
+<StatsGlobalId>1118568</StatsGlobalId>
+<SportsDataId>049f14e2-3e08-4485-8019-a3891d30501b</SportsDataId>
+<SportRadarId>049f14e2-3e08-4485-8019-a3891d30501b</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="15256">
+<FirstName>Jonathan</FirstName>
+<LastName>Loaisiga</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jonathan-loaisiga-15256</Link>
+<StatsId>11044</StatsId>
+<StatsGlobalId>737372</StatsGlobalId>
+<SportsDataId>5d89265b-ae25-4362-807a-7b4d9a67ae55</SportsDataId>
+<SportRadarId>5d89265b-ae25-4362-807a-7b4d9a67ae55</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="14486">
+<FirstName>Dennis</FirstName>
+<LastName>Santana</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/dennis-santana-14486</Link>
+<StatsId>10901</StatsId>
+<StatsGlobalId>737018</StatsGlobalId>
+<SportsDataId>3cf3e1a3-21ac-4660-a5f8-9ea0c5a45bcf</SportsDataId>
+<SportRadarId>3cf3e1a3-21ac-4660-a5f8-9ea0c5a45bcf</SportRadarId>
+</Player>
+<Player Rank="7" Role="Middle Reliever" Id="13890">
+<FirstName>Taylor</FirstName>
+<LastName>Clarke</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/taylor-clarke-13890</Link>
+<StatsId>10415</StatsId>
+<StatsGlobalId>874810</StatsGlobalId>
+<SportsDataId>b3b31a27-6fdd-483f-9d67-23d50fd951db</SportsDataId>
+<SportRadarId>b3b31a27-6fdd-483f-9d67-23d50fd951db</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="14312">
+<FirstName>Zac</FirstName>
+<LastName>Gallen</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/zac-gallen-14312</Link>
+<StatsId>11116</StatsId>
+<StatsGlobalId>857550</StatsGlobalId>
+<SportsDataId>e488a3a6-4673-4e5d-befe-6d5ab57b0b8e</SportsDataId>
+<SportRadarId>e488a3a6-4673-4e5d-befe-6d5ab57b0b8e</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/15) Unlike last season during which 17 different D'Backs recorded saves, only 6 have done so in 2026. Of the team's 37 saves, the majority (24) were tallied by Paul Sewald, who was DFA'd by Arizona last month after losing the closer role due to poor performance. Since then, it's been a mix of Kevin Ginkel (3 saves), Brandyn Garcia (2), Juan Morillo (2) and Dennis Santana (1) in the ninth inning. One wonders if Justin Martinez - who spent time as the D'Backs closer last year - will get a chance in 2026, as he's pitched 8.2 scoreless frames with a 12:6 K:BB since making his season debut in mid-August. ]]>
+</Analysis>
+<StatsId>ARI</StatsId>
+<StatsGlobalId>253</StatsGlobalId>
+<SportsDataId>25507be1-6a68-4267-bd82-e097d94b359b</SportsDataId>
+<SportRadarId>25507be1-6a68-4267-bd82-e097d94b359b</SportRadarId>
+</Team>
+<Team Id="3" Code="BAL">
+<Name>Baltimore Orioles</Name>
+<Nickname>Orioles</Nickname>
+<Player Rank="1" Stability="Very Low" Health="" Role="Committee" Id="15709">
+<FirstName>Rico</FirstName>
+<LastName>Garcia</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/rico-garcia-15709</Link>
+<StatsId>11453</StatsId>
+<StatsGlobalId>918679</StatsGlobalId>
+<SportsDataId>c4daf3e3-dddf-4ccc-9730-af72722ad2da</SportsDataId>
+<SportRadarId>c4daf3e3-dddf-4ccc-9730-af72722ad2da</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Committee" Id="15094">
+<FirstName>Andrew</FirstName>
+<LastName>Kittredge</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/andrew-kittredge-15094</Link>
+<StatsId>10763</StatsId>
+<StatsGlobalId>577676</StatsGlobalId>
+<SportsDataId>6ff68416-4a92-49e8-8432-b672e0e6d4db</SportsDataId>
+<SportRadarId>6ff68416-4a92-49e8-8432-b672e0e6d4db</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="17700">
+<FirstName>Felix</FirstName>
+<LastName>Bautista</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/felix-bautista-17700</Link>
+<StatsId>12346</StatsId>
+<StatsGlobalId>737480</StatsGlobalId>
+<SportsDataId>f9ab5bbf-bb91-4a1a-9fe7-c8dd4eb9022f</SportsDataId>
+<SportRadarId>f9ab5bbf-bb91-4a1a-9fe7-c8dd4eb9022f</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="16308">
+<FirstName>Yennier</FirstName>
+<LastName>Cano</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/yennier-cano-16308</Link>
+<StatsId>12614</StatsId>
+<StatsGlobalId>908679</StatsGlobalId>
+<SportsDataId>7650dd19-c947-4419-90b7-79b77bb00c37</SportsDataId>
+<SportRadarId>7650dd19-c947-4419-90b7-79b77bb00c37</SportRadarId>
+</Player>
+<Player Rank="5" Role="Setup Man" Id="19289">
+<FirstName>Grant</FirstName>
+<LastName>Wolfram</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/grant-wolfram-19289</Link>
+<StatsId/>
+<StatsGlobalId>875752</StatsGlobalId>
+<SportsDataId>741a89a8-c6dd-48b9-9da0-42c7b6ed8f12</SportsDataId>
+<SportRadarId>741a89a8-c6dd-48b9-9da0-42c7b6ed8f12</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="20456">
+<FirstName>Cam</FirstName>
+<LastName>Sanders</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/cam-sanders-20456</Link>
+<StatsId/>
+<StatsGlobalId>1055462</StatsGlobalId>
+<SportsDataId>cf51d9ac-20f7-4156-911a-f2cb5a8e2ffc</SportsDataId>
+<SportRadarId>cf51d9ac-20f7-4156-911a-f2cb5a8e2ffc</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="17807">
+<FirstName>Josh</FirstName>
+<LastName>Walker</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/josh-walker-17807</Link>
+<StatsId>12492</StatsId>
+<StatsGlobalId>1056124</StatsGlobalId>
+<SportsDataId>c92922c5-d34e-4799-a78c-7a73f911fbbd</SportsDataId>
+<SportRadarId>c92922c5-d34e-4799-a78c-7a73f911fbbd</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="20101">
+<FirstName>Anthony</FirstName>
+<LastName>Nunez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/anthony-nunez-20101</Link>
+<StatsId/>
+<StatsGlobalId>1170506</StatsGlobalId>
+<SportsDataId>aeacab45-bfd8-42e7-946e-68ae102aa81a</SportsDataId>
+<SportRadarId>aeacab45-bfd8-42e7-946e-68ae102aa81a</SportRadarId>
+</Player>
+<Player Rank="9" Role="Middle Reliever" Id="19286">
+<FirstName>Alex</FirstName>
+<LastName>Hoppe</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/alex-hoppe-19286</Link>
+<StatsId/>
+<StatsGlobalId>1397648</StatsGlobalId>
+<SportsDataId>62e28e11-f221-4d95-b26f-8827c1e84d89</SportsDataId>
+<SportRadarId>62e28e11-f221-4d95-b26f-8827c1e84d89</SportRadarId>
+</Player>
+<Player Rank="10" Role="Multi-Inning" Id="12078">
+<FirstName>Albert</FirstName>
+<LastName>Suarez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/albert-suarez-12078</Link>
+<StatsId>10285</StatsId>
+<StatsGlobalId>455792</StatsGlobalId>
+<SportsDataId>8450f368-0e7a-4be6-9996-aba9248a7a8e</SportsDataId>
+<SportRadarId>8450f368-0e7a-4be6-9996-aba9248a7a8e</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/15) The closer role in Baltimore has been unsettled for most of 2026. With Felix Bautista (shoulder) spending the campaign recovering from August 2025 shoulder surgery and Ryan Helsley (elbow) missing a large chunk of the season after a few lengthy stints on the IL, 11 Orioles pitchers have recorded at least 1 save in 2026. With Helsley recently embarking on a minor league rehab assignment, Rico Garcia has emerged as Baltimore's primary closer having recorded 3 saves over the last week. Since Aug. 1, Garcia has gone scoreless in 19 of his 21 outings. It's possible he retains the job even when Helsley returns, as the O's cling on to their AL Wild Card hopes (they're currently 3.0 games back) with two weeks remaining in the season. ]]>
+</Analysis>
+<StatsId>BAL</StatsId>
+<StatsGlobalId>225</StatsGlobalId>
+<SportsDataId>75729d34-bca7-4a0f-b3df-6f26c6ad3719</SportsDataId>
+<SportRadarId>75729d34-bca7-4a0f-b3df-6f26c6ad3719</SportRadarId>
+</Team>
+<Team Id="4" Code="BOS">
+<Name>Boston Red Sox</Name>
+<Nickname>Red Sox</Nickname>
+<Player Rank="1" Stability="Very High" Health="" Role="Closer" Id="10866">
+<FirstName>Aroldis</FirstName>
+<LastName>Chapman</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/aroldis-chapman-10866</Link>
+<StatsId>8616</StatsId>
+<StatsGlobalId>523977</StatsGlobalId>
+<SportsDataId>17a14a6a-42f8-4f2e-86f3-42051584563e</SportsDataId>
+<SportRadarId>17a14a6a-42f8-4f2e-86f3-42051584563e</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="15554">
+<FirstName>Garrett</FirstName>
+<LastName>Whitlock</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/garrett-whitlock-15554</Link>
+<StatsId>11358</StatsId>
+<StatsGlobalId>1052969</StatsGlobalId>
+<SportsDataId>61bc96e6-dbb3-4dc0-972d-0c85d49f37ca</SportsDataId>
+<SportRadarId>61bc96e6-dbb3-4dc0-972d-0c85d49f37ca</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="16081">
+<FirstName>Erik</FirstName>
+<LastName>Miller</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/erik-miller-16081</Link>
+<StatsId>11815</StatsId>
+<StatsGlobalId>1159902</StatsGlobalId>
+<SportsDataId>1108c644-ff76-487f-a568-ee5c49e71f28</SportsDataId>
+<SportRadarId>1108c644-ff76-487f-a568-ee5c49e71f28</SportRadarId>
+</Player>
+<Player Rank="4" Role="Middle Reliever" Id="17604">
+<FirstName>Jovani</FirstName>
+<LastName>Moran</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jovani-moran-17604</Link>
+<StatsId>12269</StatsId>
+<StatsGlobalId>875188</StatsGlobalId>
+<SportsDataId>fe58e4fd-8015-44d4-8715-337c8015203f</SportsDataId>
+<SportRadarId>fe58e4fd-8015-44d4-8715-337c8015203f</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="18230">
+<FirstName>Greg</FirstName>
+<LastName>Weissert</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/greg-weissert-18230</Link>
+<StatsId>12685</StatsId>
+<StatsGlobalId>918484</StatsGlobalId>
+<SportsDataId>10db7b3a-232e-4ead-bff5-4eaa49d27849</SportsDataId>
+<SportRadarId>10db7b3a-232e-4ead-bff5-4eaa49d27849</SportRadarId>
+</Player>
+<Player Rank="6" Role="Multi-Inning" Id="20564">
+<FirstName>Alec</FirstName>
+<LastName>Gamboa</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/alec-gamboa-20564</Link>
+<StatsId>13424</StatsId>
+<StatsGlobalId>1169820</StatsGlobalId>
+<SportsDataId>1325e909-a349-4fce-a820-8c286212be49</SportsDataId>
+<SportRadarId>1325e909-a349-4fce-a820-8c286212be49</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="21288">
+<FirstName>Wyatt</FirstName>
+<LastName>Olds</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/wyatt-olds-21288</Link>
+<StatsId/>
+<StatsGlobalId>1317007</StatsGlobalId>
+<SportsDataId>2fd46ec8-9c69-41cf-a3c6-367c08c3c8eb</SportsDataId>
+<SportRadarId>2fd46ec8-9c69-41cf-a3c6-367c08c3c8eb</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/15) Aroldis Chapman led qualified relievers in ERA (1.17) and WHIP (0.70) while delivering the best walk rate (6.6%) of his career in 2025. His 2026 numbers aren't as sharp - particularly in the WHIP and BB% categories - but he's maintained a top-11 ERA among relief pitchers while ranking 5th with 34 saves through mid-September. ]]>
+</Analysis>
+<StatsId>BOS</StatsId>
+<StatsGlobalId>226</StatsGlobalId>
+<SportsDataId>93941372-eb4c-4c40-aced-fe3267174393</SportsDataId>
+<SportRadarId>93941372-eb4c-4c40-aced-fe3267174393</SportRadarId>
+</Team>
+<Team Id="5" Code="CHI-A">
+<Name>Chicago White Sox</Name>
+<Nickname>White Sox</Nickname>
+<Player Rank="1" Stability="Very Low" Health="" Role="Committee" Id="13894">
+<FirstName>Bryan</FirstName>
+<LastName>Hudson</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/bryan-hudson-13894</Link>
+<StatsId>10444</StatsId>
+<StatsGlobalId>874984</StatsGlobalId>
+<SportsDataId>b60e970e-aef6-4e74-97c9-b308c6aeca87</SportsDataId>
+<SportRadarId>b60e970e-aef6-4e74-97c9-b308c6aeca87</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Committee" Id="18988">
+<FirstName>Grant</FirstName>
+<LastName>Taylor</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/grant-taylor-18988</Link>
+<StatsId/>
+<StatsGlobalId>1452639</StatsGlobalId>
+<SportsDataId>4316a8bb-7459-4fe0-aa34-7a8f95d74c8c</SportsDataId>
+<SportRadarId>4316a8bb-7459-4fe0-aa34-7a8f95d74c8c</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="17402">
+<FirstName>Hagen</FirstName>
+<LastName>Smith</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/hagen-smith-17402</Link>
+<StatsId/>
+<StatsGlobalId>1316923</StatsGlobalId>
+<SportsDataId>d30e81e2-5f01-480a-a2e2-3faaf97c1c78</SportsDataId>
+<SportRadarId>d30e81e2-5f01-480a-a2e2-3faaf97c1c78</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="13912">
+<FirstName>Jordan</FirstName>
+<LastName>Hicks</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jordan-hicks-13912</Link>
+<StatsId>10947</StatsId>
+<StatsGlobalId>875019</StatsGlobalId>
+<SportsDataId>b6064f09-31ae-4d05-832c-2f4c4043c7cb</SportsDataId>
+<SportRadarId>b6064f09-31ae-4d05-832c-2f4c4043c7cb</SportRadarId>
+</Player>
+<Player Rank="5" Role="Setup Man" Id="13368">
+<FirstName>Sean</FirstName>
+<LastName>Newcomb</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/sean-newcomb-13368</Link>
+<StatsId>9868</StatsId>
+<StatsGlobalId>709548</StatsGlobalId>
+<SportsDataId>c8034571-7279-4346-8490-15707c3b3c12</SportsDataId>
+<SportRadarId>c8034571-7279-4346-8490-15707c3b3c12</SportRadarId>
+</Player>
+<Player Rank="6" Role="Setup Man" Id="18181">
+<FirstName>Huascar</FirstName>
+<LastName>Brazoban</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/huascar-brazoban-18181</Link>
+<StatsId>12658</StatsId>
+<StatsGlobalId>657849</StatsGlobalId>
+<SportsDataId>7106024a-d7a7-4972-bcce-b2c04e37add3</SportsDataId>
+<SportRadarId>7106024a-d7a7-4972-bcce-b2c04e37add3</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="15127">
+<FirstName>Trevor</FirstName>
+<LastName>Richards</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/trevor-richards-15127</Link>
+<StatsId>10988</StatsId>
+<StatsGlobalId>922230</StatsGlobalId>
+<SportsDataId>71948aff-effa-49e9-a040-396bc6b22f31</SportsDataId>
+<SportRadarId>71948aff-effa-49e9-a040-396bc6b22f31</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="18147">
+<FirstName>Tyler</FirstName>
+<LastName>Schweitzer</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tyler-schweitzer-18147</Link>
+<StatsId/>
+<StatsGlobalId>1397536</StatsGlobalId>
+<SportsDataId>64656ef9-40c9-4382-bf0c-94553423f9f8</SportsDataId>
+<SportRadarId>64656ef9-40c9-4382-bf0c-94553423f9f8</SportRadarId>
+</Player>
+<Player Rank="9" Role="Multi-Inning" Id="16594">
+<FirstName>Chris</FirstName>
+<LastName>Murphy</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/chris-murphy-16594</Link>
+<StatsId>12376</StatsId>
+<StatsGlobalId>1115918</StatsGlobalId>
+<SportsDataId>d01b8a35-7d3d-4a2a-9d9d-c78ca65e5dd3</SportsDataId>
+<SportRadarId>d01b8a35-7d3d-4a2a-9d9d-c78ca65e5dd3</SportRadarId>
+</Player>
+<Player Rank="10" Role="Multi-Inning" Id="17966">
+<FirstName>Noah</FirstName>
+<LastName>Schultz</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/noah-schultz-17966</Link>
+<StatsId/>
+<StatsGlobalId>1396603</StatsGlobalId>
+<SportsDataId>590b12d3-1bcf-4d6d-9ae2-edfc55f9c2c4</SportsDataId>
+<SportRadarId>590b12d3-1bcf-4d6d-9ae2-edfc55f9c2c4</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/16) 10 different White Sox pitchers have combined for the team's 38 saves through mid-September. Seranthony Dominguez - who was Chicago's Opening Day closer but was subsequently traded to Seattle - still leads the team with 12 saves and is the only reliever in double-digits. Grant Taylor and Bryan Hudson - who currently top this hierarchy - are tied for 2nd on the team with 8 saves apiece. Thus far, the White Sox only have 1 save in the month of September, which went to Hudson. Hudson has actually recorded the White Sox' past 3 saves dating back to late-August. Taylor has struggled in recent appearances - he's permitted at least 1 ER in 4 straight outings - but has been dominant at times through 2026 and remains in the picture for the team's highest-leverage moments in the late-innings. Keep an eye on LHP Hagen Smith, whose performance through his first 22 major-league innings has been outstanding. He has yet to pitch regularly in the late innings, but he could (and probably should) be pitching some important innings for the White Sox down the stretch. ]]>
+</Analysis>
+<StatsId>CWS</StatsId>
+<StatsGlobalId>228</StatsGlobalId>
+<SportsDataId>47f490cd-2f58-4ef7-9dfd-2ad6ba6c1ae8</SportsDataId>
+<SportRadarId>47f490cd-2f58-4ef7-9dfd-2ad6ba6c1ae8</SportRadarId>
+</Team>
+<Team Id="6" Code="CHI-N">
+<Name>Chicago Cubs</Name>
+<Nickname>Cubs</Nickname>
+<Player Rank="1" Stability="Very Low" Health="" Role="Committee" Id="14287">
+<FirstName>Ryan</FirstName>
+<LastName>Zeferjahn</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/ryan-zeferjahn-14287</Link>
+<StatsId/>
+<StatsGlobalId>918975</StatsGlobalId>
+<SportsDataId>b43a9220-9193-4fd7-9492-69f06a532ff1</SportsDataId>
+<SportRadarId>b43a9220-9193-4fd7-9492-69f06a532ff1</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Committee" Id="14303">
+<FirstName>Ryan</FirstName>
+<LastName>Rolison</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/ryan-rolison-14303</Link>
+<StatsId>11301</StatsId>
+<StatsGlobalId>918949</StatsGlobalId>
+<SportsDataId>30c1f274-bd18-475a-9d97-0a353ad35085</SportsDataId>
+<SportRadarId>30c1f274-bd18-475a-9d97-0a353ad35085</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="15781">
+<FirstName>Jacob</FirstName>
+<LastName>Webb</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jacob-webb-15781</Link>
+<StatsId>11195</StatsId>
+<StatsGlobalId>829328</StatsGlobalId>
+<SportsDataId>526a1205-0c3c-4c93-916d-5beeca478bb6</SportsDataId>
+<SportRadarId>526a1205-0c3c-4c93-916d-5beeca478bb6</SportRadarId>
+</Player>
+<Player Rank="4" Role="Closer of Future" Id="17588">
+<FirstName>Daniel</FirstName>
+<LastName>Palencia</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/daniel-palencia-17588</Link>
+<StatsId/>
+<StatsGlobalId>1289743</StatsGlobalId>
+<SportsDataId>359d6c91-4911-4870-9b4a-f4ff9172b82e</SportsDataId>
+<SportRadarId>359d6c91-4911-4870-9b4a-f4ff9172b82e</SportRadarId>
+</Player>
+<Player Rank="5" Role="Setup Man" Id="15552">
+<FirstName>Trent</FirstName>
+<LastName>Thornton</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/trent-thornton-15552</Link>
+<StatsId>11247</StatsId>
+<StatsGlobalId>857695</StatsGlobalId>
+<SportsDataId>c7513e8c-c4a0-4ece-8815-cd2889c61226</SportsDataId>
+<SportRadarId>c7513e8c-c4a0-4ece-8815-cd2889c61226</SportRadarId>
+</Player>
+<Player Rank="6" Role="Setup Man" Id="12766">
+<FirstName>Caleb</FirstName>
+<LastName>Thielbar</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/caleb-thielbar-12766</Link>
+<StatsId>9402</StatsId>
+<StatsGlobalId>502074</StatsGlobalId>
+<SportsDataId>37d66c9e-486b-4084-ad22-f359d28ff214</SportsDataId>
+<SportRadarId>37d66c9e-486b-4084-ad22-f359d28ff214</SportRadarId>
+</Player>
+<Player Rank="7" Role="Middle Reliever" Id="16362">
+<FirstName>Gavin</FirstName>
+<LastName>Hollowell</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/gavin-hollowell-16362</Link>
+<StatsId>12702</StatsId>
+<StatsGlobalId>1115754</StatsGlobalId>
+<SportsDataId>ad5034d7-9b85-4c75-939a-d9ce849155a4</SportsDataId>
+<SportRadarId>ad5034d7-9b85-4c75-939a-d9ce849155a4</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="14672">
+<FirstName>Edward</FirstName>
+<LastName>Cabrera</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/edward-cabrera-14672</Link>
+<StatsId>10903</StatsId>
+<StatsGlobalId>920423</StatsGlobalId>
+<SportsDataId>4749846b-ab83-43a9-a114-3fd701909b89</SportsDataId>
+<SportRadarId>4749846b-ab83-43a9-a114-3fd701909b89</SportRadarId>
+</Player>
+<Player Rank="9" Role="Multi-Inning" Id="13786">
+<FirstName>Colin</FirstName>
+<LastName>Rea</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/colin-rea-13786</Link>
+<StatsId>10048</StatsId>
+<StatsGlobalId>578060</StatsGlobalId>
+<SportsDataId>cd417c1f-ecec-4a64-907a-bbb2b04d8507</SportsDataId>
+<SportRadarId>cd417c1f-ecec-4a64-907a-bbb2b04d8507</SportRadarId>
+</Player>
+<Player Rank="10" Role="Multi-Inning" Id="14366">
+<FirstName>Aaron</FirstName>
+<LastName>Civale</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/aaron-civale-14366</Link>
+<StatsId>10869</StatsId>
+<StatsGlobalId>874216</StatsGlobalId>
+<SportsDataId>1b65d697-deeb-4eec-8bc3-c704a21c7cda</SportsDataId>
+<SportRadarId>1b65d697-deeb-4eec-8bc3-c704a21c7cda</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/15) 14 different Cubs have combined for the club's 33 saves through mid-September, as the draft market's favorite to serve as Chicago's closer, Daniel Palencia, has struggled with health and performance in 2026. Palencia, who missed two months with a right elbow flexor strain before returning in late-August, has struggled since then. He last recorded a save back on May 14, so it doesn't look likely that he'll regain the closer role before the end of 2026 or during the playoffs. Jacob Webb leads the Cubs with 9 saves, but he's allowed 9 ER over his last 7 appearances and it's been over 1 month since he last recorded one, likely keeping him out of the picture until he corrects course. Currently, Ryan Zeferjahn and Ryan Rolison top this hierarchy, but neither are appealing for fantasy purposes. Since landing with the Cubs via trade, Zeferjahn has compiled a 5.65 ERA and 1.60 WHIP across 14.1 innings. Rolison has been much sharper, but doesn't strike many batters out and struggles with walks. Shelby Miller (elbow) has yet to pitch in the majors in 2026, but is currently on rehab and has struck out 18 over 10.2 minor-league innings. If he makes it back to the majors before the end of the season, it wouldn't be surprising to see him pick up a save chance or two. ]]>
+</Analysis>
+<StatsId>CHC</StatsId>
+<StatsGlobalId>240</StatsGlobalId>
+<SportsDataId>55714da8-fcaf-4574-8443-59bfb511a524</SportsDataId>
+<SportRadarId>55714da8-fcaf-4574-8443-59bfb511a524</SportRadarId>
+</Team>
+<Team Id="7" Code="CIN">
+<Name>Cincinnati Reds</Name>
+<Nickname>Reds</Nickname>
+<Player Rank="1" Stability="Very High" Health="" Role="Closer" Id="14747">
+<FirstName>Emilio</FirstName>
+<LastName>Pagan</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/emilio-pagan-14747</Link>
+<StatsId>10691</StatsId>
+<StatsGlobalId>737885</StatsGlobalId>
+<SportsDataId>0473750e-f7fa-4ee6-bf65-de76b2bc2917</SportsDataId>
+<SportRadarId>0473750e-f7fa-4ee6-bf65-de76b2bc2917</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="13459">
+<FirstName>Brock</FirstName>
+<LastName>Burke</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/brock-burke-13459</Link>
+<StatsId>11241</StatsId>
+<StatsGlobalId>828798</StatsGlobalId>
+<SportsDataId>eb458d81-ba52-443b-8a22-e9c35d089012</SportsDataId>
+<SportRadarId>eb458d81-ba52-443b-8a22-e9c35d089012</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="16192">
+<FirstName>Graham</FirstName>
+<LastName>Ashcraft</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/graham-ashcraft-16192</Link>
+<StatsId>12392</StatsId>
+<StatsGlobalId>918274</StatsGlobalId>
+<SportsDataId>8f0c3e7b-ea0c-471c-870a-c9f7bdd81f47</SportsDataId>
+<SportRadarId>8f0c3e7b-ea0c-471c-870a-c9f7bdd81f47</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="16495">
+<FirstName>Tejay</FirstName>
+<LastName>Antone</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tejay-antone-16495</Link>
+<StatsId>11682</StatsId>
+<StatsGlobalId>658534</StatsGlobalId>
+<SportsDataId>23acb457-ce30-4651-9f21-9d8638d1a49d</SportsDataId>
+<SportRadarId>23acb457-ce30-4651-9f21-9d8638d1a49d</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="12484">
+<FirstName>Pierce</FirstName>
+<LastName>Johnson</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/pierce-johnson-12484</Link>
+<StatsId>9559</StatsId>
+<StatsGlobalId>501771</StatsGlobalId>
+<SportsDataId>9ef1bea8-21b4-4ba9-81d3-84ebfcf63582</SportsDataId>
+<SportRadarId>9ef1bea8-21b4-4ba9-81d3-84ebfcf63582</SportRadarId>
+</Player>
+<Player Rank="6" Role="Multi-Inning" Id="19810">
+<FirstName>Luis</FirstName>
+<LastName>Mey</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/luis-mey-19810</Link>
+<StatsId/>
+<StatsGlobalId>1172008</StatsGlobalId>
+<SportsDataId>a1ed7dc1-e3d8-45c3-a91e-438425ffd9ff</SportsDataId>
+<SportRadarId>a1ed7dc1-e3d8-45c3-a91e-438425ffd9ff</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/15) 12 different Reds have combined for the team's 40 saves through mid-September, but Emilio Pagan is the only one in double-digits with 23; well ahead of Tony Santillan who ranks 2nd on the team with 5 saves. Since Pagan returned from the injured list on June 30, he's recorded 17 of the Reds' 20 saves for an 85% team save share during that span. ]]>
+</Analysis>
+<StatsId>CIN</StatsId>
+<StatsGlobalId>241</StatsGlobalId>
+<SportsDataId>c874a065-c115-4e7d-b0f0-235584fb0e6f</SportsDataId>
+<SportRadarId>c874a065-c115-4e7d-b0f0-235584fb0e6f</SportRadarId>
+</Team>
+<Team Id="8" Code="CLE">
+<Name>Cleveland Guardians</Name>
+<Nickname>Guardians</Nickname>
+<Player Rank="1" Stability="Very High" Health="" Role="Closer" Id="16994">
+<FirstName>Cade</FirstName>
+<LastName>Smith</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/cade-smith-16994</Link>
+<StatsId/>
+<StatsGlobalId>1055378</StatsGlobalId>
+<SportsDataId>fca2bd57-5b4d-4a02-a38f-b44f681944a5</SportsDataId>
+<SportRadarId>fca2bd57-5b4d-4a02-a38f-b44f681944a5</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="16216">
+<FirstName>Hunter</FirstName>
+<LastName>Gaddis</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/hunter-gaddis-16216</Link>
+<StatsId>12665</StatsId>
+<StatsGlobalId>1159673</StatsGlobalId>
+<SportsDataId>10e8c10d-fa1a-4c3c-818e-817a3cf50697</SportsDataId>
+<SportRadarId>10e8c10d-fa1a-4c3c-818e-817a3cf50697</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="17718">
+<FirstName>Erik</FirstName>
+<LastName>Sabrowski</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/erik-sabrowski-17718</Link>
+<StatsId/>
+<StatsGlobalId>1119393</StatsGlobalId>
+<SportsDataId>ea65b3b1-4bd9-4167-b3f0-765476b17b47</SportsDataId>
+<SportRadarId>ea65b3b1-4bd9-4167-b3f0-765476b17b47</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="13661">
+<FirstName>Shawn</FirstName>
+<LastName>Armstrong</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/shawn-armstrong-13661</Link>
+<StatsId>10047</StatsId>
+<StatsGlobalId>598951</StatsGlobalId>
+<SportsDataId>636653db-659f-46b4-a672-fcc478fc5be5</SportsDataId>
+<SportRadarId>636653db-659f-46b4-a672-fcc478fc5be5</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="18273">
+<FirstName>Tim</FirstName>
+<LastName>Herrin</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tim-herrin-18273</Link>
+<StatsId>12733</StatsId>
+<StatsGlobalId>1054366</StatsGlobalId>
+<SportsDataId>627d5421-39e7-4b24-b231-90e5e8b9a5ba</SportsDataId>
+<SportRadarId>627d5421-39e7-4b24-b231-90e5e8b9a5ba</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="19413">
+<FirstName>Craig</FirstName>
+<LastName>Yoho</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/craig-yoho-19413</Link>
+<StatsId/>
+<StatsGlobalId>1454968</StatsGlobalId>
+<SportsDataId>a2a51738-0b88-4db3-b24e-0ba118d10993</SportsDataId>
+<SportRadarId>a2a51738-0b88-4db3-b24e-0ba118d10993</SportRadarId>
+</Player>
+<Player Rank="7" Role="Middle Reliever" Id="15304">
+<FirstName>Matt</FirstName>
+<LastName>Festa</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/matt-festa-15304</Link>
+<StatsId>11068</StatsId>
+<StatsGlobalId>918041</StatsGlobalId>
+<SportsDataId>4f2d69fe-31d3-470c-8dcc-df43518f586d</SportsDataId>
+<SportRadarId>4f2d69fe-31d3-470c-8dcc-df43518f586d</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="15450">
+<FirstName>Slade</FirstName>
+<LastName>Cecconi</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/slade-cecconi-15450</Link>
+<StatsId>12118</StatsId>
+<StatsGlobalId>1120061</StatsGlobalId>
+<SportsDataId>dbdd2193-a5ad-474a-afdd-5f9fd308a09e</SportsDataId>
+<SportRadarId>dbdd2193-a5ad-474a-afdd-5f9fd308a09e</SportRadarId>
+</Player>
+<Player Rank="9" Role="Multi-Inning" Id="16059">
+<FirstName>Daniel</FirstName>
+<LastName>Espino</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/daniel-espino-16059</Link>
+<StatsId>11753</StatsId>
+<StatsGlobalId>1169599</StatsGlobalId>
+<SportsDataId>c4706b44-8836-41df-aca8-1eaf5990d2be</SportsDataId>
+<SportRadarId>c4706b44-8836-41df-aca8-1eaf5990d2be</SportRadarId>
+</Player>
+<Player Rank="10" Role="Middle Reliever" Id="17032">
+<FirstName>Connor</FirstName>
+<LastName>Brogdon</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/connor-brogdon-17032</Link>
+<StatsId>11955</StatsId>
+<StatsGlobalId>739015</StatsGlobalId>
+<SportsDataId>f6577ede-f998-427b-9f6e-b5a2fa52c5a5</SportsDataId>
+<SportRadarId>f6577ede-f998-427b-9f6e-b5a2fa52c5a5</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/15) Cade Smith ranks 4th in MLB with 36 saves through mid-September and his stability as the Guardians' closer is among the highest in the league. He also ranks 6th among qualified relievers with a 27.1 K-BB percentage. ]]>
+</Analysis>
+<StatsId>CLE</StatsId>
+<StatsGlobalId>229</StatsGlobalId>
+<SportsDataId>80715d0d-0d2a-450f-a970-1b9a3b18c7e7</SportsDataId>
+<SportRadarId>80715d0d-0d2a-450f-a970-1b9a3b18c7e7</SportRadarId>
+</Team>
+<Team Id="9" Code="COL">
+<Name>Colorado Rockies</Name>
+<Nickname>Rockies</Nickname>
+<Player Rank="1" Stability="Medium" Health="" Role="Closer" Id="15493">
+<FirstName>Jordan</FirstName>
+<LastName>Romano</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jordan-romano-15493</Link>
+<StatsId>11253</StatsId>
+<StatsGlobalId>829155</StatsGlobalId>
+<SportsDataId>96a08412-2c2b-415f-bdb2-d5835fc3d66c</SportsDataId>
+<SportRadarId>96a08412-2c2b-415f-bdb2-d5835fc3d66c</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="19191">
+<FirstName>Juan</FirstName>
+<LastName>Mejia</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/juan-mejia-19191</Link>
+<StatsId>12891</StatsId>
+<StatsGlobalId>1055596</StatsGlobalId>
+<SportsDataId>20fa8c5a-14c7-42ba-a4f1-d7fba9f901e5</SportsDataId>
+<SportRadarId>20fa8c5a-14c7-42ba-a4f1-d7fba9f901e5</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="18212">
+<FirstName>Brennan</FirstName>
+<LastName>Bernardino</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/brennan-bernardino-18212</Link>
+<StatsId>12661</StatsId>
+<StatsGlobalId>829409</StatsGlobalId>
+<SportsDataId>2cf674c0-51a0-4aab-9303-c872345243c4</SportsDataId>
+<SportRadarId>2cf674c0-51a0-4aab-9303-c872345243c4</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="15471">
+<FirstName>Jaden</FirstName>
+<LastName>Hill</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jaden-hill-15471</Link>
+<StatsId>12407</StatsId>
+<StatsGlobalId>1120084</StatsGlobalId>
+<SportsDataId>eef5b7fc-b5aa-4870-9e97-0095c5fda64d</SportsDataId>
+<SportRadarId>eef5b7fc-b5aa-4870-9e97-0095c5fda64d</SportRadarId>
+</Player>
+<Player Rank="5" Role="Setup Man" Id="15363">
+<FirstName>Jimmy</FirstName>
+<LastName>Herget</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jimmy-herget-15363</Link>
+<StatsId>11203</StatsId>
+<StatsGlobalId>658965</StatsGlobalId>
+<SportsDataId>320c97b3-d559-498b-9eb9-4c087c8cf9bb</SportsDataId>
+<SportRadarId>320c97b3-d559-498b-9eb9-4c087c8cf9bb</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="16881">
+<FirstName>Nick</FirstName>
+<LastName>Frasso</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/nick-frasso-16881</Link>
+<StatsId/>
+<StatsGlobalId>1176554</StatsGlobalId>
+<SportsDataId>08fb3f85-74eb-4073-9430-890582a25643</SportsDataId>
+<SportRadarId>08fb3f85-74eb-4073-9430-890582a25643</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="19812">
+<FirstName>Zach</FirstName>
+<LastName>Agnos</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/zach-agnos-19812</Link>
+<StatsId/>
+<StatsGlobalId>1397733</StatsGlobalId>
+<SportsDataId>b4ae5b82-705f-46ab-a8be-7b347f145c23</SportsDataId>
+<SportRadarId>b4ae5b82-705f-46ab-a8be-7b347f145c23</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="19916">
+<FirstName>Mark</FirstName>
+<LastName>Manfredi</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/mark-manfredi-19916</Link>
+<StatsId/>
+<StatsGlobalId>1454990</StatsGlobalId>
+<SportsDataId>e6f0d172-bc4e-4484-ba21-3c8becd74a90</SportsDataId>
+<SportRadarId>e6f0d172-bc4e-4484-ba21-3c8becd74a90</SportRadarId>
+</Player>
+<Player Rank="9" Role="Multi-Inning" Id="19921">
+<FirstName>Blas</FirstName>
+<LastName>Castano</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/blas-castano-19921</Link>
+<StatsId>13109</StatsId>
+<StatsGlobalId>1120575</StatsGlobalId>
+<SportsDataId>75edf542-7c89-4d62-b4a2-dccaa6d74492</SportsDataId>
+<SportRadarId>75edf542-7c89-4d62-b4a2-dccaa6d74492</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/16) The Rockies lost 12 of 14 to close out the month of August and have lost 9 of 13 in September thus far. It's no secret that saves have been hard to come by. Fortunately, when a save chance arises, there's a strong likelihood that Jordan Romano will get the call - even if he's blown 2 of his last 4 opportunities. Romano has actually recorded Colorado's last 9 saves dating back to mid-July. Prior to Romano's arrival in Colorado, manager Warren Schaeffer deployed a closer-by-committee. He opened 2026 using 5 different relievers for saves through the first few weeks of the season - Jimmy Herget, Victor Vodnik, Juan Mejia, Antonio Senzatela and Zach Agnos. Vodnik went on to record 3 of the team's next 5 saves through the end of April, but he was subsequently traded to Miami. Colorado stumbled in May, posting a mere 8-20 record during which there simply weren't many save chances available. Mejia actually led the Rockies with 2 of the team's 3 saves in May. In June, it was Herget and Jaden Hill recording 2 saves apiece to lead the team. When the calendar flipped to July is when Romano resurfaced. While he's been successful closing out games for Colorado thus far, it's still pretty difficult to trust his stability given his inconsistent performance in recent campaigns. ]]>
+</Analysis>
+<StatsId>COL</StatsId>
+<StatsGlobalId>251</StatsGlobalId>
+<SportsDataId>29dd9a87-5bcc-4774-80c3-7f50d985068b</SportsDataId>
+<SportRadarId>29dd9a87-5bcc-4774-80c3-7f50d985068b</SportRadarId>
+</Team>
+<Team Id="10" Code="DET">
+<Name>Detroit Tigers</Name>
+<Nickname>Tigers</Nickname>
+<Player Rank="1" Stability="Medium" Health="" Role="Closer" Id="11289">
+<FirstName>Kenley</FirstName>
+<LastName>Jansen</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/kenley-jansen-11289</Link>
+<StatsId>8758</StatsId>
+<StatsGlobalId>295200</StatsGlobalId>
+<SportsDataId>9e798b78-22d9-44df-a4c3-fc9db6c0133d</SportsDataId>
+<SportRadarId>9e798b78-22d9-44df-a4c3-fc9db6c0133d</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="15550">
+<FirstName>Tyler</FirstName>
+<LastName>Holton</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tyler-holton-15550</Link>
+<StatsId>12606</StatsId>
+<StatsGlobalId>915701</StatsGlobalId>
+<SportsDataId>bc310e40-61b2-4148-80f5-918bc70c2946</SportsDataId>
+<SportRadarId>bc310e40-61b2-4148-80f5-918bc70c2946</SportRadarId>
+</Player>
+<Player Rank="3" Role="Multi-Inning" Id="19974">
+<FirstName>Drew</FirstName>
+<LastName>Sommers</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/drew-sommers-19974</Link>
+<StatsId/>
+<StatsGlobalId>1397847</StatsGlobalId>
+<SportsDataId>881cae6e-23db-4c13-b3c3-0101870dfe27</SportsDataId>
+<SportRadarId>881cae6e-23db-4c13-b3c3-0101870dfe27</SportRadarId>
+</Player>
+<Player Rank="4" Role="Multi-Inning" Id="15670">
+<FirstName>Jacob</FirstName>
+<LastName>Waguespack</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jacob-waguespack-15670</Link>
+<StatsId>11248</StatsId>
+<StatsGlobalId>659056</StatsGlobalId>
+<SportsDataId>581fc086-8ee2-4b14-b3fb-edf358111186</SportsDataId>
+<SportRadarId>581fc086-8ee2-4b14-b3fb-edf358111186</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="18751">
+<FirstName>Yilber</FirstName>
+<LastName>Diaz</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/yilber-diaz-18751</Link>
+<StatsId/>
+<StatsGlobalId>1386146</StatsGlobalId>
+<SportsDataId>55de0f7b-e342-4292-a9f2-226b3ed55018</SportsDataId>
+<SportRadarId>55de0f7b-e342-4292-a9f2-226b3ed55018</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="15284">
+<FirstName>Tyler</FirstName>
+<LastName>Kinley</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tyler-kinley-15284</Link>
+<StatsId>10985</StatsId>
+<StatsGlobalId>738149</StatsGlobalId>
+<SportsDataId>5e1b097b-6e8d-49d4-b708-a90d6f5512cc</SportsDataId>
+<SportRadarId>5e1b097b-6e8d-49d4-b708-a90d6f5512cc</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="17475">
+<FirstName>Brant</FirstName>
+<LastName>Hurter</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/brant-hurter-17475</Link>
+<StatsId/>
+<StatsGlobalId>1159945</StatsGlobalId>
+<SportsDataId>5558a5b1-026b-437e-8ca5-fa431bd53cae</SportsDataId>
+<SportRadarId>5558a5b1-026b-437e-8ca5-fa431bd53cae</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="17745">
+<FirstName>Beau</FirstName>
+<LastName>Brieske</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/beau-brieske-17745</Link>
+<StatsId>12604</StatsId>
+<StatsGlobalId>1170435</StatsGlobalId>
+<SportsDataId>0d9babdc-80b5-40c2-a71d-068219b9337b</SportsDataId>
+<SportRadarId>0d9babdc-80b5-40c2-a71d-068219b9337b</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (8/5) Through mid-September, 7 Tigers have combined for the team's 30 saves, though future Hall of Famer, Kenley Jansen, leads the team with 20 (67% team save share). With 496 career saves, he's only a few away from a milestone that only 2 other relief pitchers have achieved in their careers. Aside from an elevated walk rate, Jansen has been quite good. Since the beginning of July, he's posted a 1.66 ERA, 1.02 WHIP and 25:12 K:BB across 21.2 innings. He's recorded the Tigers' last 7 saves, and with Detroit unlikely to make the postseason with a lockout looming, he'll likely be given as many chances as possible to reach the 500 save milestone during 2026. ]]>
+</Analysis>
+<StatsId>DET</StatsId>
+<StatsGlobalId>230</StatsGlobalId>
+<SportsDataId>575c19b7-4052-41c2-9f0a-1c5813d02f99</SportsDataId>
+<SportRadarId>575c19b7-4052-41c2-9f0a-1c5813d02f99</SportRadarId>
+</Team>
+<Team Id="12" Code="HOU">
+<Name>Houston Astros</Name>
+<Nickname>Astros</Nickname>
+<Player Rank="1" Stability="Very High" Health="" Role="Closer" Id="13051">
+<FirstName>Josh</FirstName>
+<LastName>Hader</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/josh-hader-13051</Link>
+<StatsId>10131</StatsId>
+<StatsGlobalId>658473</StatsGlobalId>
+<SportsDataId>0962aa65-8c44-4325-9e07-ab9ff6181136</SportsDataId>
+<SportRadarId>0962aa65-8c44-4325-9e07-ab9ff6181136</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="15744">
+<FirstName>Bryan</FirstName>
+<LastName>Abreu</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/bryan-abreu-15744</Link>
+<StatsId>11208</StatsId>
+<StatsGlobalId>828588</StatsGlobalId>
+<SportsDataId>fd2a37d4-32ae-45e2-a0dd-d58e0d9ac869</SportsDataId>
+<SportRadarId>fd2a37d4-32ae-45e2-a0dd-d58e0d9ac869</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="17060">
+<FirstName>Bennett</FirstName>
+<LastName>Sousa</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/bennett-sousa-17060</Link>
+<StatsId>12045</StatsId>
+<StatsGlobalId>913181</StatsGlobalId>
+<SportsDataId>552ebce4-0d94-43f4-86ea-32ea9fd1c03b</SportsDataId>
+<SportRadarId>552ebce4-0d94-43f4-86ea-32ea9fd1c03b</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="13720">
+<FirstName>Steven</FirstName>
+<LastName>Okert</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/steven-okert-13720</Link>
+<StatsId>10109</StatsId>
+<StatsGlobalId>550187</StatsGlobalId>
+<SportsDataId>2c30becf-7771-4e6c-b023-ffb0616ab4f7</SportsDataId>
+<SportRadarId>2c30becf-7771-4e6c-b023-ffb0616ab4f7</SportRadarId>
+</Player>
+<Player Rank="5" Role="Multi-Inning" Id="19336">
+<FirstName>AJ</FirstName>
+<LastName>Blubaugh</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/aj-blubaugh-19336</Link>
+<StatsId/>
+<StatsGlobalId>1397692</StatsGlobalId>
+<SportsDataId>68e8b052-f70d-42a6-a535-7fc3ec9d8bec</SportsDataId>
+<SportRadarId>68e8b052-f70d-42a6-a535-7fc3ec9d8bec</SportRadarId>
+</Player>
+<Player Rank="6" Role="Multi-Inning" Id="20530">
+<FirstName>Tatsuya</FirstName>
+<LastName>Imai</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tatsuya-imai-20530</Link>
+<StatsId>13438</StatsId>
+<StatsGlobalId>969423</StatsGlobalId>
+<SportsDataId>2c6bab44-1e96-481b-85bb-f430ad101ded</SportsDataId>
+<SportRadarId>2c6bab44-1e96-481b-85bb-f430ad101ded</SportRadarId>
+</Player>
+<Player Rank="7" Role="Middle Reliever" Id="19669">
+<FirstName>Bryan</FirstName>
+<LastName>King</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/bryan-king-19669</Link>
+<StatsId>13032</StatsId>
+<StatsGlobalId>1170549</StatsGlobalId>
+<SportsDataId>336054f7-c72a-425a-8d43-fb07073dbc62</SportsDataId>
+<SportRadarId>336054f7-c72a-425a-8d43-fb07073dbc62</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="18233">
+<FirstName>Miguel</FirstName>
+<LastName>Ullola</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/miguel-ullola-18233</Link>
+<StatsId/>
+<StatsGlobalId>1341929</StatsGlobalId>
+<SportsDataId>c254df1b-5fa0-4e6c-b36c-72d62e8c7010</SportsDataId>
+<SportRadarId>c254df1b-5fa0-4e6c-b36c-72d62e8c7010</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/16) After his long layover and late start to the 2026 campaign, Josh Hader has gone scoreless in 38 of his 42 appearances this season, permitting just 4 runs across 42.1 innings through mid-September. The southpaw has shown no signs of rust, sporting an excellent 0.85 ERA, 0.66 WHIP and 35.5% strikeout rate. His stability as the Astros closer remains high and he should continue receiving the majority of Houston's save chances, especially since he's making $19 million per year through 2028. ]]>
+</Analysis>
+<StatsId>HOU</StatsId>
+<StatsGlobalId>242</StatsGlobalId>
+<SportsDataId>eb21dadd-8f10-4095-8bf3-dfb3b779f107</SportsDataId>
+<SportRadarId>eb21dadd-8f10-4095-8bf3-dfb3b779f107</SportRadarId>
+</Team>
+<Team Id="13" Code="KC">
+<Name>Kansas City Royals</Name>
+<Nickname>Royals</Nickname>
+<Player Rank="1" Stability="Very Low" Health="" Role="Committee" Id="18362">
+<FirstName>Steven</FirstName>
+<LastName>Cruz</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/steven-cruz-18362</Link>
+<StatsId/>
+<StatsGlobalId>1057018</StatsGlobalId>
+<SportsDataId>6c0481cb-020a-41be-8ea6-d96cbd99f1b9</SportsDataId>
+<SportRadarId>6c0481cb-020a-41be-8ea6-d96cbd99f1b9</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Committee" Id="14792">
+<FirstName>Nate</FirstName>
+<LastName>Pearson</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/nate-pearson-14792</Link>
+<StatsId>10960</StatsId>
+<StatsGlobalId>1054997</StatsGlobalId>
+<SportsDataId>f15abf11-e9c6-4f90-a16d-59a14176dff3</SportsDataId>
+<SportRadarId>f15abf11-e9c6-4f90-a16d-59a14176dff3</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="10565">
+<FirstName>Craig</FirstName>
+<LastName>Kimbrel</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/craig-kimbrel-10565</Link>
+<StatsId>8622</StatsId>
+<StatsGlobalId>454499</StatsGlobalId>
+<SportsDataId>c4a8a308-1517-4c0e-a8af-f8cd824525cc</SportsDataId>
+<SportRadarId>c4a8a308-1517-4c0e-a8af-f8cd824525cc</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="14794">
+<FirstName>Alex</FirstName>
+<LastName>Lange</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/alex-lange-14794</Link>
+<StatsId>10860</StatsId>
+<StatsGlobalId>1054999</StatsGlobalId>
+<SportsDataId>9026cf57-637f-421c-803b-43652550abc8</SportsDataId>
+<SportRadarId>9026cf57-637f-421c-803b-43652550abc8</SportRadarId>
+</Player>
+<Player Rank="5" Role="Multi-Inning" Id="16385">
+<FirstName>Connor</FirstName>
+<LastName>Thomas</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/connor-thomas-16385</Link>
+<StatsId>12717</StatsId>
+<StatsGlobalId>1115616</StatsGlobalId>
+<SportsDataId>1b31bb53-d0f6-439b-85e1-d4c263a33e80</SportsDataId>
+<SportRadarId>1b31bb53-d0f6-439b-85e1-d4c263a33e80</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="17911">
+<FirstName>Jose</FirstName>
+<LastName>Cuas</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jose-cuas-17911</Link>
+<StatsId>12625</StatsId>
+<StatsGlobalId>658962</StatsGlobalId>
+<SportsDataId>e338c359-f475-41d6-82e6-7d1db71289cb</SportsDataId>
+<SportRadarId>e338c359-f475-41d6-82e6-7d1db71289cb</SportRadarId>
+</Player>
+<Player Rank="7" Role="Middle Reliever" Id="10541">
+<FirstName>Anthony</FirstName>
+<LastName>Gose</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/anthony-gose-10541</Link>
+<StatsId>9120</StatsId>
+<StatsGlobalId>454425</StatsGlobalId>
+<SportsDataId>103d8964-626b-4de6-a526-4c2fb1e94642</SportsDataId>
+<SportRadarId>103d8964-626b-4de6-a526-4c2fb1e94642</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="17712">
+<FirstName>Nolan</FirstName>
+<LastName>Hoffman</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/nolan-hoffman-17712</Link>
+<StatsId/>
+<StatsGlobalId>1118891</StatsGlobalId>
+<SportsDataId>da719a63-21d3-46bc-a1a5-89b87ca1fbea</SportsDataId>
+<SportRadarId>da719a63-21d3-46bc-a1a5-89b87ca1fbea</SportRadarId>
+</Player>
+<Player Rank="9" Role="Middle Reliever" Id="14282">
+<FirstName>Lucas</FirstName>
+<LastName>Erceg</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/lucas-erceg-14282</Link>
+<StatsId>10659</StatsId>
+<StatsGlobalId>872722</StatsGlobalId>
+<SportsDataId>30d522ec-b5f3-4836-8f53-4b7ad9b3086a</SportsDataId>
+<SportRadarId>30d522ec-b5f3-4836-8f53-4b7ad9b3086a</SportRadarId>
+</Player>
+<Player Rank="10" Role="Middle Reliever" Id="17215">
+<FirstName>James</FirstName>
+<LastName>McArthur</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/james-mcarthur-17215</Link>
+<StatsId>12324</StatsId>
+<StatsGlobalId>1053262</StatsGlobalId>
+<SportsDataId>e04a083b-9558-4e64-a494-5aae432bb792</SportsDataId>
+<SportRadarId>e04a083b-9558-4e64-a494-5aae432bb792</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/16) Kansas City has struggled overall in 2026, but its bullpen is one of the reasons why as they've collectively posted a 4.99 ERA (28th). Carlos Estevez (shoulder) has been shelved for virtually all of 2026, only making 1 appearance this season before hitting the injured list April 1 due to a left foot contusion and subsequently suffering the shoulder injury during a rehab appearance May 6. Given Estevez's absence, 8 different Royals have combined for the team's 36 saves. Lucas Erceg (12 saves) and Alex Lange (10) are the only Kansas City relievers with double-digit saves, but both sport an ERA over 6.00 and haven't been in the mix for saves since July. More recently, Steven Cruz or Nate Pearson have been receiving save chances for Kansas City, which was relevant for fantasy purposes when the team went 12-2 to close out the month of August, but not as exciting with the team 4-9 in September thus far. ]]>
+</Analysis>
+<StatsId>KC</StatsId>
+<StatsGlobalId>231</StatsGlobalId>
+<SportsDataId>833a51a9-0d84-410f-bd77-da08c3e5e26e</SportsDataId>
+<SportRadarId>833a51a9-0d84-410f-bd77-da08c3e5e26e</SportRadarId>
+</Team>
+<Team Id="14" Code="LA">
+<Name>Los Angeles Dodgers</Name>
+<Nickname>Dodgers</Nickname>
+<Player Rank="1" Stability="Medium" Health="" Role="Closer" Id="14171">
+<FirstName>Tanner</FirstName>
+<LastName>Scott</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tanner-scott-14171</Link>
+<StatsId>10432</StatsId>
+<StatsGlobalId>829027</StatsGlobalId>
+<SportsDataId>9e883466-7d2d-45a0-a509-44c14aeff967</SportsDataId>
+<SportRadarId>9e883466-7d2d-45a0-a509-44c14aeff967</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="14418">
+<FirstName>Brock</FirstName>
+<LastName>Stewart</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/brock-stewart-14418</Link>
+<StatsId>10325</StatsId>
+<StatsGlobalId>550113</StatsGlobalId>
+<SportsDataId>403568f8-755b-4330-84d3-c3447abef5eb</SportsDataId>
+<SportRadarId>403568f8-755b-4330-84d3-c3447abef5eb</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="19463">
+<FirstName>Jack</FirstName>
+<LastName>Dreyer</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jack-dreyer-19463</Link>
+<StatsId/>
+<StatsGlobalId>1116004</StatsGlobalId>
+<SportsDataId>03ba898a-7dc9-4937-b4f2-bd45e5978569</SportsDataId>
+<SportRadarId>03ba898a-7dc9-4937-b4f2-bd45e5978569</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="15548">
+<FirstName>Evan</FirstName>
+<LastName>Phillips</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/evan-phillips-15548</Link>
+<StatsId>11052</StatsId>
+<StatsGlobalId>658921</StatsGlobalId>
+<SportsDataId>3db92c3c-bf71-40f8-89a7-f6361af5c6e7</SportsDataId>
+<SportRadarId>3db92c3c-bf71-40f8-89a7-f6361af5c6e7</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="16615">
+<FirstName>Alex</FirstName>
+<LastName>Vesia</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/alex-vesia-16615</Link>
+<StatsId>11920</StatsId>
+<StatsGlobalId>1119454</StatsGlobalId>
+<SportsDataId>bea7d9db-323c-4a8b-bbe9-0581df94536b</SportsDataId>
+<SportRadarId>bea7d9db-323c-4a8b-bbe9-0581df94536b</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="12545">
+<FirstName>Edwin</FirstName>
+<LastName>Diaz</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/edwin-diaz-12545</Link>
+<StatsId>10214</StatsId>
+<StatsGlobalId>657938</StatsGlobalId>
+<SportsDataId>26db575b-359f-40b1-92c8-dfc549b72a25</SportsDataId>
+<SportRadarId>26db575b-359f-40b1-92c8-dfc549b72a25</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="18363">
+<FirstName>Roki</FirstName>
+<LastName>Sasaki</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/roki-sasaki-18363</Link>
+<StatsId/>
+<StatsGlobalId>1213511</StatsGlobalId>
+<SportsDataId>1af59804-5b77-4d6f-98f7-23e97a400a1b</SportsDataId>
+<SportRadarId>1af59804-5b77-4d6f-98f7-23e97a400a1b</SportRadarId>
+</Player>
+<Player Rank="8" Role="Middle Reliever" Id="18162">
+<FirstName>Edgardo</FirstName>
+<LastName>Henriquez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/edgardo-henriquez-18162</Link>
+<StatsId/>
+<StatsGlobalId>1306205</StatsGlobalId>
+<SportsDataId>67163933-59cf-402e-8dcd-7e6ab0e49bed</SportsDataId>
+<SportRadarId>67163933-59cf-402e-8dcd-7e6ab0e49bed</SportRadarId>
+</Player>
+<Player Rank="9" Role="Multi-Inning" Id="18714">
+<FirstName>Justin</FirstName>
+<LastName>Wrobleski</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/justin-wrobleski-18714</Link>
+<StatsId/>
+<StatsGlobalId>1120056</StatsGlobalId>
+<SportsDataId>703b2bb9-c66b-43c4-9003-f9156623dfe5</SportsDataId>
+<SportRadarId>703b2bb9-c66b-43c4-9003-f9156623dfe5</SportRadarId>
+</Player>
+<Player Rank="10" Role="Multi-Inning" Id="15433">
+<FirstName>Kris</FirstName>
+<LastName>Bubic</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/kris-bubic-15433</Link>
+<StatsId>11319</StatsId>
+<StatsGlobalId>1054444</StatsGlobalId>
+<SportsDataId>96604b45-657d-4b2d-987d-794d842219b6</SportsDataId>
+<SportRadarId>96604b45-657d-4b2d-987d-794d842219b6</SportRadarId>
+</Player>
+<Player Rank="11" Role="Middle Reliever" Id="14856">
+<FirstName>Kyle</FirstName>
+<LastName>Hurt</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/kyle-hurt-14856</Link>
+<StatsId/>
+<StatsGlobalId>1056038</StatsGlobalId>
+<SportsDataId>b1164821-c03e-4826-89ba-94891d44c2d5</SportsDataId>
+<SportRadarId>b1164821-c03e-4826-89ba-94891d44c2d5</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/16) The two-time defending World Series champs had to be feeling pretty great after signing Edwin Diaz to a record-setting 3-year, $69M deal (per $23M average annual value) this past offseason to serve as the team's closer. Through mid-September, Diaz has posted a mere 7 saves while 11 Dodgers have combined for the club's 43 saves thus far. With Diaz missing much of the campaign due to elbow and neck injuries, Tanner Scott has accounted for half of the Dodgers' saves through mid-September. The southpaw has struggled over the last month (5.91 ERA, 1.50 WHIP) but he's maintained a Top-10 K%, BB% and K-BB% among qualified relievers this season. He's recorded just 2 of LA's 5 saves in September, but is likely to be their primary closer in the postseason as the Dodgers seek a Three-Peat, especially since Diaz "hasn't been good" on his rehab assignment and "needs to pitch better" before the team considers returning him to the active roster. ]]>
+</Analysis>
+<StatsId>LAD</StatsId>
+<StatsGlobalId>243</StatsGlobalId>
+<SportsDataId>ef64da7f-cfaf-4300-87b0-9313386b977c</SportsDataId>
+<SportRadarId>ef64da7f-cfaf-4300-87b0-9313386b977c</SportRadarId>
+</Team>
+<Team Id="11" Code="MIA">
+<Name>Miami Marlins</Name>
+<Nickname>Marlins</Nickname>
+<Player Rank="1" Stability="Very Low" Health="" Role="Closer" Id="17582">
+<FirstName>Calvin</FirstName>
+<LastName>Faucher</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/calvin-faucher-17582</Link>
+<StatsId>12311</StatsId>
+<StatsGlobalId>1055238</StatsGlobalId>
+<SportsDataId>00e4c3cd-a9e1-41da-8c28-a7ec4d2c7b1d</SportsDataId>
+<SportRadarId>00e4c3cd-a9e1-41da-8c28-a7ec4d2c7b1d</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="18445">
+<FirstName>Michael</FirstName>
+<LastName>Petersen</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/michael-petersen-18445</Link>
+<StatsId/>
+<StatsGlobalId>658475</StatsGlobalId>
+<SportsDataId>327c88d8-d9ed-4185-bcc7-36b6f7846e61</SportsDataId>
+<SportRadarId>327c88d8-d9ed-4185-bcc7-36b6f7846e61</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="19835">
+<FirstName>Josh</FirstName>
+<LastName>Ekness</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/josh-ekness-19835</Link>
+<StatsId/>
+<StatsGlobalId>1455176</StatsGlobalId>
+<SportsDataId>cbff9e79-9d4d-48a6-a2b9-4307f791f47d</SportsDataId>
+<SportRadarId>cbff9e79-9d4d-48a6-a2b9-4307f791f47d</SportRadarId>
+</Player>
+<Player Rank="4" Role="Middle Reliever" Id="16416">
+<FirstName>Victor</FirstName>
+<LastName>Vodnik</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/victor-vodnik-16416</Link>
+<StatsId>12368</StatsId>
+<StatsGlobalId>1119394</StatsGlobalId>
+<SportsDataId>e63d0fce-9ef1-403a-bd5d-db72f26534ca</SportsDataId>
+<SportRadarId>e63d0fce-9ef1-403a-bd5d-db72f26534ca</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="16383">
+<FirstName>Jack</FirstName>
+<LastName>Ralston</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jack-ralston-16383</Link>
+<StatsId/>
+<StatsGlobalId>1159927</StatsGlobalId>
+<SportsDataId>eac2d511-06c9-4dfe-ba3a-89324ef65c0f</SportsDataId>
+<SportRadarId>eac2d511-06c9-4dfe-ba3a-89324ef65c0f</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="20081">
+<FirstName>Cade</FirstName>
+<LastName>Gibson</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/cade-gibson-20081</Link>
+<StatsId>13268</StatsId>
+<StatsGlobalId>1397730</StatsGlobalId>
+<SportsDataId>e06c1fa2-0eb8-41de-908e-229a015d2ff1</SportsDataId>
+<SportRadarId>e06c1fa2-0eb8-41de-908e-229a015d2ff1</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="16713">
+<FirstName>Dax</FirstName>
+<LastName>Fulton</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/dax-fulton-16713</Link>
+<StatsId>12150</StatsId>
+<StatsGlobalId>1217003</StatsGlobalId>
+<SportsDataId>5acd1bbc-4c87-4143-ad56-4febee4e746a</SportsDataId>
+<SportRadarId>5acd1bbc-4c87-4143-ad56-4febee4e746a</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="19014">
+<FirstName>Bradley</FirstName>
+<LastName>Blalock</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/bradley-blalock-19014</Link>
+<StatsId/>
+<StatsGlobalId>1170798</StatsGlobalId>
+<SportsDataId>f6a6da9d-efe6-4503-94b5-e5115cb3964d</SportsDataId>
+<SportRadarId>f6a6da9d-efe6-4503-94b5-e5115cb3964d</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/17) Ten different Marlins have combined for the team's 33 saves through mid-September, with Pete Fairbanks (hand) leading Miami with 19. Unfortunately, Fairbanks' season has ended after hitting the injured list with nerve irritation in his right hand; his 3rd time dealing with the issue in 2026. A few weeks ago when Fairbanks last went on the IL, Miami recorded just one save during his absence, which went to Calvin Faucher. Faucher is the likeliest candidate to close for Miami over the last week and change, but it wouldn't be surprising to see the Marlins give some opportunities to their young relievers with upside, such as Josh Ekness or Victor Vodnik. ]]>
+</Analysis>
+<StatsId>MIA</StatsId>
+<StatsGlobalId>252</StatsGlobalId>
+<SportsDataId>03556285-bdbb-4576-a06d-42f71f46ddc5</SportsDataId>
+<SportRadarId>03556285-bdbb-4576-a06d-42f71f46ddc5</SportRadarId>
+</Team>
+<Team Id="15" Code="MIL">
+<Name>Milwaukee Brewers</Name>
+<Nickname>Brewers</Nickname>
+<Player Rank="1" Stability="High" Health="" Role="Closer" Id="13466">
+<FirstName>Trevor</FirstName>
+<LastName>Megill</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/trevor-megill-13466</Link>
+<StatsId>11717</StatsId>
+<StatsGlobalId>828803</StatsGlobalId>
+<SportsDataId>39c7f4b3-4a7e-429f-bb09-4a22b5614c3d</SportsDataId>
+<SportRadarId>39c7f4b3-4a7e-429f-bb09-4a22b5614c3d</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="17626">
+<FirstName>Abner</FirstName>
+<LastName>Uribe</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/abner-uribe-17626</Link>
+<StatsId>12746</StatsId>
+<StatsGlobalId>1123161</StatsGlobalId>
+<SportsDataId>424fdb4f-bc6c-4f13-85af-e2482a92e059</SportsDataId>
+<SportRadarId>424fdb4f-bc6c-4f13-85af-e2482a92e059</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="15540">
+<FirstName>Aaron</FirstName>
+<LastName>Ashby</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/aaron-ashby-15540</Link>
+<StatsId>11489</StatsId>
+<StatsGlobalId>1055697</StatsGlobalId>
+<SportsDataId>3f7d4224-7406-429e-9128-e302ebe4470a</SportsDataId>
+<SportRadarId>3f7d4224-7406-429e-9128-e302ebe4470a</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="17509">
+<FirstName>Chad</FirstName>
+<LastName>Patrick</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/chad-patrick-17509</Link>
+<StatsId/>
+<StatsGlobalId>1316755</StatsGlobalId>
+<SportsDataId>68d337ee-62a1-4829-9b93-10c272583b93</SportsDataId>
+<SportRadarId>68d337ee-62a1-4829-9b93-10c272583b93</SportRadarId>
+</Player>
+<Player Rank="5" Role="Setup Man" Id="13629">
+<FirstName>Antonio</FirstName>
+<LastName>Senzatela</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/antonio-senzatela-13629</Link>
+<StatsId>10176</StatsId>
+<StatsGlobalId>657576</StatsGlobalId>
+<SportsDataId>1899170d-0079-4a00-8d65-0f9668e48d8a</SportsDataId>
+<SportRadarId>1899170d-0079-4a00-8d65-0f9668e48d8a</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="14373">
+<FirstName>JoJo</FirstName>
+<LastName>Romero</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jojo-romero-14373</Link>
+<StatsId>10931</StatsId>
+<StatsGlobalId>917955</StatsGlobalId>
+<SportsDataId>ecee463a-f7fb-43ad-9a71-d20c3e4c5d38</SportsDataId>
+<SportRadarId>ecee463a-f7fb-43ad-9a71-d20c3e4c5d38</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="14776">
+<FirstName>DL</FirstName>
+<LastName>Hall</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/dl-hall-14776</Link>
+<StatsId>10848</StatsId>
+<StatsGlobalId>1054993</StatsGlobalId>
+<SportsDataId>0509356b-32a3-46f5-94c3-1ddc63910412</SportsDataId>
+<SportRadarId>0509356b-32a3-46f5-94c3-1ddc63910412</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="14851">
+<FirstName>Shane</FirstName>
+<LastName>Drohan</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/shane-drohan-14851</Link>
+<StatsId/>
+<StatsGlobalId>1055612</StatsGlobalId>
+<SportsDataId>1ace87c5-9684-4575-9515-8cf7bb98bf45</SportsDataId>
+<SportRadarId>1ace87c5-9684-4575-9515-8cf7bb98bf45</SportRadarId>
+</Player>
+<Player Rank="9" Role="Multi-Inning" Id="14375">
+<FirstName>Bryse</FirstName>
+<LastName>Wilson</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/bryse-wilson-14375</Link>
+<StatsId>10846</StatsId>
+<StatsGlobalId>917958</StatsGlobalId>
+<SportsDataId>afebcbd0-fe00-4d21-99c5-6cee7e5eea02</SportsDataId>
+<SportRadarId>afebcbd0-fe00-4d21-99c5-6cee7e5eea02</SportRadarId>
+</Player>
+<Player Rank="10" Role="Multi-Inning" Id="16202">
+<FirstName>Garrett</FirstName>
+<LastName>Stallings</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/garrett-stallings-16202</Link>
+<StatsId>12040</StatsId>
+<StatsGlobalId>1116031</StatsGlobalId>
+<SportsDataId>ccd80613-409a-43cb-9e90-579cbf4ed227</SportsDataId>
+<SportRadarId>ccd80613-409a-43cb-9e90-579cbf4ed227</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/17) Nine Brewers have combined for the club's 48 saves through mid-September, with Trevor Megill leading Milwaukee with 28 (11th in the league). Abner Uribe (6 saves) and Chad Patrick (5) are the only other Brewers with more than 2 saves. While Megill only has a 58% team save share on the season, he's secured 17 of the Brewers' 22 saves since July 1, resulting in a 77% share that is far more in line with a primary closer's usage. ]]>
+</Analysis>
+<StatsId>MIL</StatsId>
+<StatsGlobalId>232</StatsGlobalId>
+<SportsDataId>dcfd5266-00ce-442c-bc09-264cd20cf455</SportsDataId>
+<SportRadarId>dcfd5266-00ce-442c-bc09-264cd20cf455</SportRadarId>
+</Team>
+<Team Id="16" Code="MIN">
+<Name>Minnesota Twins</Name>
+<Nickname>Twins</Nickname>
+<Player Rank="1" Stability="Very Low" Health="" Role="Committee" Id="15767">
+<FirstName>Yoendrys</FirstName>
+<LastName>Gomez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/yoendrys-gomez-15767</Link>
+<StatsId>11806</StatsId>
+<StatsGlobalId>1058316</StatsGlobalId>
+<SportsDataId>829b6ae4-4c11-45ec-a364-36650bcda040</SportsDataId>
+<SportRadarId>829b6ae4-4c11-45ec-a364-36650bcda040</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="13889">
+<FirstName>A.J.</FirstName>
+<LastName>Minter</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/aj-minter-13889</Link>
+<StatsId>10794</StatsId>
+<StatsGlobalId>659284</StatsGlobalId>
+<SportsDataId>e1cbb2df-986d-4fab-bf1e-7192c54bdae9</SportsDataId>
+<SportRadarId>e1cbb2df-986d-4fab-bf1e-7192c54bdae9</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="18125">
+<FirstName>Andrew</FirstName>
+<LastName>Morris</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/andrew-morris-18125</Link>
+<StatsId/>
+<StatsGlobalId>1397566</StatsGlobalId>
+<SportsDataId>935a41f8-6267-4a0d-b9cf-623b56da86d6</SportsDataId>
+<SportRadarId>935a41f8-6267-4a0d-b9cf-623b56da86d6</SportRadarId>
+</Player>
+<Player Rank="4" Role="Middle Reliever" Id="13742">
+<FirstName>Taylor</FirstName>
+<LastName>Rogers</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/taylor-rogers-13742</Link>
+<StatsId>10133</StatsId>
+<StatsGlobalId>503168</StatsGlobalId>
+<SportsDataId>cf42953d-893f-4191-aab5-c1a94636efc8</SportsDataId>
+<SportRadarId>cf42953d-893f-4191-aab5-c1a94636efc8</SportRadarId>
+</Player>
+<Player Rank="5" Role="Multi-Inning" Id="19934">
+<FirstName>Travis</FirstName>
+<LastName>Adams</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/travis-adams-19934</Link>
+<StatsId>13136</StatsId>
+<StatsGlobalId>1318231</StatsGlobalId>
+<SportsDataId>5a5aeb30-6a0b-4e98-94de-6d1a1d0eb324</SportsDataId>
+<SportRadarId>5a5aeb30-6a0b-4e98-94de-6d1a1d0eb324</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="17267">
+<FirstName>Tommy</FirstName>
+<LastName>Nance</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tommy-nance-17267</Link>
+<StatsId>12199</StatsId>
+<StatsGlobalId>919392</StatsGlobalId>
+<SportsDataId>43ea1d24-8fad-42ea-b5c9-6c0002528cbd</SportsDataId>
+<SportRadarId>43ea1d24-8fad-42ea-b5c9-6c0002528cbd</SportRadarId>
+</Player>
+<Player Rank="7" Role="Middle Reliever" Id="19158">
+<FirstName>Kody</FirstName>
+<LastName>Funderburk</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/kody-funderburk-19158</Link>
+<StatsId/>
+<StatsGlobalId>1119425</StatsGlobalId>
+<SportsDataId>dd551788-a213-404a-9b57-34ecc6335acc</SportsDataId>
+<SportRadarId>dd551788-a213-404a-9b57-34ecc6335acc</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/17) 13 Twins have combined for the team's 41 saves through mid-September, but only 1 has recorded more than 4. Yoendrys Gomez joined Minnesota in May and didn't factor into the saves mix right away, but emerged with the primary save share later in the month and has secured 20 of the Twins' 27 saves (74% share) since then. Unfortunately, Gomez's performance of late has put his role in jeopardy. The right-hander just recently blew his first save of the season, but he sports a 7.07 ERA and 1.93 WHIP since the beginning of August. Surprisingly, Jeff Hoffman has yet to record a save for Minnesota despite pitching well for the Twins since they acquired him at the trade deadline. after the Twins acquired him at the trade deadline. A.J. Minter - another of the Twins' deadline acquisitions - picked up a recent save but has allowed 5 ER over his last 4 appearances. Andrew Morris, who ranks 2nd on the team with 4 saves, is probably not in consideration for save chances, as he has a 10.45 ERA and 1.84 WHIP over the last month. ]]>
+</Analysis>
+<StatsId>MIN</StatsId>
+<StatsGlobalId>233</StatsGlobalId>
+<SportsDataId>aa34e0ed-f342-4ec6-b774-c79b47b60e2d</SportsDataId>
+<SportRadarId>aa34e0ed-f342-4ec6-b774-c79b47b60e2d</SportRadarId>
+</Team>
+<Team Id="18" Code="NY-A">
+<Name>New York Yankees</Name>
+<Nickname>Yankees</Nickname>
+<Player Rank="1" Stability="Very High" Health="" Role="Closer" Id="15902">
+<FirstName>David</FirstName>
+<LastName>Bednar</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/david-bednar-15902</Link>
+<StatsId>11645</StatsId>
+<StatsGlobalId>915715</StatsGlobalId>
+<SportsDataId>2e8af136-cc00-4b1d-bb46-47f03dfe04f3</SportsDataId>
+<SportRadarId>2e8af136-cc00-4b1d-bb46-47f03dfe04f3</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="18271">
+<FirstName>Brent</FirstName>
+<LastName>Headrick</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/brent-headrick-18271</Link>
+<StatsId>12727</StatsId>
+<StatsGlobalId>1169810</StatsGlobalId>
+<SportsDataId>d41e8df1-7a72-477b-bba0-9ea1e699b86e</SportsDataId>
+<SportRadarId>d41e8df1-7a72-477b-bba0-9ea1e699b86e</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="12505">
+<FirstName>Paul</FirstName>
+<LastName>Blackburn</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/paul-blackburn-12505</Link>
+<StatsId>10756</StatsId>
+<StatsGlobalId>657872</StatsGlobalId>
+<SportsDataId>c967b600-efdf-46ae-bb37-f4940fa29b2a</SportsDataId>
+<SportRadarId>c967b600-efdf-46ae-bb37-f4940fa29b2a</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="15248">
+<FirstName>Tim</FirstName>
+<LastName>Hill</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tim-hill-15248</Link>
+<StatsId>10986</StatsId>
+<StatsGlobalId>829603</StatsGlobalId>
+<SportsDataId>934c78d9-d33a-4ad0-9fbf-ffe6548d2783</SportsDataId>
+<SportRadarId>934c78d9-d33a-4ad0-9fbf-ffe6548d2783</SportRadarId>
+</Player>
+<Player Rank="5" Role="Multi-Inning" Id="13471">
+<FirstName>Ryan</FirstName>
+<LastName>Yarbrough</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/ryan-yarbrough-13471</Link>
+<StatsId>10147</StatsId>
+<StatsGlobalId>738545</StatsGlobalId>
+<SportsDataId>dae38ebc-f1dc-4b47-a8b6-9bee0fc2a2dd</SportsDataId>
+<SportRadarId>dae38ebc-f1dc-4b47-a8b6-9bee0fc2a2dd</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="16428">
+<FirstName>John</FirstName>
+<LastName>Schreiber</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/john-schreiber-16428</Link>
+<StatsId>11634</StatsId>
+<StatsGlobalId>918315</StatsGlobalId>
+<SportsDataId>0f25d081-94d3-46b7-b534-2699a252a140</SportsDataId>
+<SportRadarId>0f25d081-94d3-46b7-b534-2699a252a140</SportRadarId>
+</Player>
+<Player Rank="7" Role="Middle Reliever" Id="12183">
+<FirstName>Michael</FirstName>
+<LastName>Fulmer</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/michael-fulmer-12183</Link>
+<StatsId>10179</StatsId>
+<StatsGlobalId>597764</StatsGlobalId>
+<SportsDataId>ec504c95-8a64-46ad-91ae-850c6e7350db</SportsDataId>
+<SportRadarId>ec504c95-8a64-46ad-91ae-850c6e7350db</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="15814">
+<FirstName>Luis</FirstName>
+<LastName>Gil</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/luis-gil-15814</Link>
+<StatsId>11689</StatsId>
+<StatsGlobalId>877821</StatsGlobalId>
+<SportsDataId>ce54a1d6-ada3-48be-8980-127ad43957e1</SportsDataId>
+<SportRadarId>ce54a1d6-ada3-48be-8980-127ad43957e1</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/17) Seven different Yankees have combined for the team's 44 saves through mid-September with David Bednar recording 34 of them for a 77% team save share. After some early season struggles, Bednar rode a 21-game scoreless streak into August, and while he's given up some runs in recent outings, he hasn't permitted a walk over the last month (13:0 K:BB over 12 innings). Since New York moved on from Camilo Doval at the trade deadline, Brent Headrick and Paul Blackburn have taken on higher leverage roles than they previously held. ]]>
+</Analysis>
+<StatsId>NYY</StatsId>
+<StatsGlobalId>234</StatsGlobalId>
+<SportsDataId>a09ec676-f887-43dc-bbb3-cf4bbaee9a18</SportsDataId>
+<SportRadarId>a09ec676-f887-43dc-bbb3-cf4bbaee9a18</SportRadarId>
+</Team>
+<Team Id="19" Code="NY-N">
+<Name>New York Mets</Name>
+<Nickname>Mets</Nickname>
+<Player Rank="1" Stability="Very Low" Health="" Role="Closer" Id="14711">
+<FirstName>Kodai</FirstName>
+<LastName>Senga</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/kodai-senga-14711</Link>
+<StatsId>12776</StatsId>
+<StatsGlobalId>594254</StatsGlobalId>
+<SportsDataId>06180a69-fef8-44cc-bcea-cf581d7f9dc9</SportsDataId>
+<SportRadarId>06180a69-fef8-44cc-bcea-cf581d7f9dc9</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Closer of Future" Id="13048">
+<FirstName>Devin</FirstName>
+<LastName>Williams</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/devin-williams-13048</Link>
+<StatsId>11628</StatsId>
+<StatsGlobalId>737560</StatsGlobalId>
+<SportsDataId>569eb746-c734-48d7-82fc-5a14f67ccfe9</SportsDataId>
+<SportRadarId>569eb746-c734-48d7-82fc-5a14f67ccfe9</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="19254">
+<FirstName>Nate</FirstName>
+<LastName>Lavender</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/nate-lavender-19254</Link>
+<StatsId/>
+<StatsGlobalId>1208101</StatsGlobalId>
+<SportsDataId>981dbdba-601a-4917-95d7-7ecdcaf7eaa5</SportsDataId>
+<SportRadarId>981dbdba-601a-4917-95d7-7ecdcaf7eaa5</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="17139">
+<FirstName>Dedniel</FirstName>
+<LastName>Nunez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/dedniel-nunez-17139</Link>
+<StatsId>11799</StatsId>
+<StatsGlobalId>1057500</StatsGlobalId>
+<SportsDataId>6b4fd26d-3a3d-4aed-8f5a-36a91bd98861</SportsDataId>
+<SportRadarId>6b4fd26d-3a3d-4aed-8f5a-36a91bd98861</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="14546">
+<FirstName>Cionel</FirstName>
+<LastName>Perez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/cionel-perez-14546</Link>
+<StatsId>10644</StatsId>
+<StatsGlobalId>954181</StatsGlobalId>
+<SportsDataId>3c3e37f1-b7b1-4d64-ac0a-303dcc82f688</SportsDataId>
+<SportRadarId>3c3e37f1-b7b1-4d64-ac0a-303dcc82f688</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="17213">
+<FirstName>Austin</FirstName>
+<LastName>Warren</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/austin-warren-17213</Link>
+<StatsId>12237</StatsId>
+<StatsGlobalId>1118919</StatsGlobalId>
+<SportsDataId>9c86279a-2c6d-482f-9dd7-c2c5a7e06ba3</SportsDataId>
+<SportRadarId>9c86279a-2c6d-482f-9dd7-c2c5a7e06ba3</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="14720">
+<FirstName>Tobias</FirstName>
+<LastName>Myers</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tobias-myers-14720</Link>
+<StatsId>11547</StatsId>
+<StatsGlobalId>918088</StatsGlobalId>
+<SportsDataId>ca6fc8d3-9e53-4140-aea1-04ae893c3a30</SportsDataId>
+<SportRadarId>ca6fc8d3-9e53-4140-aea1-04ae893c3a30</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="21267">
+<FirstName>Jack</FirstName>
+<LastName>Weisenburger</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jack-weisenburger-21267</Link>
+<StatsId/>
+<StatsGlobalId>1170292</StatsGlobalId>
+<SportsDataId>eef147ab-a268-45b1-8adc-eee55dd0f014</SportsDataId>
+<SportRadarId>eef147ab-a268-45b1-8adc-eee55dd0f014</SportRadarId>
+</Player>
+<Player Rank="9" Role="Middle Reliever" Id="19969">
+<FirstName>Jefry</FirstName>
+<LastName>Yan</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jefry-yan-19969</Link>
+<StatsId/>
+<StatsGlobalId>828460</StatsGlobalId>
+<SportsDataId>a5bfa45d-568f-4409-98b9-8f814076a230</SportsDataId>
+<SportRadarId>a5bfa45d-568f-4409-98b9-8f814076a230</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/17) When Edwin Diaz signed with the Dodgers this past offseason, the Mets pivoted to Devin Williams (shoulder), signing him to a healthy 3-year, $50M deal. Unfortunately, Williams hasn't been healthy over the last month and his performance in 2026 has been anything but. While he's set to face hitters again today (Thursday, 9/17) and could rejoin the Mets later in the week, it's hard to get inspired by his return. Williams' 1.66 WHIP ranks 235th out of 247 relievers who've pitched 30+ innings in 2026. Besides, Kodai Senga has been fairly successful closing out games for New York, despite blowing his most recent opportunity. ]]>
+</Analysis>
+<StatsId>NYM</StatsId>
+<StatsGlobalId>245</StatsGlobalId>
+<SportsDataId>f246a5e5-afdb-479c-9aaa-c68beeda7af6</SportsDataId>
+<SportRadarId>f246a5e5-afdb-479c-9aaa-c68beeda7af6</SportRadarId>
+</Team>
+<Team Id="21" Code="PHI">
+<Name>Philadelphia Phillies</Name>
+<Nickname>Phillies</Nickname>
+<Player Rank="1" Stability="Very High" Health="" Role="Closer" Id="14760">
+<FirstName>Jhoan</FirstName>
+<LastName>Duran</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jhoan-duran-14760</Link>
+<StatsId>11495</StatsId>
+<StatsGlobalId>873347</StatsGlobalId>
+<SportsDataId>31a2e351-0573-4ee2-b54a-391e4d085f93</SportsDataId>
+<SportRadarId>31a2e351-0573-4ee2-b54a-391e4d085f93</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="14610">
+<FirstName>Jose</FirstName>
+<LastName>Alvarado</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jose-alvarado-14610</Link>
+<StatsId>10692</StatsId>
+<StatsGlobalId>656049</StatsGlobalId>
+<SportsDataId>163d5f8f-78a7-456d-9809-74606c475a7f</SportsDataId>
+<SportRadarId>163d5f8f-78a7-456d-9809-74606c475a7f</SportRadarId>
+</Player>
+<Player Rank="3" Role="Multi-Inning" Id="16149">
+<FirstName>Alex</FirstName>
+<LastName>McFarlane</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/alex-mcfarlane-16149</Link>
+<StatsId/>
+<StatsGlobalId>1170381</StatsGlobalId>
+<SportsDataId>3e8590f3-e485-4e29-9adf-522b504eca8b</SportsDataId>
+<SportRadarId>3e8590f3-e485-4e29-9adf-522b504eca8b</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="10987">
+<FirstName>Brooks</FirstName>
+<LastName>Raley</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/brooks-raley-10987</Link>
+<StatsId>9262</StatsId>
+<StatsGlobalId>501562</StatsGlobalId>
+<SportsDataId>ee133eda-e1f4-4560-a26b-d99ab455ce4e</SportsDataId>
+<SportRadarId>ee133eda-e1f4-4560-a26b-d99ab455ce4e</SportRadarId>
+</Player>
+<Player Rank="5" Role="Multi-Inning" Id="15503">
+<FirstName>Jonathan</FirstName>
+<LastName>Bowlan</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jonathan-bowlan-15503</Link>
+<StatsId>11769</StatsId>
+<StatsGlobalId>1052760</StatsGlobalId>
+<SportsDataId>1abe6172-aba2-4ac9-8ed3-d806df7b5601</SportsDataId>
+<SportRadarId>1abe6172-aba2-4ac9-8ed3-d806df7b5601</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="15168">
+<FirstName>Tim</FirstName>
+<LastName>Mayza</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tim-mayza-15168</Link>
+<StatsId>10787</StatsId>
+<StatsGlobalId>708779</StatsGlobalId>
+<SportsDataId>3ebc6d31-8050-43d2-9f0f-b74bb1f2e018</SportsDataId>
+<SportRadarId>3ebc6d31-8050-43d2-9f0f-b74bb1f2e018</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="18414">
+<FirstName>Chase</FirstName>
+<LastName>Shugart</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/chase-shugart-18414</Link>
+<StatsId/>
+<StatsGlobalId>1053034</StatsGlobalId>
+<SportsDataId>4b62bcd4-079c-4dd2-8631-296ce8e76180</SportsDataId>
+<SportRadarId>4b62bcd4-079c-4dd2-8631-296ce8e76180</SportRadarId>
+</Player>
+<Player Rank="8" Role="Middle Reliever" Id="17811">
+<FirstName>Tanner</FirstName>
+<LastName>Banks</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tanner-banks-17811</Link>
+<StatsId>12593</StatsId>
+<StatsGlobalId>829193</StatsGlobalId>
+<SportsDataId>a5b129bf-8b14-4753-b95b-cca0e29a6a25</SportsDataId>
+<SportRadarId>a5b129bf-8b14-4753-b95b-cca0e29a6a25</SportRadarId>
+</Player>
+<Player Rank="9" Role="Middle Reliever" Id="20010">
+<FirstName>Kyle</FirstName>
+<LastName>Backhus</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/kyle-backhus-20010</Link>
+<StatsId/>
+<StatsGlobalId>1324887</StatsGlobalId>
+<SportsDataId>a5cc16b0-8fe8-4963-b3e0-9f17d6a1545f</SportsDataId>
+<SportRadarId>a5cc16b0-8fe8-4963-b3e0-9f17d6a1545f</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/17) Six Phillies have combined for the club's 40 saves through mid-September with Jhoan Duran accounting for 31 of them (78% team save share). Duran ranks 9th in the majors in that category despite missing more than 3 weeks of action earlier in the campaign with a left oblique strain. With Brad Keller (elbow) out for 2026 and likely 2027, Jose Alvarado, Orion Kerkering, Alex McFarlane and Brooks Raley have been handling setup duties for Philadelphia. ]]>
+</Analysis>
+<StatsId>PHI</StatsId>
+<StatsGlobalId>246</StatsGlobalId>
+<SportsDataId>2142e1ba-3b40-445c-b8bb-f1f8b1054220</SportsDataId>
+<SportRadarId>2142e1ba-3b40-445c-b8bb-f1f8b1054220</SportRadarId>
+</Team>
+<Team Id="22" Code="PIT">
+<Name>Pittsburgh Pirates</Name>
+<Nickname>Pirates</Nickname>
+<Player Rank="1" Stability="High" Health="" Role="Closer" Id="17897">
+<FirstName>Mason</FirstName>
+<LastName>Montgomery</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/mason-montgomery-17897</Link>
+<StatsId/>
+<StatsGlobalId>1120013</StatsGlobalId>
+<SportsDataId>cea78e81-ca86-41a7-b927-84fd2448bd8d</SportsDataId>
+<SportRadarId>cea78e81-ca86-41a7-b927-84fd2448bd8d</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="13395">
+<FirstName>Luke</FirstName>
+<LastName>Weaver</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/luke-weaver-13395</Link>
+<StatsId>10217</StatsId>
+<StatsGlobalId>599729</StatsGlobalId>
+<SportsDataId>60b7e25e-7765-4d8b-82a6-d33e7179dae5</SportsDataId>
+<SportRadarId>60b7e25e-7765-4d8b-82a6-d33e7179dae5</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="16010">
+<FirstName>Camilo</FirstName>
+<LastName>Doval</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/camilo-doval-16010</Link>
+<StatsId>11536</StatsId>
+<StatsGlobalId>916835</StatsGlobalId>
+<SportsDataId>44a4fe42-179e-49a1-b208-4a68fd91210b</SportsDataId>
+<SportRadarId>44a4fe42-179e-49a1-b208-4a68fd91210b</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="13221">
+<FirstName>Kirby</FirstName>
+<LastName>Yates</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/kirby-yates-13221</Link>
+<StatsId>9727</StatsId>
+<StatsGlobalId>505235</StatsGlobalId>
+<SportsDataId>fe45e33b-f554-4856-af56-1f4f578eaa82</SportsDataId>
+<SportRadarId>fe45e33b-f554-4856-af56-1f4f578eaa82</SportRadarId>
+</Player>
+<Player Rank="5" Role="Setup Man" Id="15100">
+<FirstName>Gregory</FirstName>
+<LastName>Soto</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/gregory-soto-15100</Link>
+<StatsId>10882</StatsId>
+<StatsGlobalId>737262</StatsGlobalId>
+<SportsDataId>6f454eeb-59bc-407d-b8ff-95f547bcb57c</SportsDataId>
+<SportRadarId>6f454eeb-59bc-407d-b8ff-95f547bcb57c</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="16516">
+<FirstName>Yohan</FirstName>
+<LastName>Ramirez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/yohan-ramirez-16516</Link>
+<StatsId>11713</StatsId>
+<StatsGlobalId>922200</StatsGlobalId>
+<SportsDataId>bc6343f5-aaf5-4d41-8179-478789f264ed</SportsDataId>
+<SportRadarId>bc6343f5-aaf5-4d41-8179-478789f264ed</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="14313">
+<FirstName>Lake</FirstName>
+<LastName>Bachar</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/lake-bachar-14313</Link>
+<StatsId/>
+<StatsGlobalId>917993</StatsGlobalId>
+<SportsDataId>db566bcf-7a7f-4e17-ab85-d22d185f0e46</SportsDataId>
+<SportRadarId>db566bcf-7a7f-4e17-ab85-d22d185f0e46</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="16695">
+<FirstName>Carmen</FirstName>
+<LastName>Mlodzinski</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/carmen-mlodzinski-16695</Link>
+<StatsId>12169</StatsId>
+<StatsGlobalId>1115821</StatsGlobalId>
+<SportsDataId>2c64b648-699e-4b5b-87e5-0c8bb609b724</SportsDataId>
+<SportRadarId>2c64b648-699e-4b5b-87e5-0c8bb609b724</SportRadarId>
+</Player>
+<Player Rank="9" Role="Multi-Inning" Id="19850">
+<FirstName>Wilber</FirstName>
+<LastName>Dotel</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/wilber-dotel-19850</Link>
+<StatsId/>
+<StatsGlobalId>1299872</StatsGlobalId>
+<SportsDataId>cac71704-d83c-4a3f-b63e-d102693009e7</SportsDataId>
+<SportRadarId>cac71704-d83c-4a3f-b63e-d102693009e7</SportRadarId>
+</Player>
+<Player Rank="10" Role="Multi-Inning" Id="18855">
+<FirstName>Khristian</FirstName>
+<LastName>Curtis</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/khristian-curtis-18855</Link>
+<StatsId/>
+<StatsGlobalId>1454761</StatsGlobalId>
+<SportsDataId>c40fd367-36af-4297-86fd-e3e98b0e2e57</SportsDataId>
+<SportRadarId>c40fd367-36af-4297-86fd-e3e98b0e2e57</SportRadarId>
+</Player>
+<Player Rank="11" Role="Middle Reliever" Id="19497">
+<FirstName>Brandon</FirstName>
+<LastName>Eisert</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/brandon-eisert-19497</Link>
+<StatsId/>
+<StatsGlobalId>1170050</StatsGlobalId>
+<SportsDataId>d4f18a9e-3a7c-4b22-bbc2-114052387a4b</SportsDataId>
+<SportRadarId>d4f18a9e-3a7c-4b22-bbc2-114052387a4b</SportRadarId>
+</Player>
+<Player Rank="12" Role="Multi-Inning" Id="18662">
+<FirstName>Antwone</FirstName>
+<LastName>Kelly</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/antwone-kelly-18662</Link>
+<StatsId/>
+<StatsGlobalId>1437189</StatsGlobalId>
+<SportsDataId>e9a774c2-318e-4408-bed9-33cfd877b42a</SportsDataId>
+<SportRadarId>e9a774c2-318e-4408-bed9-33cfd877b42a</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/17) Six Pirates have combined for the team's 34 saves through mid-September, with Mason Montgomery securing 12 of the team's last 14 saves since tallying his first of the 2026 campaign back in July. Montgomery now trails Gregory Soto by 1 for the team lead in the category. Montgomery is likely to tie or take over the team lead before season's end, as Soto last recorded a save over a month-and-a-half ago. Montgomery's ascension to the closer role has been impressive - not only has he fended off veteran acquisitions Camilo Doval, Luke Weaver and Kirby Yates - but he's been dominant in doing so. The southpaw hasn't given up a run in nearly 2 months, positing a remarkable 0.59 WHIP, 30:4 K:BB during his 21-game scoreless streak. At the rate he is pitching, Montgomery figures to be a Top-10 closer off the board in 2027 fantasy drafts, with the upside to be selected among the top-5. ]]>
+</Analysis>
+<StatsId>PIT</StatsId>
+<StatsGlobalId>247</StatsGlobalId>
+<SportsDataId>481dfe7e-5dab-46ab-a49f-9dcc2b6e2cfd</SportsDataId>
+<SportRadarId>481dfe7e-5dab-46ab-a49f-9dcc2b6e2cfd</SportRadarId>
+</Team>
+<Team Id="23" Code="SD">
+<Name>San Diego Padres</Name>
+<Nickname>Padres</Nickname>
+<Player Rank="1" Stability="Very High" Health="" Role="Closer" Id="17442">
+<FirstName>Mason</FirstName>
+<LastName>Miller</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/mason-miller-17442</Link>
+<StatsId>12505</StatsId>
+<StatsGlobalId>1316890</StatsGlobalId>
+<SportsDataId>b2e1500b-9303-4e0e-8bed-d07df24b28bb</SportsDataId>
+<SportRadarId>b2e1500b-9303-4e0e-8bed-d07df24b28bb</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="14068">
+<FirstName>Adrian</FirstName>
+<LastName>Morejon</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/adrian-morejon-14068</Link>
+<StatsId>10574</StatsId>
+<StatsGlobalId>969093</StatsGlobalId>
+<SportsDataId>7251332d-7c46-4b43-8a87-a94e185c7e6b</SportsDataId>
+<SportRadarId>7251332d-7c46-4b43-8a87-a94e185c7e6b</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="19854">
+<FirstName>Bradgley</FirstName>
+<LastName>Rodriguez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/bradgley-rodriguez-19854</Link>
+<StatsId/>
+<StatsGlobalId>1507944</StatsGlobalId>
+<SportsDataId>f9cf7c9d-f72a-4ab5-8e67-e65b275635d2</SportsDataId>
+<SportRadarId>f9cf7c9d-f72a-4ab5-8e67-e65b275635d2</SportRadarId>
+</Player>
+<Player Rank="4" Role="Middle Reliever" Id="14539">
+<FirstName>Wandy</FirstName>
+<LastName>Peralta</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/wandy-peralta-14539</Link>
+<StatsId>10391</StatsId>
+<StatsGlobalId>549195</StatsGlobalId>
+<SportsDataId>b0b80d42-de4b-4722-b4fa-bbdbb0d5d53e</SportsDataId>
+<SportRadarId>b0b80d42-de4b-4722-b4fa-bbdbb0d5d53e</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="18458">
+<FirstName>Yuki</FirstName>
+<LastName>Matsui</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/yuki-matsui-18458</Link>
+<StatsId/>
+<StatsGlobalId>820039</StatsGlobalId>
+<SportsDataId>b2c77d53-4eec-433c-a173-daf59fca45bc</SportsDataId>
+<SportRadarId>b2c77d53-4eec-433c-a173-daf59fca45bc</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="16250">
+<FirstName>Kyle</FirstName>
+<LastName>Hart</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/kyle-hart-16250</Link>
+<StatsId>11684</StatsId>
+<StatsGlobalId>918414</StatsGlobalId>
+<SportsDataId>fc254950-89b0-4b7d-a488-7199762603fe</SportsDataId>
+<SportRadarId>fc254950-89b0-4b7d-a488-7199762603fe</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="19889">
+<FirstName>David</FirstName>
+<LastName>Morgan</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/david-morgan-19889</Link>
+<StatsId/>
+<StatsGlobalId>1405041</StatsGlobalId>
+<SportsDataId>09141187-c7c4-4dda-8ad8-95d7f2f0a9c0</SportsDataId>
+<SportRadarId>09141187-c7c4-4dda-8ad8-95d7f2f0a9c0</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="14783">
+<FirstName>Griffin</FirstName>
+<LastName>Canning</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/griffin-canning-14783</Link>
+<StatsId>10894</StatsId>
+<StatsGlobalId>829807</StatsGlobalId>
+<SportsDataId>470b008b-639b-4f14-975b-1eb51d918358</SportsDataId>
+<SportRadarId>470b008b-639b-4f14-975b-1eb51d918358</SportRadarId>
+</Player>
+<Player Rank="9" Role="Multi-Inning" Id="17629">
+<FirstName>Randy</FirstName>
+<LastName>Vasquez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/randy-vasquez-17629</Link>
+<StatsId>12500</StatsId>
+<StatsGlobalId>1122217</StatsGlobalId>
+<SportsDataId>766649ef-3ac0-4883-ada3-9d73320cf876</SportsDataId>
+<SportRadarId>766649ef-3ac0-4883-ada3-9d73320cf876</SportRadarId>
+</Player>
+<Player Rank="10" Role="Setup Man" Id="11588">
+<FirstName>Jason</FirstName>
+<LastName>Adam</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jason-adam-11588</Link>
+<StatsId>11009</StatsId>
+<StatsGlobalId>548332</StatsGlobalId>
+<SportsDataId>bb8651aa-fe5b-41ca-9b19-dca358fb9507</SportsDataId>
+<SportRadarId>bb8651aa-fe5b-41ca-9b19-dca358fb9507</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/17) Mason Miller's 2026 draft cost was high, but fantasy managers who made that investment have to be feeling pretty comfortable based on his performance this season. Through mid-September Miller is tied for 2nd in MLB with 37 saves and he leads qualified relievers with a 48.4% strikeout rate, 39.0 K-BB percentage and a 1.47 SIERA. Adrian Morejon, who is also in the midst of yet another outstanding campaign, is next in line for closing duties should Miller be unavailable. ]]>
+</Analysis>
+<StatsId>SD</StatsId>
+<StatsGlobalId>249</StatsGlobalId>
+<SportsDataId>d52d5339-cbdd-43f3-9dfa-a42fd588b9a3</SportsDataId>
+<SportRadarId>d52d5339-cbdd-43f3-9dfa-a42fd588b9a3</SportRadarId>
+</Team>
+<Team Id="24" Code="SEA">
+<Name>Seattle Mariners</Name>
+<Nickname>Mariners</Nickname>
+<Player Rank="1" Stability="Very High" Health="" Role="Closer" Id="15238">
+<FirstName>Andres</FirstName>
+<LastName>Munoz</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/andres-munoz-15238</Link>
+<StatsId>11526</StatsId>
+<StatsGlobalId>919548</StatsGlobalId>
+<SportsDataId>5f1124d9-faa3-405c-aae1-cfe52f6ea92d</SportsDataId>
+<SportRadarId>5f1124d9-faa3-405c-aae1-cfe52f6ea92d</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="17908">
+<FirstName>Jose</FirstName>
+<LastName>Ferrer</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jose-ferrer-17908</Link>
+<StatsId>12723</StatsId>
+<StatsGlobalId>1119283</StatsGlobalId>
+<SportsDataId>73fdecbf-8738-4e32-adba-57d894931208</SportsDataId>
+<SportRadarId>73fdecbf-8738-4e32-adba-57d894931208</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="14103">
+<FirstName>Gabe</FirstName>
+<LastName>Speier</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/gabe-speier-14103</Link>
+<StatsId>11653</StatsId>
+<StatsGlobalId>738213</StatsGlobalId>
+<SportsDataId>da007384-6e98-476a-9972-a47cd0e0aae2</SportsDataId>
+<SportRadarId>da007384-6e98-476a-9972-a47cd0e0aae2</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="14702">
+<FirstName>Seranthony</FirstName>
+<LastName>Dominguez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/seranthony-dominguez-14702</Link>
+<StatsId>11011</StatsId>
+<StatsGlobalId>657573</StatsGlobalId>
+<SportsDataId>1b02041b-941f-46af-a52e-79072e0e2a33</SportsDataId>
+<SportRadarId>1b02041b-941f-46af-a52e-79072e0e2a33</SportRadarId>
+</Player>
+<Player Rank="5" Role="Setup Man" Id="17129">
+<FirstName>Eduard</FirstName>
+<LastName>Bazardo</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/eduard-bazardo-17129</Link>
+<StatsId>12092</StatsId>
+<StatsGlobalId>873313</StatsGlobalId>
+<SportsDataId>8984b351-e602-475d-b6eb-eabc38470ba7</SportsDataId>
+<SportRadarId>8984b351-e602-475d-b6eb-eabc38470ba7</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="15723">
+<FirstName>Carlos</FirstName>
+<LastName>Vargas</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/carlos-vargas-15723</Link>
+<StatsId>12093</StatsId>
+<StatsGlobalId>1121356</StatsGlobalId>
+<SportsDataId>bdaa06dd-677d-4b2c-8d43-d135e0b9c4cc</SportsDataId>
+<SportRadarId>bdaa06dd-677d-4b2c-8d43-d135e0b9c4cc</SportRadarId>
+</Player>
+<Player Rank="7" Role="Middle Reliever" Id="16517">
+<FirstName>Michael</FirstName>
+<LastName>Rucker</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/michael-rucker-16517</Link>
+<StatsId>11286</StatsId>
+<StatsGlobalId>919117</StatsGlobalId>
+<SportsDataId>70da19cd-4226-43da-a667-e604ee2dc0b5</SportsDataId>
+<SportRadarId>70da19cd-4226-43da-a667-e604ee2dc0b5</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="17617">
+<FirstName>Cooper</FirstName>
+<LastName>Criswell</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/cooper-criswell-17617</Link>
+<StatsId>12256</StatsId>
+<StatsGlobalId>1119366</StatsGlobalId>
+<SportsDataId>87c3ee21-7ca3-4fc4-8133-e5828ad0c5a5</SportsDataId>
+<SportRadarId>87c3ee21-7ca3-4fc4-8133-e5828ad0c5a5</SportRadarId>
+</Player>
+<Player Rank="9" Role="Middle Reliever" Id="12720">
+<FirstName>Hoby</FirstName>
+<LastName>Milner</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/hoby-milner-12720</Link>
+<StatsId>10736</StatsId>
+<StatsGlobalId>503539</StatsGlobalId>
+<SportsDataId>e83160b9-1507-4d04-aad5-086a5196af0a</SportsDataId>
+<SportRadarId>e83160b9-1507-4d04-aad5-086a5196af0a</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (9/17) Seattle's bullpen dealt with some adversity early on in the 2026 campaign, but closer Andres Munoz has rebounded after some early-season struggles. Since mid-June, he's gone scoreless in 26 of his 32 outings with a 2.84 ERA, 1.01 WHIP and 50:12 K:BB across 30.1 innings. He ranks 12th in the league with 27 saves and currently maintains a 82% team save share for the Mariners. ]]>
+</Analysis>
+<StatsId>SEA</StatsId>
+<StatsGlobalId>236</StatsGlobalId>
+<SportsDataId>43a39081-52b4-4f93-ad29-da7f329ea960</SportsDataId>
+<SportRadarId>43a39081-52b4-4f93-ad29-da7f329ea960</SportRadarId>
+</Team>
+<Team Id="25" Code="SF">
+<Name>San Francisco Giants</Name>
+<Nickname>Giants</Nickname>
+<Player Rank="1" Stability="Very Low" Health="" Role="Committee" Id="17363">
+<FirstName>Dylan</FirstName>
+<LastName>Smith</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/dylan-smith-17363</Link>
+<StatsId>12425</StatsId>
+<StatsGlobalId>1119478</StatsGlobalId>
+<SportsDataId>826153fa-f6cd-4c9f-a479-6fa56629b729</SportsDataId>
+<SportRadarId>826153fa-f6cd-4c9f-a479-6fa56629b729</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Committee" Id="19856">
+<FirstName>Trent</FirstName>
+<LastName>Harris</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/trent-harris-19856</Link>
+<StatsId/>
+<StatsGlobalId>1458401</StatsGlobalId>
+<SportsDataId>e17a9baf-3b5e-4651-8d21-4c99fd4499f9</SportsDataId>
+<SportRadarId>e17a9baf-3b5e-4651-8d21-4c99fd4499f9</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="16809">
+<FirstName>Carson</FirstName>
+<LastName>Seymour</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/carson-seymour-16809</Link>
+<StatsId/>
+<StatsGlobalId>1176488</StatsGlobalId>
+<SportsDataId>294840a7-54cc-4a25-bcc5-13d422c032a9</SportsDataId>
+<SportRadarId>294840a7-54cc-4a25-bcc5-13d422c032a9</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="13487">
+<FirstName>Sam</FirstName>
+<LastName>Hentges</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/sam-hentges-13487</Link>
+<StatsId>11204</StatsId>
+<StatsGlobalId>828881</StatsGlobalId>
+<SportsDataId>19531254-3669-4d66-a1ac-c1264e6cb3bb</SportsDataId>
+<SportRadarId>19531254-3669-4d66-a1ac-c1264e6cb3bb</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="17098">
+<FirstName>Jason</FirstName>
+<LastName>Foley</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jason-foley-17098</Link>
+<StatsId>12204</StatsId>
+<StatsGlobalId>915677</StatsGlobalId>
+<SportsDataId>5f333b4b-e361-4705-8741-0c0f0dd1a4f7</SportsDataId>
+<SportRadarId>5f333b4b-e361-4705-8741-0c0f0dd1a4f7</SportRadarId>
+</Player>
+<Player Rank="6" Role="Multi-Inning" Id="15244">
+<FirstName>Reiver</FirstName>
+<LastName>Sanmartin</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/reiver-sanmartin-15244</Link>
+<StatsId>12277</StatsId>
+<StatsGlobalId>880982</StatsGlobalId>
+<SportsDataId>dcdf6389-65cb-46cf-a44d-a6442f41cbec</SportsDataId>
+<SportRadarId>dcdf6389-65cb-46cf-a44d-a6442f41cbec</SportRadarId>
+</Player>
+<Player Rank="7" Role="Middle Reliever" Id="16431">
+<FirstName>Joel</FirstName>
+<LastName>Kuhnel</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/joel-kuhnel-16431</Link>
+<StatsId>11639</StatsId>
+<StatsGlobalId>918205</StatsGlobalId>
+<SportsDataId>8752ee00-5e2c-43e0-a632-a49400562133</SportsDataId>
+<SportRadarId>8752ee00-5e2c-43e0-a632-a49400562133</SportRadarId>
+</Player>
+<Player Rank="8" Role="Middle Reliever" Id="17401">
+<FirstName>Philip</FirstName>
+<LastName>Abner</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/philip-abner-17401</Link>
+<StatsId/>
+<StatsGlobalId>1316924</StatsGlobalId>
+<SportsDataId>bac78171-d751-4663-8a2c-381acc728165</SportsDataId>
+<SportRadarId>bac78171-d751-4663-8a2c-381acc728165</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (8/6) San Francisco capitalized on the trade market and dealt away its top two relievers - Caleb Kilian (Phillies) and Erik Miller (Red Sox) - at the deadline. Manager Tony Vitello has already been pretty fluid with his approach to the ninth inning in 2026, as 9 different pitchers have combined for the team's 21 saves through early August. We can probably expect more of the same throughout the rest of the campaign. Among San Francisco relievers, Jason Foley has the most experience closing games with 35 for his career, but he's just getting his bearings after missing over 1 year due to shoulder surgery. Dylan Smith will likely receive opportunities to close games, as he was pitching in a setup role prior to the trade deadline. He has the highest strikeout rate among Giants' relievers at 26.4%, but his 11.0% walk rate could limit those opportunities. Keaton Winn doesn't strike many batters out, but he's posted solid ratios and already has 1 save this season. For now, we're labeling this a committee between Smith and Winn, but San Francisco's poor play make them (and others in this bullpen) tough to trust when it comes to save production. ]]>
+</Analysis>
+<StatsId>SF</StatsId>
+<StatsGlobalId>250</StatsGlobalId>
+<SportsDataId>a7723160-10b7-4277-a309-d8dd95a8ae65</SportsDataId>
+<SportRadarId>a7723160-10b7-4277-a309-d8dd95a8ae65</SportRadarId>
+</Team>
+<Team Id="26" Code="STL">
+<Name>St. Louis Cardinals</Name>
+<Nickname>Cardinals</Nickname>
+<Player Rank="1" Stability="Very Low" Health="" Role="Committee" Id="16611">
+<FirstName>Riley</FirstName>
+<LastName>O'Brien</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/riley-obrien-16611</Link>
+<StatsId>11846</StatsId>
+<StatsGlobalId>1055210</StatsGlobalId>
+<SportsDataId>97d0c2f5-a124-4252-84c2-168ef8939eee</SportsDataId>
+<SportRadarId>97d0c2f5-a124-4252-84c2-168ef8939eee</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Committee" Id="17845">
+<FirstName>George</FirstName>
+<LastName>Soriano</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/george-soriano-17845</Link>
+<StatsId>12751</StatsId>
+<StatsGlobalId>917493</StatsGlobalId>
+<SportsDataId>38b33383-47ff-4b84-8709-6de13e717828</SportsDataId>
+<SportRadarId>38b33383-47ff-4b84-8709-6de13e717828</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="11485">
+<FirstName>Ryne</FirstName>
+<LastName>Stanek</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/ryne-stanek-11485</Link>
+<StatsId>10606</StatsId>
+<StatsGlobalId>548245</StatsGlobalId>
+<SportsDataId>ef2a7fa6-94d5-4875-b205-c5f2bd30758a</SportsDataId>
+<SportRadarId>ef2a7fa6-94d5-4875-b205-c5f2bd30758a</SportRadarId>
+</Player>
+<Player Rank="4" Role="Middle Reliever" Id="17602">
+<FirstName>Justin</FirstName>
+<LastName>Bruihl</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/justin-bruihl-17602</Link>
+<StatsId>12247</StatsId>
+<StatsGlobalId>1120966</StatsGlobalId>
+<SportsDataId>05e0440a-dc29-4ad3-8e2c-fbfd884d0979</SportsDataId>
+<SportRadarId>05e0440a-dc29-4ad3-8e2c-fbfd884d0979</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="20054">
+<FirstName>Luis</FirstName>
+<LastName>Gastelum</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/luis-gastelum-20054</Link>
+<StatsId/>
+<StatsGlobalId>1449173</StatsGlobalId>
+<SportsDataId>ac43af8d-9cb2-48c8-852a-752dbd8aa96b</SportsDataId>
+<SportRadarId>ac43af8d-9cb2-48c8-852a-752dbd8aa96b</SportRadarId>
+</Player>
+<Player Rank="6" Role="Multi-Inning" Id="17488">
+<FirstName>Gordon</FirstName>
+<LastName>Graceffo</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/gordon-graceffo-17488</Link>
+<StatsId/>
+<StatsGlobalId>1316771</StatsGlobalId>
+<SportsDataId>5f1b691d-5e40-446c-98f4-fc21e862d8b1</SportsDataId>
+<SportRadarId>5f1b691d-5e40-446c-98f4-fc21e862d8b1</SportRadarId>
+</Player>
+<Player Rank="7" Role="Middle Reliever" Id="20566">
+<FirstName>Cade</FirstName>
+<LastName>Winquest</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/cade-winquest-20566</Link>
+<StatsId>13434</StatsId>
+<StatsGlobalId>1317388</StatsGlobalId>
+<SportsDataId>559e589e-3789-48fc-b0d3-192156363298</SportsDataId>
+<SportRadarId>559e589e-3789-48fc-b0d3-192156363298</SportRadarId>
+</Player>
+<Player Rank="8" Role="Multi-Inning" Id="17910">
+<FirstName>Peter</FirstName>
+<LastName>Strzelecki</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/peter-strzelecki-17910</Link>
+<StatsId>12624</StatsId>
+<StatsGlobalId>1121199</StatsGlobalId>
+<SportsDataId>04435de5-cbb3-4ddb-84e5-143e3f09b87b</SportsDataId>
+<SportRadarId>04435de5-cbb3-4ddb-84e5-143e3f09b87b</SportRadarId>
+</Player>
+<Player Rank="9" Role="Multi-Inning" Id="17982">
+<FirstName>Brycen</FirstName>
+<LastName>Mautz</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/brycen-mautz-17982</Link>
+<StatsId/>
+<StatsGlobalId>1396681</StatsGlobalId>
+<SportsDataId>2cd0a30e-711c-40ee-8217-e78a0dcccb0d</SportsDataId>
+<SportRadarId>2cd0a30e-711c-40ee-8217-e78a0dcccb0d</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (8/11) Riley O'Brien - who ranks 4th in MLB with 29 saves through mid-August - has gone scoreless in 15 of his last 16 appearances dating back to June 22. While his stability as the Cardinals' closer remains high, it's worth monitoring O'Brien's walk rate, as he's issued 5.3 BB/9 during that scoreless stretch. With St. Louis trading top setup man JoJo Romero to Milwaukee at the deadline, George Soriano appears to be next in line for ancillary save chances. ]]>
+</Analysis>
+<StatsId>STL</StatsId>
+<StatsGlobalId>248</StatsGlobalId>
+<SportsDataId>44671792-dc02-4fdd-a5ad-f5f17edaa9d7</SportsDataId>
+<SportRadarId>44671792-dc02-4fdd-a5ad-f5f17edaa9d7</SportRadarId>
+</Team>
+<Team Id="29" Code="TB">
+<Name>Tampa Bay Rays</Name>
+<Nickname>Rays</Nickname>
+<Player Rank="1" Stability="High" Health="" Role="Closer" Id="15697">
+<FirstName>Bryan</FirstName>
+<LastName>Baker</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/bryan-baker-15697</Link>
+<StatsId>11998</StatsId>
+<StatsGlobalId>739000</StatsGlobalId>
+<SportsDataId>ec6a6210-4582-471f-aff5-8a207bc21036</SportsDataId>
+<SportRadarId>ec6a6210-4582-471f-aff5-8a207bc21036</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="14991">
+<FirstName>Tyler</FirstName>
+<LastName>Wells</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tyler-wells-14991</Link>
+<StatsId>12114</StatsId>
+<StatsGlobalId>918346</StatsGlobalId>
+<SportsDataId>e52a94fe-804e-4d9a-bd4e-dbe3bb7148e5</SportsDataId>
+<SportRadarId>e52a94fe-804e-4d9a-bd4e-dbe3bb7148e5</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="13908">
+<FirstName>Garrett</FirstName>
+<LastName>Cleavinger</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/garrett-cleavinger-13908</Link>
+<StatsId>11704</StatsId>
+<StatsGlobalId>827423</StatsGlobalId>
+<SportsDataId>be51cd4d-69f7-49a5-8691-e88a66988306</SportsDataId>
+<SportRadarId>be51cd4d-69f7-49a5-8691-e88a66988306</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="18283">
+<FirstName>Kevin</FirstName>
+<LastName>Kelly</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/kevin-kelly-18283</Link>
+<StatsId>12768</StatsId>
+<StatsGlobalId>1116143</StatsGlobalId>
+<SportsDataId>4f244175-792a-43b9-b8fe-fff4c2680662</SportsDataId>
+<SportRadarId>4f244175-792a-43b9-b8fe-fff4c2680662</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="18682">
+<FirstName>Cam</FirstName>
+<LastName>Booser</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/cam-booser-18682</Link>
+<StatsId/>
+<StatsGlobalId>754843</StatsGlobalId>
+<SportsDataId>0a85fb5e-6e04-417c-b969-15dd3c2fd448</SportsDataId>
+<SportRadarId>0a85fb5e-6e04-417c-b969-15dd3c2fd448</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="16502">
+<FirstName>Manuel</FirstName>
+<LastName>Rodriguez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/manuel-rodriguez-16502</Link>
+<StatsId>11699</StatsId>
+<StatsGlobalId>827607</StatsGlobalId>
+<SportsDataId>a1c17043-1ed2-4a69-ad8a-adf0d334715d</SportsDataId>
+<SportRadarId>a1c17043-1ed2-4a69-ad8a-adf0d334715d</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="18272">
+<FirstName>Casey</FirstName>
+<LastName>Legumina</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/casey-legumina-18272</Link>
+<StatsId>12728</StatsId>
+<StatsGlobalId>918594</StatsGlobalId>
+<SportsDataId>b081de24-72fc-429a-b197-47f5192448fe</SportsDataId>
+<SportRadarId>b081de24-72fc-429a-b197-47f5192448fe</SportRadarId>
+</Player>
+<Player Rank="8" Role="Middle Reliever" Id="15806">
+<FirstName>Cole</FirstName>
+<LastName>Sulser</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/cole-sulser-15806</Link>
+<StatsId>11648</StatsId>
+<StatsGlobalId>738350</StatsGlobalId>
+<SportsDataId>e7fbf15a-c6d6-4d32-b191-bbafc25bb8a4</SportsDataId>
+<SportRadarId>e7fbf15a-c6d6-4d32-b191-bbafc25bb8a4</SportRadarId>
+</Player>
+<Player Rank="9" Role="Multi-Inning" Id="11012">
+<FirstName>Steven</FirstName>
+<LastName>Matz</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/steven-matz-11012</Link>
+<StatsId>9599</StatsId>
+<StatsGlobalId>500832</StatsGlobalId>
+<SportsDataId>03fda22a-f8a3-45e8-80dc-bf8190a22020</SportsDataId>
+<SportRadarId>03fda22a-f8a3-45e8-80dc-bf8190a22020</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (8/13) Bryan Baker has been the best source of saves off the 2026 fantasy waiver wire, putting to rest the idea that the Rays would be deploying a closer-by-committee this season. The right-hander leads the majors with 34 saves through mid-August, while his 1.55 ERA ranks 5th among qualified relievers and his 0.84 WHIP ranks 7th. ]]>
+</Analysis>
+<StatsId>TB</StatsId>
+<StatsGlobalId>254</StatsGlobalId>
+<SportsDataId>bdc11650-6f74-49c4-875e-778aeb7632d9</SportsDataId>
+<SportRadarId>bdc11650-6f74-49c4-875e-778aeb7632d9</SportRadarId>
+</Team>
+<Team Id="27" Code="TEX">
+<Name>Texas Rangers</Name>
+<Nickname>Rangers</Nickname>
+<Player Rank="1" Stability="Very High" Health="" Role="Closer" Id="17100">
+<FirstName>Jacob</FirstName>
+<LastName>Latz</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jacob-latz-17100</Link>
+<StatsId>12086</StatsId>
+<StatsGlobalId>829008</StatsGlobalId>
+<SportsDataId>0222aaa1-847a-495e-b342-90f6fe3da25b</SportsDataId>
+<SportRadarId>0222aaa1-847a-495e-b342-90f6fe3da25b</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="17438">
+<FirstName>Chase</FirstName>
+<LastName>Silseth</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/chase-silseth-17438</Link>
+<StatsId>12615</StatsId>
+<StatsGlobalId>1316894</StatsGlobalId>
+<SportsDataId>35060d8e-3e99-4c49-b5db-36896605f930</SportsDataId>
+<SportRadarId>35060d8e-3e99-4c49-b5db-36896605f930</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="13880">
+<FirstName>Tyler</FirstName>
+<LastName>Alexander</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tyler-alexander-13880</Link>
+<StatsId>10469</StatsId>
+<StatsGlobalId>738285</StatsGlobalId>
+<SportsDataId>435128c5-d570-467c-9da1-fdba3ed1bfef</SportsDataId>
+<SportRadarId>435128c5-d570-467c-9da1-fdba3ed1bfef</SportRadarId>
+</Player>
+<Player Rank="4" Role="Setup Man" Id="14512">
+<FirstName>Jakob</FirstName>
+<LastName>Junis</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jakob-junis-14512</Link>
+<StatsId>10494</StatsId>
+<StatsGlobalId>602414</StatsGlobalId>
+<SportsDataId>919d18a0-cd70-43c9-81f2-b96bf9e66a17</SportsDataId>
+<SportRadarId>919d18a0-cd70-43c9-81f2-b96bf9e66a17</SportRadarId>
+</Player>
+<Player Rank="5" Role="Setup Man" Id="17728">
+<FirstName>Robert</FirstName>
+<LastName>Garcia</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/robert-garcia-17728</Link>
+<StatsId/>
+<StatsGlobalId>915840</StatsGlobalId>
+<SportsDataId>2f962f66-501f-4fc7-9a25-738a589c9e05</SportsDataId>
+<SportRadarId>2f962f66-501f-4fc7-9a25-738a589c9e05</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="20035">
+<FirstName>Ben</FirstName>
+<LastName>Peoples</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/ben-peoples-20035</Link>
+<StatsId/>
+<StatsGlobalId>1170335</StatsGlobalId>
+<SportsDataId>2fd66056-1f5e-4162-9a3a-f908d0b65471</SportsDataId>
+<SportRadarId>2fd66056-1f5e-4162-9a3a-f908d0b65471</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="20899">
+<FirstName>Peyton</FirstName>
+<LastName>Gray</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/peyton-gray-20899</Link>
+<StatsId>13462</StatsId>
+<StatsGlobalId>1122624</StatsGlobalId>
+<SportsDataId>276ed869-a8be-461d-99a7-da76b73e52d6</SportsDataId>
+<SportRadarId>276ed869-a8be-461d-99a7-da76b73e52d6</SportRadarId>
+</Player>
+<Player Rank="8" Role="Middle Reliever" Id="20002">
+<FirstName>Robby</FirstName>
+<LastName>Ahlstrom</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/robby-ahlstrom-20002</Link>
+<StatsId/>
+<StatsGlobalId>1177527</StatsGlobalId>
+<SportsDataId>d2efdbc9-91e8-437a-845d-64e55d0bd04e</SportsDataId>
+<SportRadarId>d2efdbc9-91e8-437a-845d-64e55d0bd04e</SportRadarId>
+</Player>
+<Player Rank="9" Role="Multi-Inning" Id="13481">
+<FirstName>Jordan</FirstName>
+<LastName>Montgomery</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jordan-montgomery-13481</Link>
+<StatsId>10660</StatsId>
+<StatsGlobalId>828875</StatsGlobalId>
+<SportsDataId>e96d88f5-3593-48fb-b1fd-840b41c08cc5</SportsDataId>
+<SportRadarId>e96d88f5-3593-48fb-b1fd-840b41c08cc5</SportRadarId>
+</Player>
+<Player Rank="10" Role="Multi-Inning" Id="17203">
+<FirstName>Adam</FirstName>
+<LastName>Macko</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/adam-macko-17203</Link>
+<StatsId>12535</StatsId>
+<StatsGlobalId>1169774</StatsGlobalId>
+<SportsDataId>8a568d13-1f44-429b-8beb-bdd3dd9bdb60</SportsDataId>
+<SportRadarId>8a568d13-1f44-429b-8beb-bdd3dd9bdb60</SportRadarId>
+</Player>
+<Player Rank="11" Role="Multi-Inning" Id="12986">
+<FirstName>Trevor</FirstName>
+<LastName>Williams</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/trevor-williams-12986</Link>
+<StatsId>10144</StatsId>
+<StatsGlobalId>708217</StatsGlobalId>
+<SportsDataId>e40d5150-268a-4af2-99cc-dae6e3e1a016</SportsDataId>
+<SportRadarId>e40d5150-268a-4af2-99cc-dae6e3e1a016</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (8/13) Texas experimented with Tyler Alexander and Jakob Junis (thigh) in the closer role early on, but Jacob Latz began receiving save chances in late-April and has firmly established himself as the Rangers' closer since then. Latz has racked up 23 of the Rangers' 28 saves (82% team save share) since he recorded his first of the season back on Apr 25. ]]>
+</Analysis>
+<StatsId>TEX</StatsId>
+<StatsGlobalId>237</StatsGlobalId>
+<SportsDataId>d99f919b-1534-4516-8e8a-9cd106c6d8cd</SportsDataId>
+<SportRadarId>d99f919b-1534-4516-8e8a-9cd106c6d8cd</SportRadarId>
+</Team>
+<Team Id="28" Code="TOR">
+<Name>Toronto Blue Jays</Name>
+<Nickname>Blue Jays</Nickname>
+<Player Rank="1" Stability="Very High" Health="" Role="Closer" Id="17607">
+<FirstName>Louis</FirstName>
+<LastName>Varland</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/louis-varland-17607</Link>
+<StatsId>12695</StatsId>
+<StatsGlobalId>1169990</StatsGlobalId>
+<SportsDataId>512f91ae-ece2-4332-b8e5-a3771ca726b1</SportsDataId>
+<SportRadarId>512f91ae-ece2-4332-b8e5-a3771ca726b1</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Setup Man" Id="16438">
+<FirstName>Tyler</FirstName>
+<LastName>Rogers</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/tyler-rogers-16438</Link>
+<StatsId>11644</StatsId>
+<StatsGlobalId>739036</StatsGlobalId>
+<SportsDataId>d62161c0-7148-4a67-94da-b284eb458293</SportsDataId>
+<SportRadarId>d62161c0-7148-4a67-94da-b284eb458293</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="15473">
+<FirstName>Braydon</FirstName>
+<LastName>Fisher</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/braydon-fisher-15473</Link>
+<StatsId>11479</StatsId>
+<StatsGlobalId>1118890</StatsGlobalId>
+<SportsDataId>65065b12-776a-4930-98b6-637b0f36456f</SportsDataId>
+<SportRadarId>65065b12-776a-4930-98b6-637b0f36456f</SportRadarId>
+</Player>
+<Player Rank="4" Role="Multi-Inning" Id="18133">
+<FirstName>Spencer</FirstName>
+<LastName>Miles</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/spencer-miles-18133</Link>
+<StatsId/>
+<StatsGlobalId>1397624</StatsGlobalId>
+<SportsDataId>1dc59382-2a84-4987-8385-69279fd9be92</SportsDataId>
+<SportRadarId>1dc59382-2a84-4987-8385-69279fd9be92</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="18146">
+<FirstName>Mason</FirstName>
+<LastName>Fluharty</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/mason-fluharty-18146</Link>
+<StatsId/>
+<StatsGlobalId>1397654</StatsGlobalId>
+<SportsDataId>04c6998c-a48a-4683-8d75-f985ad89b491</SportsDataId>
+<SportRadarId>04c6998c-a48a-4683-8d75-f985ad89b491</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="14796">
+<FirstName>Brendon</FirstName>
+<LastName>Little</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/brendon-little-14796</Link>
+<StatsId>10861</StatsId>
+<StatsGlobalId>876266</StatsGlobalId>
+<SportsDataId>914a72c0-40fc-4f4b-941f-9342bff20a6d</SportsDataId>
+<SportRadarId>914a72c0-40fc-4f4b-941f-9342bff20a6d</SportRadarId>
+</Player>
+<Player Rank="7" Role="Middle Reliever" Id="14190">
+<FirstName>Paul</FirstName>
+<LastName>Sewald</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/paul-sewald-14190</Link>
+<StatsId>10657</StatsId>
+<StatsGlobalId>658150</StatsGlobalId>
+<SportsDataId>22dabc06-611e-4d36-81af-7153e7ba86e6</SportsDataId>
+<SportRadarId>22dabc06-611e-4d36-81af-7153e7ba86e6</SportRadarId>
+</Player>
+<Player Rank="8" Role="Middle Reliever" Id="21291">
+<FirstName>Brendan</FirstName>
+<LastName>Cellucci</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/brendan-cellucci-21291</Link>
+<StatsId/>
+<StatsGlobalId>1159914</StatsGlobalId>
+<SportsDataId>e5c37424-eb29-4e6f-9816-645172d0af93</SportsDataId>
+<SportRadarId>e5c37424-eb29-4e6f-9816-645172d0af93</SportRadarId>
+</Player>
+<Player Rank="9" Role="Middle Reliever" Id="19431">
+<FirstName>Jose</FirstName>
+<LastName>Rodriguez</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/jose-rodriguez-19431</Link>
+<StatsId/>
+<StatsGlobalId>1449481</StatsGlobalId>
+<SportsDataId>7c4207e2-c082-4332-9996-5d7e743271f7</SportsDataId>
+<SportRadarId>7c4207e2-c082-4332-9996-5d7e743271f7</SportRadarId>
+</Player>
+<Player Rank="10" Role="Multi-Inning" Id="17494">
+<FirstName>Chad</FirstName>
+<LastName>Dallas</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/chad-dallas-17494</Link>
+<StatsId>12578</StatsId>
+<StatsGlobalId>1316766</StatsGlobalId>
+<SportsDataId>1f7d4593-1add-42ac-b812-8b85f79e1999</SportsDataId>
+<SportRadarId>1f7d4593-1add-42ac-b812-8b85f79e1999</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (8/13) Louis Varland has been outstanding in 2026. His 1.30 ERA ranks 3rd among qualified relievers, while he ranks 7th in the league with 26 saves through mid-August. With Toronto trading away Varland's closest competition for saves (Jeff Hoffman), his role is even more secure than it was based on performance alone. Varland figures to cede save chances to his fellow bullpen-mates on occasion, but he should see at least 80 percent of Toronto's opportunities the rest of the way given how he's pitched this year. ]]>
+</Analysis>
+<StatsId>TOR</StatsId>
+<StatsGlobalId>238</StatsGlobalId>
+<SportsDataId>1d678440-b4b1-4954-9b39-70afb3ebbcfa</SportsDataId>
+<SportRadarId>1d678440-b4b1-4954-9b39-70afb3ebbcfa</SportRadarId>
+</Team>
+<Team Id="66" Code="WSH">
+<Name>Washington Nationals</Name>
+<Nickname>Nationals</Nickname>
+<Player Rank="1" Stability="Very Low" Health="" Role="Closer" Id="21292">
+<FirstName>Erik</FirstName>
+<LastName>Tolman</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/erik-tolman-21292</Link>
+<StatsId>13554</StatsId>
+<StatsGlobalId>1175944</StatsGlobalId>
+<SportsDataId>673bee14-74d9-4738-9bf0-4e4777091354</SportsDataId>
+<SportRadarId>673bee14-74d9-4738-9bf0-4e4777091354</SportRadarId>
+</Player>
+<Bullpen>
+<Player Rank="2" Role="Multi-Inning" Id="19496">
+<FirstName>Brad</FirstName>
+<LastName>Lord</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/brad-lord-19496</Link>
+<StatsId/>
+<StatsGlobalId>1398122</StatsGlobalId>
+<SportsDataId>d3a03a14-cdd3-4781-a7cf-603481354616</SportsDataId>
+<SportRadarId>d3a03a14-cdd3-4781-a7cf-603481354616</SportRadarId>
+</Player>
+<Player Rank="3" Role="Setup Man" Id="15364">
+<FirstName>Richard</FirstName>
+<LastName>Lovelady</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/richard-lovelady-15364</Link>
+<StatsId>10889</StatsId>
+<StatsGlobalId>918199</StatsGlobalId>
+<SportsDataId>5101efd6-08e8-44a5-b940-2f7e543a172b</SportsDataId>
+<SportRadarId>5101efd6-08e8-44a5-b940-2f7e543a172b</SportRadarId>
+</Player>
+<Player Rank="4" Role="Multi-Inning" Id="18302">
+<FirstName>Will</FirstName>
+<LastName>Dion</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/will-dion-18302</Link>
+<StatsId/>
+<StatsGlobalId>1318278</StatsGlobalId>
+<SportsDataId>9c5023af-6f47-40b5-87c7-47d9ba6bdba3</SportsDataId>
+<SportRadarId>9c5023af-6f47-40b5-87c7-47d9ba6bdba3</SportRadarId>
+</Player>
+<Player Rank="5" Role="Middle Reliever" Id="16004">
+<FirstName>Yovanny</FirstName>
+<LastName>Cruz</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/yovanny-cruz-16004</Link>
+<StatsId/>
+<StatsGlobalId>1053447</StatsGlobalId>
+<SportsDataId>0443d113-49b4-42c2-bf20-da40c9798b38</SportsDataId>
+<SportRadarId>0443d113-49b4-42c2-bf20-da40c9798b38</SportRadarId>
+</Player>
+<Player Rank="6" Role="Middle Reliever" Id="15508">
+<FirstName>Josiah</FirstName>
+<LastName>Gray</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/josiah-gray-15508</Link>
+<StatsId>11480</StatsId>
+<StatsGlobalId>1115970</StatsGlobalId>
+<SportsDataId>58ed579a-6d32-4fbf-80d0-bcfc5a5e5c18</SportsDataId>
+<SportRadarId>58ed579a-6d32-4fbf-80d0-bcfc5a5e5c18</SportRadarId>
+</Player>
+<Player Rank="7" Role="Multi-Inning" Id="16591">
+<FirstName>Luis</FirstName>
+<LastName>Perales</LastName>
+<Position>P</Position>
+<Link>https://www.rotowire.com/baseball/player/luis-perales-16591</Link>
+<StatsId/>
+<StatsGlobalId>1389966</StatsGlobalId>
+<SportsDataId>960c360d-38d1-4cfc-ab45-c8ab9ba3cc52</SportsDataId>
+<SportRadarId>960c360d-38d1-4cfc-ab45-c8ab9ba3cc52</SportRadarId>
+</Player>
+</Bullpen>
+<Analysis>
+<![CDATA[ (8/13) Washington's new manager, Blake Butera, has his team playing surprisingly competitive baseball through mid-August. The team is currently 4 games under .500 and are currently 5.0 games back of an NL Wild Card spot. During the first-half of the season, Butera took a more fluid approach to the late innings, deploying a committee of sorts between a handful of different relievers. However, since July 1, Clayton Beeter has been his go-to guy for save chances, as the right-hander has secured 6 of the team's 7 saves since that date. Beeter's numbers since then aren't super impressive though - he's posted a 5.06 ERA while permitting 5 walks and home runs over his last 10.2 innings - thus tempering his stability as the Nationals' closer. ]]>
+</Analysis>
+<StatsId>WSH</StatsId>
+<StatsGlobalId>244</StatsGlobalId>
+<SportsDataId>d89bed32-3aee-4407-99e3-4103641b999a</SportsDataId>
+<SportRadarId>d89bed32-3aee-4407-99e3-4103641b999a</SportRadarId>
+</Team>
+</Teams>
