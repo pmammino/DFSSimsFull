@@ -932,10 +932,18 @@ Two things were measured rather than assumed:
   fairer. It is not: those bands added 34 names at a **median of 3.8 plate
   appearances**, because a September arrival on a 117-plate-appearance anchor
   is a fifth of a season of a job that barely exists. They were noise with a
-  name attached, and they cost the rank curve 0.0250 against 0.0228 for
-  stopping at Triple-A's top 200 and Double-A's top 40 — at the same share of
-  the league. The league's playing time is fixed, so a name that takes nothing
-  still takes a roster place.
+  name attached, and they cost the rank curve 0.0250 against 0.0228 for the
+  top 200 and top 40 alone — at the same share of the league. The league's
+  playing time is fixed, so a name that takes nothing still takes a roster
+  place.
+* **What a band claims, which turns out to be the better question than how far
+  it reaches.** The second Double-A band (ranks 41-100) goes where the rejected
+  one went and works, because it claims something different: a **July callup to
+  a bench job**, which is a real thing that happens to a top-100 prospect,
+  rather than a September arrival to an injury-replacement job. Eleven more
+  names at a median of 31 plate appearances and a minimum of 5.5, and the rank
+  curve *improves* to **0.0212**. Andrew Fischer — 93rd on the list, 23, sixth
+  in Milwaukee's farm — is the case that prompted it.
 * **That an arrival has to compete for the time.** Two places treat the
   projected tier as "who is on the roster": the floor in
   `allocate_playing_time` and the depth ranking in `apply_roster_depth`. The
