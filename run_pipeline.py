@@ -183,12 +183,23 @@ def step1b_inject_mle(hit_df: pd.DataFrame, pit_df: pd.DataFrame,
     hit_ids = set(pd.to_numeric(hit_df["PlayerId"], errors="coerce").dropna().astype(int))
     pit_ids = set(pd.to_numeric(pit_df["PlayerId"], errors="coerce").dropna().astype(int))
 
+    # Birth years the usage feeds state outright, which beat a Chadwick
+    # lookup that misses most players who have never reached the majors —
+    # exactly the population being translated here. Without it they all come
+    # out at MLE_DEFAULT_AGE and get aged as if 24.
+    from role_feeds import prospect_birth_years
+    births = prospect_birth_years()
+
     hrows, hbip, hstats = build_synthetic_rows(
         feed, "hitter", target_year, name_idx, chadwick,
-        existing_ids=hit_ids, season_offset=MLE_SEASON_OFFSET, levels=MLE_LEVELS)
+        existing_ids=hit_ids, season_offset=MLE_SEASON_OFFSET,
+        levels=MLE_LEVELS, births=births)
     prows, pbip, pstats = build_synthetic_rows(
         feed, "pitcher", target_year, name_idx, chadwick,
-        existing_ids=pit_ids, season_offset=MLE_SEASON_OFFSET, levels=MLE_LEVELS)
+        existing_ids=pit_ids, season_offset=MLE_SEASON_OFFSET,
+        levels=MLE_LEVELS, births=births)
+    if births:
+        print(f"  birth years from the prospects feed: {len(births)}")
 
     print(f"  Hitters : matched={hstats['matched']} "
           f"unresolved={hstats['skipped_unresolved']} "

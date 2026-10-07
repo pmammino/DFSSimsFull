@@ -145,17 +145,38 @@ PROSPECT_ARRIVAL = {
     # level: ((rank cutoff, timing, mixture), ...) — first match wins
     "AAA": (
         (60, "Early Season (~May)",
-         {"Full Time": 0.40, "Strong Side Platoon": 0.25, "Bench Bat": 0.35}),
+         {"Full Time": 0.47, "Strong Side Platoon": 0.25, "Bench Bat": 0.28}),
         (200, "Mid Season (~July)",
-         {"Strong Side Platoon": 0.30, "Bench Bat": 0.45,
-          "Injury Replacement / 26th Man": 0.25}),
+         {"Strong Side Platoon": 0.35, "Bench Bat": 0.45,
+          "Injury Replacement / 26th Man": 0.20}),
     ),
     "AA": (
         (40, "Mid Season (~July)",
-         {"Full Time": 0.25, "Strong Side Platoon": 0.30,
-          "Bench Bat": 0.45}),
+         {"Full Time": 0.34, "Strong Side Platoon": 0.30,
+          "Bench Bat": 0.36}),
+        (100, "Mid Season (~July)",
+         {"Strong Side Platoon": 0.26, "Bench Bat": 0.50,
+          "Injury Replacement / 26th Man": 0.24}),
     ),
 }
+
+# HOW MUCH WEIGHT SITS ON THE REAL JOB, which is the knob that decides how
+# much playing time an arrival actually gets, and it was first set too low.
+# Every band above has been moved toward its top role and away from its
+# bottom one, and it is a free move in both directions that matter: the
+# median arrival goes from 30.9 plate appearances to 38.5 and the ninetieth
+# percentile from 280 to 302, while the rank curve IMPROVES from 0.0212 to
+# 0.0200.
+#
+# It stops where it does because of a CLIFF rather than a slope. Pushed
+# roughly 15% further the Double-A top-40 band tips from "Bench Bat" to
+# "Full Time" as its heaviest role, and the modal role is what picks the
+# family a player is ranked in — so the whole band would jump out of the
+# bench queue and into the lineup, competing with regulars for the top of
+# the club rather than with the last men for the bottom of it. The rank
+# curve says so loudly: 0.0200 at the setting below, 0.0457 one step past
+# it. Nothing in between is being left on the table; the next step is a
+# different claim, not a bigger one.
 
 # WHY THE TABLE STOPS WHERE IT DOES, which is the part that was measured.
 #
@@ -166,7 +187,15 @@ PROSPECT_ARRIVAL = {
 # appearance anchor is a fifth of a season of a job that barely exists, and
 # the roster-depth decay then takes what is left. They were not projections;
 # they were noise with a name attached, and they cost the rank curve 0.0250
-# against 0.0228 for stopping here, at the same share of the league.
+# against 0.0228 for the top 200 and top 40 alone.
+#
+# The second Double-A band is NOT a retreat from that, and the difference is
+# the reason it works. The rejected band was LATE SEASON on an injury-
+# replacement mixture — a fifth of a season of nothing. This one is a July
+# callup to a bench job, which is a real thing that happens to a top-100
+# prospect, and it measures like one: eleven more names at a median of 31
+# plate appearances, a minimum of 5.5, and the rank curve IMPROVES to 0.0212.
+# The lesson is about what a band claims, not about how far down it reaches.
 #
 # The league's playing time is fixed, so a name that takes nothing still
 # takes a roster place. Better to leave the September cup-of-coffee man at
@@ -221,15 +250,28 @@ PITCHER_ARRIVAL = {
          {"Innings-Limited Starter": 0.45, "Swing Arm / Long Relief": 0.30,
           "Bullpen Depth Arm": 0.25}),
         (250, "Mid Season (~July)",
-         {"Innings-Limited Starter": 0.40, "Swing Arm / Long Relief": 0.30,
-          "Bullpen Depth Arm": 0.30}),
+         {"Innings-Limited Starter": 0.47, "Swing Arm / Long Relief": 0.30,
+          "Bullpen Depth Arm": 0.23}),
     ),
     "AA": (
         (150, "Mid Season (~July)",
-         {"Innings-Limited Starter": 0.38, "Swing Arm / Long Relief": 0.30,
-          "Bullpen Depth Arm": 0.32}),
+         {"Innings-Limited Starter": 0.46, "Swing Arm / Long Relief": 0.30,
+          "Bullpen Depth Arm": 0.24}),
     ),
 }
+
+# The same move as the hitters', and it buys much less — a median of 23.2
+# innings against 21.8 — because THE MIXTURE IS NOT WHAT BINDS HERE. Every
+# arriving arm leaves the anchor stage at the same ~41 innings and then
+# differs only by where he ranks: a club carries 12 in the starting family
+# against 6 core slots, so the arrivals sort 7th to 12th and the decay hands
+# out 0.66, 0.44, 0.29, 0.19, 0.13, 0.08 of it. Rank, not role, is what
+# separates Yhoiker Fajardo's 35 innings from Tyler Bremner's 4.
+#
+# The top band is deliberately left alone. It already carries 0.45 on one
+# role, and moving it further would put a single role above half — a
+# confidence nobody has about whether a 23-year-old holds a rotation spot,
+# and the opposite of what the mixture is for.
 
 # The cutoffs run deeper than the hitters' 200 and 40, and that is not
 # generosity — it is that RANK MEANS SOMETHING DIFFERENT HERE. The feed
@@ -1247,7 +1289,96 @@ def _timing(e: dict, mix: dict[str, float], kind: str,
         "Late Inning RP (Setup)"}
     if established:
         return None
+    # A DEPTH ROLE CANNOT CARRY A CALLUP. The level alone used to decide the
+    # timing, so a Double-A bat the arrival table does not reach came out as
+    # "Depth (no MLB PA), Mid Season (~July)" — the engine saying it expects
+    # him in July and expects him to do nothing when he gets there. 169
+    # hitters and 58 pitchers read that way, Andrew Fischer among them.
+    #
+    # The two halves have to agree, and which half gives is decided by the
+    # arrival table: a player it reaches gets a role AND a timing, a player
+    # it does not gets neither. LEVEL_TIMING is a statement about a LEVEL,
+    # and "players at Double-A tend to arrive in July" is not a claim that
+    # THIS Double-A player arrives at all.
+    if is_depth_role(heavy):
+        return None
     return LEVEL_TIMING.get(level)
+
+
+TARGET_YEAR = 2027
+
+
+def prospect_birth_years(feed_dir: str | Path = FEED_DIR) -> dict[int, int]:
+    """MLBAM id -> birth year, for everyone the prospects feed names.
+
+    Pulled out on its own because the MLE stage needs it long before any of
+    the role machinery runs: a translated minor leaguer's age decides how the
+    aging curve treats him, and Chadwick misses most players who have never
+    reached the majors. Returns {} when the feed is not on disk, so the
+    pipeline behaves exactly as it did before where there are no feeds.
+    """
+    try:
+        pr = read_prospects(Path(feed_dir) / "prospects.xml")
+    except Exception:
+        return {}
+    if pr.empty or "birth_year" not in pr.columns:
+        return {}
+    pid = pd.to_numeric(pr["PlayerId"], errors="coerce")
+    born = pd.to_numeric(pr["birth_year"], errors="coerce")
+    ok = pid.notna() & born.notna()
+    return {int(p): int(b) for p, b in zip(pid[ok], born[ok])}
+
+
+def repair_ages(players: pd.DataFrame, ev: dict[int, dict], *,
+                target_year: int = TARGET_YEAR) -> tuple[pd.DataFrame, int]:
+    """Replace a defaulted age with the one the prospects feed states.
+
+    Two thirds of the players in the projection carry an age of exactly 25,
+    and it is not a coincidence: a player with no major-league history gets
+    his age from `mle_translations._age_from_chadwick`, which falls back to
+    MLE_DEFAULT_AGE (24) for the translated season whenever the Chadwick
+    lookup misses, and the rate models then age him forward one year to the
+    target. So "25" on a minor leaguer means "we never found out", and it is
+    indistinguishable in the sheet from a real 25 — Andrew Fischer read 25
+    while the feed on disk gave his birth date as 2004.
+
+    The prospects feed states a Birth Date for all 400 players in it, which
+    `read_prospects` already parses because the arrival table needs it to
+    tell a 21-year-old at Triple-A from a 27-year-old at Triple-A. The same
+    number answers the age column, so it is used here rather than left to a
+    lookup that has already failed.
+
+    Only ever REPLACES a default. A player whose age came from his own
+    major-league record keeps it, because that record is the better source
+    and the feed's birth date is one more name join that can go wrong.
+    """
+    if "Age" not in players.columns or not ev:
+        return players, 0
+    out = players.copy()
+    age = pd.to_numeric(out["Age"], errors="coerce")
+    # The defaulted value, derived rather than hard-coded, so it follows the
+    # config if either constant ever moves: the translated row is written for
+    # (target - offset) at MLE_DEFAULT_AGE, and `rate_models` ages it forward
+    # by the gap to the target year.
+    try:
+        from pipeline_config import MLE_DEFAULT_AGE, MLE_SEASON_OFFSET
+    except ImportError:
+        return out, 0
+    defaulted = float(MLE_DEFAULT_AGE) + float(MLE_SEASON_OFFSET)
+
+    fixed = 0
+    for i, pid in enumerate(pd.to_numeric(out["PlayerId"], errors="coerce")):
+        if pd.isna(pid) or age.iloc[i] != defaulted:
+            continue
+        born = (ev.get(int(pid)) or {}).get("birth_year")
+        if born is None or not np.isfinite(float(born or np.nan)):
+            continue
+        real = target_year - int(born)
+        if real == int(defaulted):
+            continue
+        out.iloc[i, out.columns.get_loc("Age")] = real
+        fixed += 1
+    return out, fixed
 
 
 def apply_feed_roles(players: pd.DataFrame, kind: str, *,
@@ -1283,6 +1414,8 @@ def apply_feed_roles(players: pd.DataFrame, kind: str, *,
 
     if "pt_role_mix" not in out.columns:
         out["pt_role_mix"] = ""
+
+    out, stats["ages_fixed"] = repair_ages(out, ev, target_year=TARGET_YEAR)
 
     reader = hitter_role_from_feeds if kind == "hitter" \
         else pitcher_role_from_feeds

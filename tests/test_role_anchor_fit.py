@@ -59,7 +59,10 @@ def test_the_two_sides_decay_at_different_rates():
     should be deliberate.
     """
     assert M.ROSTER_DEPTH_DECAY_PITCHER < M.ROSTER_DEPTH_DECAY_HITTER
-    assert M.ROSTER_DEPTH_DECAY_PITCHER == pytest.approx(0.66)
+    # Both move with ROSTER_DEPTH_FLOOR, which decides where the taper ends
+    # while they decide how fast it gets there. Fitting either alone finds a
+    # compromise that is wrong for both — see the note on the floor.
+    assert M.ROSTER_DEPTH_DECAY_PITCHER == pytest.approx(0.70)
     assert M.ROSTER_DEPTH_DECAY_HITTER == pytest.approx(0.75)
 
 
@@ -233,3 +236,49 @@ def test_the_end_of_rotation_starts_anchor_moved_with_its_innings():
     depth = row["ip"] / row["gs"]
     assert 4.9 <= depth <= 5.5, f"{depth:.2f} innings per start"
     assert depth < mid["ip"] / mid["gs"], "an SP4 does not outlast an SP2"
+
+
+def test_the_depth_rank_is_about_the_job_not_the_calendar():
+    """A late arrival was charged for arriving twice.
+
+    `pt_raw` already carries the timing share, so a July callup reached the
+    ranking at half volume, sorted BELOW the incumbents for it, and then had
+    the roster-depth decay take most of what was left. The rank means "he is
+    the Nth man at this job on this club" — a statement about the job, not
+    about when he takes it up — so the timing is divided back out before
+    sorting and left to do its own work once.
+
+    Same family, same role, same anchor; one arrives in July. He must rank
+    level with the man who is there all year, not behind him.
+    """
+    players = pd.DataFrame({
+        "PlayerId": [1, 2],
+        "Name": ["all year", "arrives in July"],
+        "Pred_target_team_id": [120, 120],
+        "pt_tier": ["projected", "projected"],
+        "pt_role": ["Bench Bat", "Bench Bat"],
+        "pt_role_start": ["Opening Day", "Mid Season (~July)"],
+        "pt_raw": [200.0, 100.0],
+    })
+    out = M.apply_roster_depth(players, "hitter")
+    assert out["pt_depth_rank"].tolist() == [1.0, 2.0]
+    # Level pegging on the standing means neither is pushed past the core
+    # into the decay, so the July man keeps his full (halved) volume.
+    assert out["pt_depth_factor"].tolist() == [1.0, 1.0]
+
+    # And the one who really is the lesser player still sorts behind him.
+    players.loc[1, "pt_raw"] = 40.0
+    out = M.apply_roster_depth(players, "hitter")
+    assert out["pt_depth_rank"].tolist() == [1.0, 2.0]
+
+
+def test_the_depth_floor_carries_the_tail_a_real_club_has():
+    """At 0.04 the decay ran off a cliff rather than tapering: everyone past
+    about the tenth man past the core sat on the same floor, and a club's
+    18th-32nd came out at 57% (arms) and 65% (bats) of real. The real curves
+    do not end — a real club's 30th pitcher throws three innings and its 24th
+    position player bats — so the floor has to carry that."""
+    assert M.ROSTER_DEPTH_FLOOR == pytest.approx(0.10)
+    # Still a floor rather than a second anchor: the deepest man keeps a
+    # tenth of his role, not a third of it.
+    assert 0.05 <= M.ROSTER_DEPTH_FLOOR <= 0.15

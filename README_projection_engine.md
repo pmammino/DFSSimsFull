@@ -932,10 +932,18 @@ Two things were measured rather than assumed:
   fairer. It is not: those bands added 34 names at a **median of 3.8 plate
   appearances**, because a September arrival on a 117-plate-appearance anchor
   is a fifth of a season of a job that barely exists. They were noise with a
-  name attached, and they cost the rank curve 0.0250 against 0.0228 for
-  stopping at Triple-A's top 200 and Double-A's top 40 — at the same share of
-  the league. The league's playing time is fixed, so a name that takes nothing
-  still takes a roster place.
+  name attached, and they cost the rank curve 0.0250 against 0.0228 for the
+  top 200 and top 40 alone — at the same share of the league. The league's
+  playing time is fixed, so a name that takes nothing still takes a roster
+  place.
+* **What a band claims, which turns out to be the better question than how far
+  it reaches.** The second Double-A band (ranks 41-100) goes where the rejected
+  one went and works, because it claims something different: a **July callup to
+  a bench job**, which is a real thing that happens to a top-100 prospect,
+  rather than a September arrival to an injury-replacement job. Eleven more
+  names at a median of 31 plate appearances and a minimum of 5.5, and the rank
+  curve *improves* to **0.0212**. Andrew Fischer — 93rd on the list, 23, sixth
+  in Milwaukee's farm — is the case that prompted it.
 * **That an arrival has to compete for the time.** Two places treat the
   projected tier as "who is on the roster": the floor in
   `allocate_playing_time` and the depth ranking in `apply_roster_depth`. The
@@ -950,9 +958,22 @@ Two things were measured rather than assumed:
   club's depth order like anybody else.
 
 With both, `ROSTER_DEPTH_DECAY_HITTER` refits to **0.75** and the hitter rank
-curve comes to **0.0228 — better than the 0.0278 it managed with no arrivals at
-all**. 31 prospects carry a real projection, median 58 plate appearances, six
-of them regulars over 250. The model still names far fewer debutants than the
+curve comes to **0.0200 — better than the 0.0278 it managed with no arrivals at
+all**. 42 prospects carry a real projection, median 38 plate appearances,
+ninetieth percentile 302.
+
+The weight each band puts on its *real job* rather than its fallback was set
+too low at first and has been raised: the median arrival goes from 30.9 plate
+appearances to 38.5 and the ninetieth percentile from 280 to 302, while the
+rank curve improves from 0.0212 to 0.0200. It stops where it does because of a
+**cliff rather than a slope** — one step further and the Double-A top-40 band
+tips from `Bench Bat` to `Full Time` as its heaviest role, and since the modal
+role picks the family a player is ranked in, the whole band would leave the
+bench queue and compete with regulars for the top of a club. The curve says so
+loudly: 0.0200 here, 0.0457 one step past. The arms move the same way and gain
+much less (median 21.8 to 23.2 innings), because the mixture is not what binds
+them — every arriving arm leaves the anchor stage at the same ~41 innings and
+then differs only by where he ranks in a 12-deep rotation family with 6 slots. The model still names far fewer debutants than the
 114 who really arrive, and that is the honest limit: the ones it leaves at the
 floor are the ones nobody saw coming.
 
@@ -1016,6 +1037,152 @@ competing for a full seat: 19 arms, median 21.8 innings, and the fit improves
 The remaining gap at ranks 25-40 is the shuttle-reliever population, and it
 stays open on purpose. Filling it would mean naming ~450 relievers league-wide
 that no feed can identify.
+
+#### Age, and why two thirds of it was 25
+
+Every player with no major-league history was coming out at exactly 25, and it
+was not a coincidence: `mle_translations._age_from_chadwick` falls back to
+`MLE_DEFAULT_AGE` (24) for the translated season whenever the Chadwick lookup
+misses, and the rate models age him forward one year to the target. Chadwick
+misses most players who have never reached the majors — which is precisely the
+population the MLE stage exists to translate — so 1,941 of 2,894 hitters and
+2,615 of 4,047 pitchers read 25. Andrew Fischer read 25 while `prospects.xml`
+on disk gave his birth date as 2004.
+
+A defaulted age is not inert. It goes into the aging curve, so every one of
+those players was being projected as if 24. Three sources now answer it before
+the default does:
+
+1. **A birth date on the stat record itself**, carried through from statsapi
+   when the endpoint hydrates one.
+2. **The prospects feed**, which states a birth date for all 400 players in it
+   — the same number the arrival table already uses to tell a 21-year-old at
+   Triple-A from a 27-year-old. `role_feeds.prospect_birth_years` exposes it to
+   the MLE stage, which runs long before any of the role machinery.
+3. **Chadwick**, as before.
+
+`role_feeds.repair_ages` then fixes the column a second time at the role stage,
+so a workbook rebuilt with `--refresh-playing-time` is correct without a full
+pipeline run. It only ever replaces the default — a player whose age came from
+his own major-league record keeps it, because that record is the better source
+and the feed's birth date is one more name join that can go wrong.
+
+That takes the defaulted hitters from 1,941 to 1,746 and the pitchers from
+2,615 to 2,542 on the committed snapshot. **The rest are players no feed on
+disk names**, and they need either a working Chadwick fetch or a hydrated
+statsapi person object — both of which the code now consumes when present.
+
+#### The depth ranking, and two things it was getting wrong
+
+The roster-depth discount is what decides how much of his anchor a player
+keeps once he is past his club's core, and it was wrong in two independent
+ways that only showed up when the prospect arrivals landed in the middle of
+it.
+
+**A late arrival was charged for arriving twice.** `pt_raw` already carries
+the timing share, so a July callup reached the ranking at half volume, sorted
+*below* the incumbents for it, and then had the decay take most of what was
+left. The depth rank means "he is the Nth man at this job on this club" — a
+statement about the job, not about when he takes it up; a shortstop back from
+a broken hand in June is still the shortstop. This is the same pathology as
+the lineup-spot multiplier and the pitcher's season share: one signal spent in
+two places. Dividing the timing back out before sorting takes the median
+prospect arrival from **38.5 plate appearances to 88.5**, against a real debut
+median of 92. It is worth almost nothing on a pitching staff, where an
+arriving arm is already near the top of his role tier, and it is kept there
+anyway because it is a correction rather than a knob.
+
+**The decay ran off a cliff rather than tapering.** At `ROSTER_DEPTH_FLOOR =
+0.04`, 0.66 and 0.75 to the tenth power are both effectively zero, so everyone
+past about the tenth man beyond the core sat on the same floor. A club's 18th
+to 32nd came out at **57% (arms) and 65% (bats)** of what real clubs give those
+ranks. The real curves do not end — a real club's 30th pitcher throws three
+innings and its 24th position player bats — so the floor has to be high enough
+to carry that tail. It and `ROSTER_DEPTH_DECAY_PITCHER` had to be refitted
+*together*, because the floor decides where the taper ends and the decay how
+fast it gets there; fitting either alone finds a compromise that is wrong for
+both.
+
+| | hitters | pitchers |
+|---|---|---|
+| per-player error vs the real curve | 0.217 → **0.205** | 0.248 → **0.166** |
+| ranks 18-32 as a share of real | 0.647 → **0.973** | 0.566 → **0.874** |
+| top-twenty rank rmse | 0.0200 → 0.0232 | 0.0736 → **0.0464** |
+| median prospect arrival | 38.5 PA → **88.5** | 23.2 IP → **25.4** |
+
+Settings: `ROSTER_DEPTH_FLOOR` 0.04 → **0.10**, `ROSTER_DEPTH_DECAY_PITCHER`
+0.66 → **0.70**, hitter decay unchanged at 0.75.
+
+The one thing that gets worse is the hitters' top-twenty fit, and it is a real
+trade rather than a rounding error: the regulars give up a little so that the
+bottom half of a roster stops being empty. It is still far better than the
+0.0762 this started at.
+
+#### Which pitcher volume form, measured properly
+
+The depth refit flipped which form fits the top of the staff better, so both
+were measured against every calibration target at the same settings. The two
+differ by which reading of a pitcher's own record scales his role: two terms
+(appearances x innings per appearance) or one (his season total over the
+anchor).
+
+| | decomposed | product | real |
+|---|---|---|---|
+| rank rmse, ranks 1-12 | 0.0265 | **0.0225** | 0 |
+| rank rmse, ranks 1-20 | 0.0464 | **0.0336** | 0 |
+| per-player error | **0.1664** | 0.1781 | 0 |
+| ranks 18-32 of real | **0.874** | 0.851 | 1.00 |
+| pitchers past 180 IP | 16 | **17** | 17.7 |
+| innings-vs-appearances, SP / RP | **+0.59 / +0.80** | +0.54 / +0.74 | — |
+
+`PITCHER_VOLUME_DECOMPOSED = False`. The rank curve is what the anchors are
+fitted against and the product form is 28% closer to it over the top twenty,
+while landing the workhorse count the decomposition was brought in to fix (29
+before either; both in range now). It gives up 7% on the per-player error
+across the whole staff, a little of the thin band, and some injury
+sensitivity — batters faced conflates "he was hurt" with "he was taken out
+early", where an appearance count does not.
+
+**`pt_durability` is not the difference, in either direction.** It is exactly
+1.000 for all 4,047 arms, because `DURABILITY_KINDS` is `{"hitter"}` — no
+pitcher reaches the 100-game bar the hitter version was fitted on. A pitcher's
+missed time reaches the decomposed form through `pt_apps_exp` and the product
+form through `evidence_volume`. Both are live; they are different channels for
+the same fact, which is why both forms still project a hurt pitcher for fewer
+innings and the test that checks it now runs under both.
+
+Worth re-measuring if the depth floor or decay move again (this margin reversed
+once already when they were refitted), or if the anchors are refitted.
+
+#### Why pitcher durability stays off
+
+It was measured again with the 2x2 of {durability off, on} x {product,
+decomposed}, and the answer is not the one in the original note. That note said
+appearances and innings are decoupled across roles (-0.217 league-wide) — still
+true of the data, but no longer the reason, because both `durability` and
+`expected_appearances` now regress within the `pt_role` cohort.
+
+The reason now is that pitcher durability is **redundant by construction in
+both forms**, because each one already reads a pitcher's absence from his own
+record exactly once. A second read can only cancel or leak:
+
+* **Decomposed** — computed and never used. `expected_appearances` takes the
+  pitcher's own weighted appearances regressed toward his role cohort and never
+  calls `durability()`. Switched on, the column varies (sd 0.066) and `Proj_IP`
+  is **bit-identical** for all 4,047 arms.
+* **Product** — cancels algebraically. `_evidence_factor` divides the evidence
+  by durability precisely to avoid double-counting an absence, and the raw
+  volume multiplies it straight back. What survives is only where the evidence
+  clip binds — 51% of the staff — and the effect there is 3.4x the unclipped
+  half (4.57% against 1.35% median change in innings, correlated +0.572 against
+  +0.237). A bound leaking, not a signal, and it measures like one: four of five
+  targets worse, including pitchers past 180 innings going 17 to 20 against a
+  real 17.7.
+
+Making it bite would mean removing the evidence-factor division — the
+double-count this model has already made four times — or replacing one of the
+existing reads rather than adding to it, which is a redesign of the volume chain
+rather than a constant.
 
 ### Availability, and why it is not a role
 

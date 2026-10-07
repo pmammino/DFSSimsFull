@@ -142,9 +142,52 @@ FEED_DIR = "feeds"
 FREE_AGENT_PLAYING_TIME = "open"
 
 # Project a pitcher's innings as APPEARANCES x INNINGS PER APPEARANCE rather
-# than as one number. See `durability` and `raw_volumes`: it is what lets
-# availability apply to the quantity availability governs.
-PITCHER_VOLUME_DECOMPOSED = True
+# than as one number, instead of as the role anchor scaled by his evidence
+# factor. Both forms are live and `test_the_decomposition_earns_its_place_
+# against_the_product` measures them against each other on every run.
+#
+# TURNED OFF on the measurement, and it is a genuine trade rather than a
+# correction — what follows is the case against the setting as well as for
+# it, because the margin is not wide.
+#
+# The two forms differ by which reading of a pitcher's own record scales his
+# role: two terms (how often he is handed the ball, how long he stays once
+# he has it) or one (his season total over the anchor). Note that
+# `pt_durability` is NOT the difference, in either direction: it is exactly
+# 1.000 for all 4,047 arms, because `durability.DURABILITY_KINDS` is
+# {"hitter"} — no pitcher reaches the 100-game bar the hitter version was
+# fitted on. A pitcher's missed time reaches the decomposed form through
+# `pt_apps_exp`, his own appearance record, and the product form through
+# `evidence_volume`, his own batters faced. Both are live; they are
+# different channels for the same fact.
+#
+# Measured at the same depth settings, one term fits better where it counts:
+#
+#                        decomposed   product     real
+#   rank rmse 1-12          0.0265     0.0225       0
+#   rank rmse 1-20          0.0464     0.0336       0
+#   per-player error        0.1664     0.1781       0
+#   ranks 18-32 of real      0.874      0.851     1.00
+#   pitchers past 180 IP        16         17     17.7
+#
+# The rank curve is what the anchors are fitted against and the product form
+# is 28% closer to it over the top twenty, while landing the workhorse count
+# the decomposition was originally brought in to fix (it was 29 before
+# either; both are now in range).
+#
+# WHAT IT GIVES UP, stated plainly: 7% on the per-player error across the
+# whole staff, a little of the thin band, and some sensitivity to injury.
+# Innings against appearances, each relative to the role, correlate +0.591
+# (starters) and +0.801 (relievers) under the decomposition against +0.535
+# and +0.737 under the product — both respond, the decomposition more
+# sharply, because batters faced conflates "he was hurt" with "he was taken
+# out early", where an appearance count does not.
+#
+# Worth re-measuring if any of three things change: pitcher durability being
+# switched on, the roster-depth floor or decay moving again (this margin
+# reversed once already when they were refitted), or the anchors being
+# refitted against the rank curve.
+PITCHER_VOLUME_DECOMPOSED = False
 
 # How far a pitcher's appearances times his innings per appearance may carry
 # him from his ROLE's innings anchor. Its own constant, because it bounds a
@@ -584,9 +627,29 @@ ROSTER_DEPTH_CORE = {"hitter": 13, "pitcher": 13}   # deprecated
 # managed with no arrivals at all — the arriving prospect displaces a club's
 # last men rather than joining them, and the real curve prefers him there.
 ROSTER_DEPTH_DECAY_HITTER = 0.75
-ROSTER_DEPTH_DECAY_PITCHER = 0.66
+# Refitted from 0.66 to 0.70 alongside the floor, and the two had to move
+# together: the floor decides where the taper ends and the decay how fast it
+# gets there, so fitting either alone found a compromise that was wrong for
+# both. Jointly, the staff's top-twenty fit improves from 0.0736 to 0.0464 —
+# the single largest gain the pitcher side has had — because the innings the
+# old decay buried past rank 18 were coming off ranks 12 to 16, which ran 3
+# to 10% above the real curve to absorb them.
+ROSTER_DEPTH_DECAY_PITCHER = 0.70
 ROSTER_DEPTH_DECAY = ROSTER_DEPTH_DECAY_HITTER   # back-compat alias
-ROSTER_DEPTH_FLOOR = 0.04
+# The least a player past his club's core may keep, as a share of his own
+# anchor. It was 0.04, and at that value the decay ran off a cliff rather
+# than tapering: a club's 18th to 32nd men came out at 57% (arms) and 65%
+# (bats) of what real clubs give those ranks, because 0.66 and 0.75 to the
+# tenth power are both effectively zero and everyone past that sat on the
+# same floor. The real curves do not end — a real club's 30th pitcher throws
+# three innings and its 24th position player bats — so the floor has to be
+# high enough to carry that tail.
+#
+# At 0.10 the band comes to 0.87 and 0.97 of real and the per-player error
+# against the real rank curve falls from 0.248 to 0.166 for pitchers and
+# 0.217 to 0.205 for hitters. Higher overshoots: by 0.14 the tail is above
+# the real curve and the error climbs again.
+ROSTER_DEPTH_FLOOR = 0.10
 
 # Minimum evidence (batters faced) before a reliever is considered for a
 # LEVERAGE role — closer or setup. ~100 TBF is about 25 innings; under that,
@@ -664,7 +727,27 @@ def apply_roster_depth(players: pd.DataFrame, kind: str, *,
     # mixes the two.
     sub = out.loc[eligible].copy()
     sub["_order"] = sub["pt_role"].astype(str).map(role_depth_order)
-    sub = sub.sort_values(["_order", "pt_raw"], ascending=[True, False])
+    # RANK ON THE JOB, NOT ON HOW MUCH OF THE SEASON HE IS THERE FOR.
+    #
+    # The depth rank means "he is the Nth man at this job on this club",
+    # which is a statement about the job and not about when he takes it up —
+    # a shortstop back from a broken hand in June is still the shortstop.
+    # Ranking on `pt_raw` charged a late arrival twice: the timing had
+    # already halved his volume, and he was then sorted BELOW the incumbents
+    # for having been halved, so the decay took most of what was left. It is
+    # the same pathology as the lineup-spot multiplier and the pitcher's
+    # season share — one signal spent in two places.
+    #
+    # Dividing it back out is worth a lot on the bench, where the queue is
+    # long and the decay compounds over many ranks: the median prospect
+    # arrival goes from 38.5 plate appearances to 88.5, against a real debut
+    # median of 92. It is worth almost nothing on a pitching staff, where an
+    # arriving arm is already near the top of his role tier, and it is kept
+    # there anyway because it is a correction rather than a knob.
+    timing = (sub["pt_role_start"].map(timing_share).astype(float)
+              .fillna(1.0).clip(lower=0.05))
+    sub["_standing"] = sub["pt_raw"] / timing
+    sub = sub.sort_values(["_order", "_standing"], ascending=[True, False])
     rank = (sub.groupby([sub[team_col], sub["pt_family"]]).cumcount() + 1
             ).reindex(out.loc[eligible].index)
     out.loc[eligible, "pt_depth_rank"] = rank
@@ -747,6 +830,25 @@ def raw_volumes(players: pd.DataFrame, kind: str,
     else:
         out["Proj_vL_share"] = vl
 
+    if kind == "pitcher":
+        # The two halves of a pitcher's innings, completed with the role's
+        # own answer where his record has none. Written for EVERY pitcher,
+        # not only when they are multiplied together below: the report and
+        # the roles workbook both show them as "Exp Apps" and "IP/App", and
+        # a blank there is a column that stops meaning anything the moment
+        # the volume form changes under it.
+        anchor_apps = pd.to_numeric(out["pt_anchor_G"], errors="coerce")
+        out["pt_apps_exp"] = (
+            pd.to_numeric(out.get("pt_apps_exp"), errors="coerce")
+            if "pt_apps_exp" in out.columns
+            else pd.Series(np.nan, index=out.index)).fillna(anchor_apps)
+        out["pt_ip_per_app_exp"] = (
+            pd.to_numeric(out.get("pt_ip_per_app_exp"), errors="coerce")
+            if "pt_ip_per_app_exp" in out.columns
+            else pd.Series(np.nan, index=out.index)).fillna(
+                (out["pt_anchor"]
+                 / anchor_apps.where(anchor_apps > 0)).fillna(0.0))
+
     if kind == "pitcher" and PITCHER_VOLUME_DECOMPOSED:
         # Innings are APPEARANCES times INNINGS PER APPEARANCE, and the two
         # answer different questions. How often a pitcher is handed the ball
@@ -768,20 +870,8 @@ def raw_volumes(players: pd.DataFrame, kind: str,
         # often he is handed the ball and `pt_ip_per_app_rel` how long he
         # stays. It stays computed, because the report and the workbook read
         # it, and it is simply not spent twice.
-        anchor_apps = pd.to_numeric(out["pt_anchor_G"], errors="coerce")
-        apps = (pd.to_numeric(out["pt_apps_exp"], errors="coerce")
-                if "pt_apps_exp" in out.columns
-                else pd.Series(np.nan, index=out.index)).fillna(anchor_apps)
-        out["pt_apps_exp"] = apps
-        # The role's own implied rate stands in where a pitcher has no
-        # record to read one from.
-        fallback = (out["pt_anchor"]
-                    / anchor_apps.where(anchor_apps > 0)).fillna(0.0)
-        ipa = (pd.to_numeric(out["pt_ip_per_app_exp"], errors="coerce")
-               if "pt_ip_per_app_exp" in out.columns
-               else pd.Series(np.nan, index=out.index)).fillna(fallback)
-        out["pt_ip_per_app_exp"] = ipa
-        raw = apps.fillna(0.0) * ipa
+        raw = (out["pt_apps_exp"].fillna(0.0)
+               * out["pt_ip_per_app_exp"])
         # The ROLE as a bound, not as a multiplier. Appearances and innings
         # per appearance are each regressed 60/40 toward the men doing the
         # same job, and a pitcher above his cohort on both compounds the two
