@@ -667,6 +667,132 @@ def test_the_real_feed_sends_up_about_as_many_as_really_come_up():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Prospect arrivals: arms
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _arm(**kw):
+    ev = {"depth_pos": "PROS", "depth_rank": 3, "level": "AAA",
+          "prospect_rank": 22, "birth_year": 2004, "own_role": "starter"}
+    ev.update(kw)
+    return ev
+
+
+def test_a_starting_pitching_prospect_arrives_as_an_innings_limited_starter():
+    """The anchor that exists for exactly this man. A 23-year-old does not get
+    handed a rotation slot for a full season, and projecting him as one would
+    be the claim that he does."""
+    mix, src = RF.pitcher_role_from_feeds(_arm())
+    assert src == "feed:prospect"
+    assert max(mix, key=mix.get) == "Innings-Limited Starter"
+    assert len(mix) >= 3 and max(mix.values()) < 0.5
+
+
+def test_the_feed_cannot_tell_a_rotation_arm_from_a_shuttle_reliever():
+    """`Position` is a bare "P" for all 128 arms in the prospects feed, and
+    the two populations differ by a factor of eight in innings — a real debut
+    starter takes a median of 72, a debut reliever 9. The pitcher's OWN
+    record is what separates them, so without one there is no arrival."""
+    assert RF.pitcher_prospect_read(_arm(own_role=None)) is None
+    assert RF.pitcher_prospect_read(_arm(own_role="")) is None
+    pr = RF.read_prospects(FEEDS / "prospects.xml") if (
+        FEEDS / "prospects.xml").exists() else None
+    if pr is not None:
+        arms = pr[pr["feed_position"].astype(str).str.upper() == "P"]
+        assert len(arms) > 100
+        assert set(arms["feed_position"]) == {"P"}
+
+
+def test_a_relief_prospect_is_left_at_the_floor():
+    """Not an oversight — see PITCHER_ARRIVAL. Nine innings is not a
+    projection, a club's twentieth relief arm is past the end of the decay
+    anyway, and "reliever" on a six-inning record is the weakest reading in
+    the feed."""
+    assert RF.pitcher_prospect_read(_arm(own_role="reliever")) is None
+    mix, src = RF.pitcher_role_from_feeds(_arm(own_role="reliever"))
+    assert src != "feed:prospect"
+    assert max(mix, key=mix.get) == "Depth (no MLB IP)"
+
+
+def test_an_arm_the_staff_has_already_placed_is_up():
+    """The rotation's order and the bullpen's pecking order are both
+    placements, and either one means the prospect list is out of date."""
+    placed = {"depth_pos": "P", "depth_rank": 2}
+    mix, src = RF.pitcher_role_from_feeds(_arm(**placed))
+    assert src != "feed:prospect"
+    assert (mix, src) == RF.pitcher_role_from_feeds(placed)
+
+    mix, src = RF.pitcher_role_from_feeds(_arm(rw_role="CLOSER"))
+    assert src != "feed:prospect"
+    assert max(mix, key=mix.get) == "Closer"
+
+
+def test_the_arm_table_reaches_further_down_the_rank_list():
+    """Not generosity: the feed publishes ONE combined top 400, so a
+    pitcher's rank is his standing among bats as well as arms and the 128
+    arms are spread through it. Matching the hitters' cutoffs would mean
+    reaching a third as far, not being equally strict."""
+    for level in ("AAA", "AA"):
+        arm = max(c for c, _, _ in RF.PITCHER_ARRIVAL[level])
+        bat = max(c for c, _, _ in RF.PROSPECT_ARRIVAL[level])
+        assert arm > bat, level
+
+
+def test_an_arm_too_old_for_the_table_is_organisational_depth():
+    assert RF.pitcher_prospect_read(_arm(birth_year=1998)) is None
+    mix, _ = RF.pitcher_role_from_feeds(_arm(birth_year=1998))
+    assert max(mix, key=mix.get) == "Depth (no MLB IP)"
+
+
+def test_every_arm_arrival_mixture_is_a_distribution_of_starters():
+    from role_taxonomy import role_family, role_names
+    known = set(role_names("pitcher"))
+    for level, bands in RF.PITCHER_ARRIVAL.items():
+        cutoffs = [c for c, _, _ in bands]
+        assert cutoffs == sorted(cutoffs), level
+        for cutoff, timing, mix in bands:
+            assert sum(mix.values()) == pytest.approx(1.0), (level, cutoff)
+            assert set(mix) <= known, (level, cutoff)
+            assert timing in [t[0] for t in TIMING], (level, cutoff)
+            # The MODAL role picks the family a player is ranked in, and a
+            # rookie starter competes with his club's rotation for innings,
+            # not with its bullpen. A mixture that tipped to a relief role
+            # would quietly move him into a 20-deep queue with 8 slots.
+            assert role_family(max(mix, key=mix.get)) == "SP", (level, cutoff)
+
+
+@has_feeds
+def test_the_real_feed_calls_up_about_as_many_arms_as_really_start():
+    """Calibrated against the real thing. Real first-year pitchers are 181 a
+    season at a median of 12.7 innings, but that hides two populations: 23 to
+    34 of them START games and take a median of 72 innings, and the rest are
+    shuttle relievers. This table is aimed at the first group only.
+    """
+    src = pd.read_csv(ROOT / "out" / "pitcher_pa_projections_2027.csv",
+                      low_memory=False)
+    df = src[[c for c in src.columns if not c.startswith("Proj_")
+              and not (c.startswith("pt_") and c != "pt_tier")]]
+    out, _, _ = M.project_playing_time(
+        df, "pitcher", target_year=2027,
+        fielding=pd.read_csv(ROOT / "out" / "fielding_history_2027.csv",
+                             low_memory=False),
+        feed_dir=FEEDS)
+    up = out[out["pt_role_source"].astype(str) == "feed:prospect"]
+    assert 10 <= len(up) <= 40, len(up)
+
+    ip = up["Proj_IP"]
+    # Real debut arms sit at a median of 12.7 innings; these are the
+    # starting end of that population, so above it and well short of the
+    # 72-inning median of the ones who hold a rotation spot all year.
+    assert 10 <= ip.median() <= 45, ip.median()
+    assert ip.max() < 120, ip.max()
+    assert ip.sum() / out["Proj_IP"].sum() < 0.03
+
+    # They land in the band the model was starving: a real club's 18th to
+    # 25th arm takes 23 innings down to 6, where the model was giving 5 to 3.
+    assert up["pt_depth_rank"].notna().all()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Against the real snapshot
 # ─────────────────────────────────────────────────────────────────────────────
 

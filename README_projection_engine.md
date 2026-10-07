@@ -956,6 +956,67 @@ of them regulars over 250. The model still names far fewer debutants than the
 114 who really arrive, and that is the honest limit: the ones it leaves at the
 floor are the ones nobody saw coming.
 
+#### Arms are a different table
+
+A pitching prospect's first season looks nothing like a hitter's. Real
+first-year pitchers are more numerous and take far less each — **181 in the
+most recent season against 114 position players, at a median of 12.7 innings
+against 92 plate appearances** — and only 6 of the 181 cleared 100 innings.
+Between them the two groups are 9.1% and 8.9% of their league's playing time,
+arrived at completely differently.
+
+That median hides two populations. About **23 to 34 a season start games and
+take a median of 72 innings**; the other ~170 are relief arms shuttling up for
+a handful of outings. `PITCHER_ARRIVAL` is aimed at the first group only, and
+three independent things point that way:
+
+* Nine innings is not a projection — the same judgement that stops the hitter
+  table at Triple-A's top 200.
+* A club carries ~20 relief arms in the projected tier against 8 core bullpen
+  slots, so an arriving reliever sorts 16th-20th of 20 and the decay hands him
+  ~1 inning whatever the table claims.
+* "Reliever" is the weakest reading in the feed. The classification is innings
+  per appearance — sharp where there is a record (real starters run 4.0-5.4,
+  relievers 0.3-3.4) but a prospect with six career innings reads as a reliever
+  on nothing. A *starter* classification on a thin record cannot happen by
+  accident.
+
+**The feed cannot tell the two apart**: `Position` is a bare `P` for all 128
+arms in it. What separates them is the pitcher's own `role`, which the pipeline
+already derives from his game log including the minor-league lines — a source
+about *him* rather than about his club's plans, which is what makes it the
+right key.
+
+Two differences from the hitter table, both deliberate:
+
+* **The cutoffs run deeper** (Triple-A's top 100 and 250, Double-A's top 150,
+  against the hitters' 200 and 40). The feed publishes one combined top 400, so
+  a pitcher's rank is his standing among bats as well as arms and the 128 arms
+  are spread through it. Matching the hitters' numbers would mean reaching a
+  third as far, not being equally strict. Reaching further still was measured
+  and rejected: Triple-A to 400 roles 30 arms instead of 19 but drops the
+  median from 21.8 innings to 8.5 and takes *less* total — the extra names push
+  each other down the decay.
+* **The mixtures stay modal-starter.** The modal role picks the family a player
+  is ranked in, and a rookie starter competes with his club's rotation for
+  innings, not with its bullpen. They lean on `Innings-Limited Starter`, the
+  anchor that exists for exactly this man, rather than on a rotation slot a
+  23-year-old will not hold all year.
+
+`ROSTER_DEPTH_DECAY_PITCHER` does **not** move, and this is the informative
+part. The hitter decay had to be refitted because the arrivals pushed a club
+past the real roster size. The pitching staff has the opposite problem: the
+real rank curve runs out to **40 arms a club**, and the model carries 31.5. Its
+ranks 1-17 track the real curve within 10%, and then it starves ranks 18-32 —
+giving 5 to 1 innings where real clubs give 23 down to 3. That band is exactly
+where a mid-season callup lives, so the arrivals fill a hole rather than
+competing for a full seat: 19 arms, median 21.8 innings, and the fit improves
+(mean absolute error 0.2540 to 0.2481) with the decay left where it was.
+
+The remaining gap at ranks 25-40 is the shuttle-reliever population, and it
+stays open on purpose. Filling it would mean naming ~450 relievers league-wide
+that no feed can identify.
+
 ### Availability, and why it is not a role
 
 A season's plate appearances are the product of two unrelated things — how
