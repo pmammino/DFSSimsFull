@@ -31,6 +31,8 @@ sys.path.insert(0, str(ROOT))
 
 import durability as D  # noqa: E402
 import playing_time_model as M  # noqa: E402
+
+DECOMPOSED = M.PITCHER_VOLUME_DECOMPOSED
 import role_feeds as RF  # noqa: E402
 
 FIELDING = ROOT / "out" / "fielding_history_2027.csv"
@@ -435,18 +437,41 @@ def test_a_pitchers_innings_are_his_two_numbers_multiplied():
 def test_missing_a_season_costs_a_pitcher_appearances_not_his_job():
     """Félix Bautista, who comes out 28.3 appearances at 0.99 innings each.
     Being hurt shows up in how often he is handed the ball; it does not make
-    him a different pitcher once he has it."""
+    him a different pitcher once he has it.
+
+    A missed season shows up in BOTH of a pitcher's records, and the fixture
+    now says so: he is handed the ball less often (the appearance history)
+    and he therefore faces fewer batters (`evidence_volume`). Setting only
+    the first was testing the decomposed form's private channel rather than
+    the behaviour — under the product form the two arms came out at
+    identical innings, which looks like a model that ignores injury and is
+    really a fixture describing an injury that left no trace on the stat
+    line. Both volume forms must handle a real one.
+    """
     df = _arms(n=12)
     ids = list(df["PlayerId"])
     healthy, hurt = ids[0], ids[1]
-    out, _, _ = M.project_playing_time(
-        df, "pitcher", target_year=2027,
-        fielding=_arm_history(df, {healthy: 65, hurt: 20}, {}),
-        feed_dir=None)
-    a = out[out["PlayerId"] == healthy].iloc[0]
-    b = out[out["PlayerId"] == hurt].iloc[0]
-    assert b["pt_apps_exp"] < a["pt_apps_exp"]
-    assert b["Proj_IP"] < a["Proj_IP"]
+    df.loc[df["PlayerId"] == hurt, "evidence_volume"] = 260.0 * 20 / 65
+    history = _arm_history(df, {healthy: 65, hurt: 20}, {})
+
+    # Under BOTH volume forms, because which one is live is a fitted choice
+    # that has already changed once.
+    for flag in (True, False):
+        M.PITCHER_VOLUME_DECOMPOSED = flag
+        try:
+            out, _, _ = M.project_playing_time(
+                df, "pitcher", target_year=2027, fielding=history,
+                feed_dir=None)
+        finally:
+            M.PITCHER_VOLUME_DECOMPOSED = DECOMPOSED
+        a = out[out["PlayerId"] == healthy].iloc[0]
+        b = out[out["PlayerId"] == hurt].iloc[0]
+        assert b["pt_apps_exp"] < a["pt_apps_exp"], flag
+        assert b["Proj_IP"] < a["Proj_IP"], flag
+        # And it is the APPEARANCES that carry it, not the job: he is the
+        # same pitcher per outing.
+        assert b["pt_ip_per_app_exp"] == pytest.approx(
+            a["pt_ip_per_app_exp"], rel=0.1), flag
     # Same job: the rate is what says what he does, and it is unchanged.
     assert b["pt_ip_per_app_exp"] == pytest.approx(
         a["pt_ip_per_app_exp"], rel=0.05)

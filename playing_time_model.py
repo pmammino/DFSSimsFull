@@ -142,9 +142,52 @@ FEED_DIR = "feeds"
 FREE_AGENT_PLAYING_TIME = "open"
 
 # Project a pitcher's innings as APPEARANCES x INNINGS PER APPEARANCE rather
-# than as one number. See `durability` and `raw_volumes`: it is what lets
-# availability apply to the quantity availability governs.
-PITCHER_VOLUME_DECOMPOSED = True
+# than as one number, instead of as the role anchor scaled by his evidence
+# factor. Both forms are live and `test_the_decomposition_earns_its_place_
+# against_the_product` measures them against each other on every run.
+#
+# TURNED OFF on the measurement, and it is a genuine trade rather than a
+# correction — what follows is the case against the setting as well as for
+# it, because the margin is not wide.
+#
+# The two forms differ by which reading of a pitcher's own record scales his
+# role: two terms (how often he is handed the ball, how long he stays once
+# he has it) or one (his season total over the anchor). Note that
+# `pt_durability` is NOT the difference, in either direction: it is exactly
+# 1.000 for all 4,047 arms, because `durability.DURABILITY_KINDS` is
+# {"hitter"} — no pitcher reaches the 100-game bar the hitter version was
+# fitted on. A pitcher's missed time reaches the decomposed form through
+# `pt_apps_exp`, his own appearance record, and the product form through
+# `evidence_volume`, his own batters faced. Both are live; they are
+# different channels for the same fact.
+#
+# Measured at the same depth settings, one term fits better where it counts:
+#
+#                        decomposed   product     real
+#   rank rmse 1-12          0.0265     0.0225       0
+#   rank rmse 1-20          0.0464     0.0336       0
+#   per-player error        0.1664     0.1781       0
+#   ranks 18-32 of real      0.874      0.851     1.00
+#   pitchers past 180 IP        16         17     17.7
+#
+# The rank curve is what the anchors are fitted against and the product form
+# is 28% closer to it over the top twenty, while landing the workhorse count
+# the decomposition was originally brought in to fix (it was 29 before
+# either; both are now in range).
+#
+# WHAT IT GIVES UP, stated plainly: 7% on the per-player error across the
+# whole staff, a little of the thin band, and some sensitivity to injury.
+# Innings against appearances, each relative to the role, correlate +0.591
+# (starters) and +0.801 (relievers) under the decomposition against +0.535
+# and +0.737 under the product — both respond, the decomposition more
+# sharply, because batters faced conflates "he was hurt" with "he was taken
+# out early", where an appearance count does not.
+#
+# Worth re-measuring if any of three things change: pitcher durability being
+# switched on, the roster-depth floor or decay moving again (this margin
+# reversed once already when they were refitted), or the anchors being
+# refitted against the rank curve.
+PITCHER_VOLUME_DECOMPOSED = False
 
 # How far a pitcher's appearances times his innings per appearance may carry
 # him from his ROLE's innings anchor. Its own constant, because it bounds a
@@ -787,6 +830,25 @@ def raw_volumes(players: pd.DataFrame, kind: str,
     else:
         out["Proj_vL_share"] = vl
 
+    if kind == "pitcher":
+        # The two halves of a pitcher's innings, completed with the role's
+        # own answer where his record has none. Written for EVERY pitcher,
+        # not only when they are multiplied together below: the report and
+        # the roles workbook both show them as "Exp Apps" and "IP/App", and
+        # a blank there is a column that stops meaning anything the moment
+        # the volume form changes under it.
+        anchor_apps = pd.to_numeric(out["pt_anchor_G"], errors="coerce")
+        out["pt_apps_exp"] = (
+            pd.to_numeric(out.get("pt_apps_exp"), errors="coerce")
+            if "pt_apps_exp" in out.columns
+            else pd.Series(np.nan, index=out.index)).fillna(anchor_apps)
+        out["pt_ip_per_app_exp"] = (
+            pd.to_numeric(out.get("pt_ip_per_app_exp"), errors="coerce")
+            if "pt_ip_per_app_exp" in out.columns
+            else pd.Series(np.nan, index=out.index)).fillna(
+                (out["pt_anchor"]
+                 / anchor_apps.where(anchor_apps > 0)).fillna(0.0))
+
     if kind == "pitcher" and PITCHER_VOLUME_DECOMPOSED:
         # Innings are APPEARANCES times INNINGS PER APPEARANCE, and the two
         # answer different questions. How often a pitcher is handed the ball
@@ -808,20 +870,8 @@ def raw_volumes(players: pd.DataFrame, kind: str,
         # often he is handed the ball and `pt_ip_per_app_rel` how long he
         # stays. It stays computed, because the report and the workbook read
         # it, and it is simply not spent twice.
-        anchor_apps = pd.to_numeric(out["pt_anchor_G"], errors="coerce")
-        apps = (pd.to_numeric(out["pt_apps_exp"], errors="coerce")
-                if "pt_apps_exp" in out.columns
-                else pd.Series(np.nan, index=out.index)).fillna(anchor_apps)
-        out["pt_apps_exp"] = apps
-        # The role's own implied rate stands in where a pitcher has no
-        # record to read one from.
-        fallback = (out["pt_anchor"]
-                    / anchor_apps.where(anchor_apps > 0)).fillna(0.0)
-        ipa = (pd.to_numeric(out["pt_ip_per_app_exp"], errors="coerce")
-               if "pt_ip_per_app_exp" in out.columns
-               else pd.Series(np.nan, index=out.index)).fillna(fallback)
-        out["pt_ip_per_app_exp"] = ipa
-        raw = apps.fillna(0.0) * ipa
+        raw = (out["pt_apps_exp"].fillna(0.0)
+               * out["pt_ip_per_app_exp"])
         # The ROLE as a bound, not as a multiplier. Appearances and innings
         # per appearance are each regressed 60/40 toward the men doing the
         # same job, and a pitcher above his cohort on both compounds the two

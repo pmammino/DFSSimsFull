@@ -1118,15 +1118,42 @@ trade rather than a rounding error: the regulars give up a little so that the
 bottom half of a roster stops being empty. It is still far better than the
 0.0762 this started at.
 
-**A side effect worth knowing about.** The refit flipped which pitcher volume
-form fits the top of the staff better. The decomposition (appearances x innings
-per appearance) used to beat the product form on ranks 1-12, 0.0269 to 0.0291;
-afterwards *both* improved but the product form improved more, to 0.0225
-against 0.0265. The decomposition is kept, because it is right about more of
-the staff (per-player error 0.166 against 0.178) and because keeping innings as
-two numbers is what lets a reliever's durability mean anything — but the test
-that asserted the old margin now measures the staff rather than its top twelve,
-which is the claim the decomposition actually earns.
+#### Which pitcher volume form, measured properly
+
+The depth refit flipped which form fits the top of the staff better, so both
+were measured against every calibration target at the same settings. The two
+differ by which reading of a pitcher's own record scales his role: two terms
+(appearances x innings per appearance) or one (his season total over the
+anchor).
+
+| | decomposed | product | real |
+|---|---|---|---|
+| rank rmse, ranks 1-12 | 0.0265 | **0.0225** | 0 |
+| rank rmse, ranks 1-20 | 0.0464 | **0.0336** | 0 |
+| per-player error | **0.1664** | 0.1781 | 0 |
+| ranks 18-32 of real | **0.874** | 0.851 | 1.00 |
+| pitchers past 180 IP | 16 | **17** | 17.7 |
+| innings-vs-appearances, SP / RP | **+0.59 / +0.80** | +0.54 / +0.74 | — |
+
+`PITCHER_VOLUME_DECOMPOSED = False`. The rank curve is what the anchors are
+fitted against and the product form is 28% closer to it over the top twenty,
+while landing the workhorse count the decomposition was brought in to fix (29
+before either; both in range now). It gives up 7% on the per-player error
+across the whole staff, a little of the thin band, and some injury
+sensitivity — batters faced conflates "he was hurt" with "he was taken out
+early", where an appearance count does not.
+
+**`pt_durability` is not the difference, in either direction.** It is exactly
+1.000 for all 4,047 arms, because `DURABILITY_KINDS` is `{"hitter"}` — no
+pitcher reaches the 100-game bar the hitter version was fitted on. A pitcher's
+missed time reaches the decomposed form through `pt_apps_exp` and the product
+form through `evidence_volume`. Both are live; they are different channels for
+the same fact, which is why both forms still project a hurt pitcher for fewer
+innings and the test that checks it now runs under both.
+
+Worth re-measuring if pitcher durability is switched on, if the depth floor or
+decay move again (this margin reversed once already when they were refitted),
+or if the anchors are refitted.
 
 ### Availability, and why it is not a role
 
