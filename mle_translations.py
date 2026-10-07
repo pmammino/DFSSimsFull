@@ -366,6 +366,44 @@ def translate_pitcher(obs: dict, level: str, pa_eff: float | None = None) -> dic
 # Build synthetic history rows + BIP profiles for a whole feed
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _age_for(mlbam: int, season: int, chadwick: pd.DataFrame,
+             births: dict[int, int] | None = None,
+             rec: dict | None = None) -> int:
+    """A translated player's age, from the best source that has one.
+
+    A STATED BIRTH YEAR FIRST. Two thirds of the players in the projection
+    were coming out at exactly MLE_DEFAULT_AGE + 1 — Chadwick misses most
+    players who have never reached the majors, which is precisely the
+    population this module exists to translate — and a defaulted age is not a
+    harmless placeholder: `rate_models` feeds it to the aging curve, so every
+    one of them was being aged as if 24. The prospects feed states a birth
+    date for all 400 players in it, and anything else that knows one can be
+    passed the same way.
+    """
+    for born in (_born(rec), (births or {}).get(int(mlbam))):
+        if born:
+            try:
+                return int(season) - int(born)
+            except (TypeError, ValueError):
+                pass
+    return _age_from_chadwick(chadwick, mlbam, season)
+
+
+def _born(rec: dict | None) -> int | None:
+    """A birth year off the stat record itself, when the feed carries one."""
+    if not rec:
+        return None
+    for key in ("birth_year", "birth_date", "birthDate"):
+        v = rec.get(key)
+        if v in (None, ""):
+            continue
+        try:
+            return int(str(v)[:4])
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _age_from_chadwick(chadwick: pd.DataFrame, mlbam: int, season: int) -> int:
     if chadwick is None or chadwick.empty or "birth_year" not in chadwick.columns:
         return MLE_DEFAULT_AGE
@@ -384,6 +422,7 @@ def build_synthetic_rows(feed: dict, role: str, target_year: int,
                          existing_ids: set[int],
                          season_offset: int = 1,
                          levels: tuple[str, ...] = ("AAA", "AA"),
+                         births: dict[int, int] | None = None,
                          ) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """Translate every record for one role into synthetic history rows.
 
@@ -438,7 +477,7 @@ def build_synthetic_rows(feed: dict, role: str, target_year: int,
             stats["used"] += 1
 
             name = rec.get("player") or f"{rec.get('firstname','')} {rec.get('lastname','')}".strip()
-            age = _age_from_chadwick(chadwick, mlbam, season)
+            age = _age_for(mlbam, season, chadwick, births, rec)
 
             if role == "hitter":
                 row = _hitter_row(mlbam, name, rec, season, age, pa_eff, tr)

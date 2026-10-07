@@ -352,6 +352,12 @@ def _fetch_minors_statsapi_one(season: int, sport_id: int, group: str,
             # The whole point: a native MLBAM id, so no name resolution.
             "mlbam_id":      p.get("id"),
             "player":        p.get("fullName"),
+            # Present only when the endpoint hydrates the person object;
+            # carried through rather than relied on, because a translated
+            # player with no birth date falls back to MLE_DEFAULT_AGE and is
+            # then aged as if 24 for the rest of the pipeline. Costs nothing
+            # when absent and removes a whole class of defaulted age when not.
+            "birth_date":    p.get("birthDate"),
             "position":      pos.get("abbreviation"),
             "team":          team.get("name"),
             "affiliate_id":  team.get("id"),

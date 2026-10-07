@@ -472,7 +472,7 @@ def test_a_top_prospect_at_triple_a_is_not_a_depth_player():
         {"club_has_orders": True, "depth_pos": "PROS", "depth_rank": 4,
          "level": "AAA", "prospect_rank": 12, "birth_year": 2005})
     assert src == "feed:prospect"
-    assert mix["Full Time"] == pytest.approx(0.40)
+    assert mix["Full Time"] == pytest.approx(0.47)
     assert "Depth (no MLB PA)" not in mix
 
 
@@ -667,6 +667,87 @@ def test_the_real_feed_sends_up_about_as_many_as_really_come_up():
     # And it stays a small share of the league: these are the last men onto
     # a roster, not a thirty-first club.
     assert pa.sum() / out["Proj_PA"].sum() < 0.05
+
+
+def test_the_mixtures_stop_short_of_changing_which_queue_a_player_is_in():
+    """The arrival weights were raised until just before a cliff, and the
+    cliff is a MODAL ROLE FLIP rather than a slope. The heaviest role picks
+    the family a player is ranked in, so one step further would move the
+    Double-A top-40 band out of the bench queue and into the lineup, to
+    compete with regulars for the top of a club instead of with the last men
+    for the bottom. The rank curve says 0.0200 here and 0.0457 one step past.
+    """
+    from role_taxonomy import role_family
+    for level, bands in RF.PROSPECT_ARRIVAL.items():
+        for cutoff, _, mix in bands:
+            heavy = max(mix, key=mix.get)
+            others = sorted(mix.values(), reverse=True)
+            # Still genuinely the heaviest, not a coin flip that rounding
+            # could tip into the other family.
+            assert others[0] - others[1] > 0.005, (level, cutoff)
+            if level == "AA" and cutoff == 40:
+                assert role_family(heavy) == "BENCH", mix
+
+
+def test_no_arrival_mixture_claims_more_than_half():
+    """The width is the point. Nobody knows whether a prospect called up in
+    May finishes the year as the regular or back on the bus, and a role over
+    0.5 would be a confidence that does not exist — on either side."""
+    for table in (RF.PROSPECT_ARRIVAL, RF.PITCHER_ARRIVAL):
+        for level, bands in table.items():
+            for cutoff, _, mix in bands:
+                assert max(mix.values()) <= 0.50, (level, cutoff, mix)
+
+
+def test_a_defaulted_age_is_replaced_by_the_one_the_feed_states():
+    """Two thirds of the projection read exactly MLE_DEFAULT_AGE + 1, because
+    Chadwick misses most players who have never reached the majors — which is
+    the whole population being translated. Andrew Fischer read 25 while the
+    feed on disk gave his birth date as 2004.
+    """
+    from pipeline_config import MLE_DEFAULT_AGE, MLE_SEASON_OFFSET
+    stale = MLE_DEFAULT_AGE + MLE_SEASON_OFFSET
+    players = pd.DataFrame({"PlayerId": [1, 2, 3],
+                            "Age": [stale, stale, 31]})
+    ev = {1: {"birth_year": 2004}, 2: {}, 3: {"birth_year": 2004}}
+    out, fixed = RF.repair_ages(players, ev, target_year=2027)
+    assert fixed == 1
+    assert out["Age"].tolist() == [23, stale, 31], out["Age"].tolist()
+
+
+def test_an_age_from_a_real_record_is_never_overwritten():
+    """A player with major-league history has a real age already, and the
+    feed's birth date is one more name join that can go wrong."""
+    players = pd.DataFrame({"PlayerId": [1], "Age": [34]})
+    out, fixed = RF.repair_ages(players, {1: {"birth_year": 2004}},
+                                target_year=2027)
+    assert fixed == 0 and out["Age"].tolist() == [34]
+
+
+@has_feeds
+def test_the_feed_supplies_birth_years_the_mle_stage_can_use():
+    """The same number, pulled out on its own because the translation stage
+    needs it long before any of the role machinery runs: a defaulted age is
+    not inert, it goes straight into the aging curve."""
+    import mle_translations as MLE
+
+    births = RF.prospect_birth_years(FEEDS)
+    assert len(births) > 150
+    assert all(1990 < y < 2015 for y in births.values())
+
+    pid = next(iter(births))
+    assert MLE._age_for(pid, 2026, pd.DataFrame(), births) \
+        == 2026 - births[pid]
+    # And with nothing to go on it still falls back exactly as before.
+    from pipeline_config import MLE_DEFAULT_AGE
+    assert MLE._age_for(pid, 2026, pd.DataFrame(), None) == MLE_DEFAULT_AGE
+
+    # A birth date on the stat record itself beats both, for the players the
+    # prospects feed does not name — which is most of them.
+    assert MLE._age_for(pid, 2026, pd.DataFrame(), births,
+                        {"birth_date": "2003-07-14"}) == 23
+    assert MLE._age_for(pid, 2026, pd.DataFrame(), None,
+                        {"birth_date": ""}) == MLE_DEFAULT_AGE
 
 
 def test_a_callup_and_a_depth_role_cannot_both_be_true():

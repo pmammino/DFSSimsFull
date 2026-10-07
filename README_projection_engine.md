@@ -958,9 +958,22 @@ Two things were measured rather than assumed:
   club's depth order like anybody else.
 
 With both, `ROSTER_DEPTH_DECAY_HITTER` refits to **0.75** and the hitter rank
-curve comes to **0.0228 — better than the 0.0278 it managed with no arrivals at
-all**. 31 prospects carry a real projection, median 58 plate appearances, six
-of them regulars over 250. The model still names far fewer debutants than the
+curve comes to **0.0200 — better than the 0.0278 it managed with no arrivals at
+all**. 42 prospects carry a real projection, median 38 plate appearances,
+ninetieth percentile 302.
+
+The weight each band puts on its *real job* rather than its fallback was set
+too low at first and has been raised: the median arrival goes from 30.9 plate
+appearances to 38.5 and the ninetieth percentile from 280 to 302, while the
+rank curve improves from 0.0212 to 0.0200. It stops where it does because of a
+**cliff rather than a slope** — one step further and the Double-A top-40 band
+tips from `Bench Bat` to `Full Time` as its heaviest role, and since the modal
+role picks the family a player is ranked in, the whole band would leave the
+bench queue and compete with regulars for the top of a club. The curve says so
+loudly: 0.0200 here, 0.0457 one step past. The arms move the same way and gain
+much less (median 21.8 to 23.2 innings), because the mixture is not what binds
+them — every arriving arm leaves the anchor stage at the same ~41 innings and
+then differs only by where he ranks in a 12-deep rotation family with 6 slots. The model still names far fewer debutants than the
 114 who really arrive, and that is the honest limit: the ones it leaves at the
 floor are the ones nobody saw coming.
 
@@ -1024,6 +1037,40 @@ competing for a full seat: 19 arms, median 21.8 innings, and the fit improves
 The remaining gap at ranks 25-40 is the shuttle-reliever population, and it
 stays open on purpose. Filling it would mean naming ~450 relievers league-wide
 that no feed can identify.
+
+#### Age, and why two thirds of it was 25
+
+Every player with no major-league history was coming out at exactly 25, and it
+was not a coincidence: `mle_translations._age_from_chadwick` falls back to
+`MLE_DEFAULT_AGE` (24) for the translated season whenever the Chadwick lookup
+misses, and the rate models age him forward one year to the target. Chadwick
+misses most players who have never reached the majors — which is precisely the
+population the MLE stage exists to translate — so 1,941 of 2,894 hitters and
+2,615 of 4,047 pitchers read 25. Andrew Fischer read 25 while `prospects.xml`
+on disk gave his birth date as 2004.
+
+A defaulted age is not inert. It goes into the aging curve, so every one of
+those players was being projected as if 24. Three sources now answer it before
+the default does:
+
+1. **A birth date on the stat record itself**, carried through from statsapi
+   when the endpoint hydrates one.
+2. **The prospects feed**, which states a birth date for all 400 players in it
+   — the same number the arrival table already uses to tell a 21-year-old at
+   Triple-A from a 27-year-old. `role_feeds.prospect_birth_years` exposes it to
+   the MLE stage, which runs long before any of the role machinery.
+3. **Chadwick**, as before.
+
+`role_feeds.repair_ages` then fixes the column a second time at the role stage,
+so a workbook rebuilt with `--refresh-playing-time` is correct without a full
+pipeline run. It only ever replaces the default — a player whose age came from
+his own major-league record keeps it, because that record is the better source
+and the feed's birth date is one more name join that can go wrong.
+
+That takes the defaulted hitters from 1,941 to 1,746 and the pitchers from
+2,615 to 2,542 on the committed snapshot. **The rest are players no feed on
+disk names**, and they need either a working Chadwick fetch or a hydrated
+statsapi person object — both of which the code now consumes when present.
 
 ### Availability, and why it is not a role
 
