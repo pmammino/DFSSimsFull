@@ -575,7 +575,15 @@ ROSTER_DEPTH_CORE = {"hitter": 13, "pitcher": 13}   # deprecated
 # the sweep moved it by 0.5 points with the top of the roster getting
 # WORSE, so it keeps the value it had. Do not re-merge these into one
 # constant: the two sides are not the same shape.
-ROSTER_DEPTH_DECAY_HITTER = 0.78
+# Refitted from 0.78 to 0.75 when the prospect arrivals went in, because
+# the population being ranked changed. The decay says how fast a club's
+# playing time runs out past its core, so it has to be fitted against
+# WHOEVER IS COMPETING FOR IT, and arrivals put one more claimant a club into
+# the ranking (23.8 projected hitters a club to 24.8, against a real median
+# of 23). At 0.75 the rank curve comes to 0.0228, BETTER than the 0.0278 it
+# managed with no arrivals at all — the arriving prospect displaces a club's
+# last men rather than joining them, and the real curve prefers him there.
+ROSTER_DEPTH_DECAY_HITTER = 0.75
 ROSTER_DEPTH_DECAY_PITCHER = 0.66
 ROSTER_DEPTH_DECAY = ROSTER_DEPTH_DECAY_HITTER   # back-compat alias
 ROSTER_DEPTH_FLOOR = 0.04
@@ -585,6 +593,29 @@ ROSTER_DEPTH_FLOOR = 0.04
 # a staff-best RA9 is a small-sample accident rather than a reason to hand
 # someone the ninth. Below the bar a pitcher still gets a bullpen role.
 BULLPEN_ROLE_MIN_TBF = 100.0
+
+
+# The role source that means "not up yet, but arriving" — see
+# `role_feeds.PROSPECT_ARRIVAL`. A player carrying it is the one exception to
+# "the projected tier is who plays", because the tier asks whether he has
+# real major-league evidence and for a man who has not debuted the answer is
+# no and always will be until he does.
+ARRIVAL_SOURCE = "feed:prospect"
+
+
+def arriving(players: pd.DataFrame) -> pd.Series:
+    """Players the prospect feed says are on their way up.
+
+    One definition, used by BOTH places that treat the tier as the roster:
+    the floor in `allocate_playing_time` and the depth ranking in
+    `apply_roster_depth`. Letting them through the first and not the second
+    gave a prospect playing time from nowhere — he skipped the ranking
+    entirely, kept his whole anchor, and the club's real last men decayed
+    past him.
+    """
+    if "pt_role_source" not in players.columns:
+        return pd.Series(False, index=players.index)
+    return players["pt_role_source"].astype(str) == ARRIVAL_SOURCE
 
 
 def apply_roster_depth(players: pd.DataFrame, kind: str, *,
@@ -613,8 +644,8 @@ def apply_roster_depth(players: pd.DataFrame, kind: str, *,
         return out
     tier = out.get("pt_tier", pd.Series(TIER_PROJECTED, index=out.index))
     teams = pd.to_numeric(out[team_col], errors="coerce")
-    eligible = ((tier.astype(str) == TIER_PROJECTED) & teams.notna()
-                & (teams != FREE_AGENT_TEAM_ID))
+    eligible = (((tier.astype(str) == TIER_PROJECTED) | arriving(out))
+                & teams.notna() & (teams != FREE_AGENT_TEAM_ID))
     if not eligible.any():
         return out
 
@@ -953,6 +984,15 @@ def allocate_playing_time(players: pd.DataFrame, kind: str, *,
     tier = out.get("pt_tier", pd.Series(TIER_PROJECTED, index=out.index))
     at_floor = (tier.astype(str) == TIER_FLOOR) | \
         out["pt_role"].astype(str).map(is_depth_role)
+
+    # ...except for a player the prospect feed says is arriving. The tier
+    # asks "has he real MLB evidence", and for a man who has not debuted the
+    # answer is no and always will be until he does — which is why every
+    # Triple-A prospect sat at the 1-PA floor however good he was. That is
+    # not a saving: real first-year position players take 8.9% of all league
+    # plate appearances, 114 of them a season, and flooring them hands that
+    # playing time to incumbents who will not be taking it.
+    at_floor &= ~arriving(out)
 
     out[vol_out] = np.nan
     out.loc[at_floor, vol_out] = floor_v

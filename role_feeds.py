@@ -119,6 +119,141 @@ LEVEL_TIMING = {
 # from someone who will actually bat.
 LEVEL_NO_MLB = {"A", "ROOKIE"}
 
+# WHEN A PROSPECT ARRIVES, AND WHAT HE DOES WHEN HE GETS THERE.
+#
+# A player one level from the majors is not a depth player, and calling him
+# one costs the projection more than it looks. Real first-year position
+# players take 8.9% of all league plate appearances — 114 of them a season,
+# 3.8 a club, median 92 plate appearances, ninetieth percentile 368 — and
+# every one of those was somewhere in this feed the winter before. Leaving
+# them at the 1-PA floor does not save that playing time; it hands it to
+# incumbents who will not be taking it.
+#
+# The feed has no ETA field, so arrival is read off the three things it does
+# carry: LEVEL (how far away he is), RANK (how good, which decides both how
+# soon a club promotes him and how much he plays once up) and AGE (a
+# 21-year-old at Triple-A is next year's regular; a 27-year-old at Triple-A
+# has been passed over).
+#
+# The mixtures below are WIDE on purpose, and this is the case the mixture
+# machinery was built for: nobody knows whether a top prospect called up in
+# May finishes the year as the regular or back on the bus. Expressing that
+# as 40% regular / 60% part-time is the honest reading, and it is what makes
+# the blended anchor land near the real distribution instead of on either
+# tail of it.
+PROSPECT_ARRIVAL = {
+    # level: ((rank cutoff, timing, mixture), ...) — first match wins
+    "AAA": (
+        (60, "Early Season (~May)",
+         {"Full Time": 0.40, "Strong Side Platoon": 0.25, "Bench Bat": 0.35}),
+        (200, "Mid Season (~July)",
+         {"Strong Side Platoon": 0.30, "Bench Bat": 0.45,
+          "Injury Replacement / 26th Man": 0.25}),
+    ),
+    "AA": (
+        (40, "Mid Season (~July)",
+         {"Full Time": 0.25, "Strong Side Platoon": 0.30,
+          "Bench Bat": 0.45}),
+    ),
+}
+
+# WHY THE TABLE STOPS WHERE IT DOES, which is the part that was measured.
+#
+# It reached further to begin with — unranked Triple-A, Double-A to 150, the
+# top of High-A — on the theory that a wider net is a fairer one. It is not.
+# Those bands put 34 more names in the projection and gave them a MEDIAN OF
+# 3.8 PLATE APPEARANCES, because a September arrival on a 117-plate-
+# appearance anchor is a fifth of a season of a job that barely exists, and
+# the roster-depth decay then takes what is left. They were not projections;
+# they were noise with a name attached, and they cost the rank curve 0.0250
+# against 0.0228 for stopping here, at the same share of the league.
+#
+# The league's playing time is fixed, so a name that takes nothing still
+# takes a roster place. Better to leave the September cup-of-coffee man at
+# the floor — WHICH IS WHAT HE IS — and spend the arrivals on the players a
+# club is actually waiting on.
+# THE SAME THING FOR ARMS, which is not the same table.
+#
+# A pitching prospect's first season looks nothing like a hitter's. Real
+# first-year pitchers are far more numerous and take far less each: 181 of
+# them in the most recent season against 114 position players, but at a
+# MEDIAN OF 12.7 INNINGS against a median of 92 plate appearances, and only 6
+# of the 181 cleared 100 innings. Together they are 9.1% of all league
+# innings, almost exactly the hitters' 8.9%, arrived at completely
+# differently.
+#
+# That median hides two populations. About 23 to 34 a season START games and
+# take a median of 72 innings; the other ~170 are relief arms shuttling up
+# from Triple-A for a handful of outings each. ONLY THE FIRST GROUP IS HERE,
+# and that is the main thing this table decides. Three independent reasons,
+# all pointing the same way:
+#
+#   * Nine innings is not a projection. It is the same judgement that stops
+#     the hitter table at Triple-A's top 200 — a name that takes nothing
+#     still takes a roster place, and the league's innings are fixed.
+#   * The depth ranking already says so. A club carries ~20 relief arms in
+#     the projected tier against 8 core bullpen slots, so an arriving
+#     reliever sorts 16th to 20th of 20 and the decay hands him ~1 inning
+#     whatever the table claims. Modelling him changes nothing except the
+#     size of the pool.
+#   * The evidence for "reliever" is the weakest evidence in the feed. The
+#     classification is innings per appearance, and it is sharp where there
+#     is a record — real starters run 4.0 to 5.4, real relievers 0.3 to 3.4 —
+#     but a prospect with six career innings reads as a reliever on nothing.
+#     A starter classification on a thin record cannot happen by accident;
+#     a reliever one happens all the time.
+#
+# So the key is the pitcher's own record — `role`, which the pipeline derives
+# from his game log including the minor-league lines — and it is the thing
+# that makes this table possible at all, because THE PROSPECTS FEED CALLS
+# EVERY ARM IN IT A BARE "P". There is no SP/RP split to read, and a rookie
+# rotation arm and a shuttle reliever differ by a factor of eight in innings.
+#
+# The mixtures lean on "Innings-Limited Starter", which is the anchor that
+# exists for exactly this man, rather than on a rotation slot a 23-year-old
+# will not hold for a full season. They stay modal-starter on purpose: the
+# modal role picks the family a player is ranked in, and a rookie starter
+# competes with his club's rotation for innings, not with its bullpen.
+PITCHER_ARRIVAL = {
+    # level: ((rank cutoff, timing, mixture), ...) — first match wins
+    "AAA": (
+        (100, "Early Season (~May)",
+         {"Innings-Limited Starter": 0.45, "Swing Arm / Long Relief": 0.30,
+          "Bullpen Depth Arm": 0.25}),
+        (250, "Mid Season (~July)",
+         {"Innings-Limited Starter": 0.40, "Swing Arm / Long Relief": 0.30,
+          "Bullpen Depth Arm": 0.30}),
+    ),
+    "AA": (
+        (150, "Mid Season (~July)",
+         {"Innings-Limited Starter": 0.38, "Swing Arm / Long Relief": 0.30,
+          "Bullpen Depth Arm": 0.32}),
+    ),
+}
+
+# The cutoffs run deeper than the hitters' 200 and 40, and that is not
+# generosity — it is that RANK MEANS SOMETHING DIFFERENT HERE. The feed
+# publishes one combined top 400, so a pitcher's rank is his standing among
+# bats as well as arms, and the 128 arms in the list are spread through it
+# rather than clustered at the top. Triple-A's top 100 holds seven of them
+# where it holds a dozen hitters. Matching the hitters' numbers would not
+# mean matching their strictness; it would mean reaching a third as far.
+PITCHER_ARRIVAL_ROLE = "starter"
+
+
+# Past this, a "prospect" at Triple-A is organisational depth rather than
+# someone a club is waiting on, and the arrival table should not promote
+# him. The feed's own Triple-A cohort runs 23 to 25, so this cuts the tail
+# rather than the middle.
+PROSPECT_MAX_AGE = 26
+
+# How much of the arrival table's volume to actually spend. Kept at 1.0:
+# once the arrivals were made to COMPETE for their playing time in the
+# roster-depth ranking rather than bypassing it, there was nothing left for
+# a global haircut to fix. It survives as the lever to reach for if the
+# arrivals ever need damping as a group.
+PROSPECT_VOLUME_SCALE = 1.0
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Parsing
@@ -262,7 +397,8 @@ def read_prospects(path: str | Path) -> pd.DataFrame:
     400), so it seeds the identity crosswalk for everything else.
     """
     root = _root(path)
-    cols = ["name_key", "feed_team", "prospect_rank", "level", "PlayerId"]
+    cols = ["name_key", "feed_team", "prospect_rank", "level", "PlayerId",
+            "birth_year"]
     if root is None:
         return pd.DataFrame(columns=cols)
     rows = []
@@ -273,6 +409,14 @@ def read_prospects(path: str | Path) -> pd.DataFrame:
         row["prospect_rank"] = pd.to_numeric(el.get("Rank"), errors="coerce")
         row["level"] = (el.findtext("LeagueLevel") or "").strip().upper()
         row["PlayerId"] = pd.to_numeric(el.findtext("MLBId"), errors="coerce")
+        # There is no ETA field in this feed — only Rank, LeagueLevel, a
+        # draft year and a birth date — so the arrival has to be read off
+        # those. Age is the one that separates a prospect from org filler:
+        # a 21-year-old at Triple-A is next year's regular and a 27-year-old
+        # at Triple-A is a player who has been passed over.
+        birth = el.find(".//Birth")
+        born = (birth.get("Date") if birth is not None else None) or ""
+        row["birth_year"] = pd.to_numeric(born[:4], errors="coerce")
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -616,6 +760,24 @@ def hitter_role_from_feeds(ev: dict) -> tuple[dict[str, float], str] | None:
     depth = _depth_read(ev)
     record = record_read(ev.get("play_rate"), "hitter")
 
+    # A prospect one level away outranks a depth chart that has him in the
+    # farm system, because that is where the depth chart is supposed to have
+    # him — being in Triple-A in February is not a statement that he will
+    # not play in July. Only where no MLB feed has PLACED him: a man the
+    # depth chart lists at a position, or who appears in a batting order, is
+    # up, and what the prospect list thought is out of date.
+    #
+    # Being left out of a nine-man lineup does not count as being placed,
+    # which is the whole reason this needs `from_absence`. Twenty-three
+    # clubs have a current order, so without it every prospect on one of
+    # them was read as "a bench bat who did not make today's lineup" and the
+    # arrival never fired at all.
+    if (not lineup or from_absence) and (depth is None
+                                         or is_depth_role(depth)):
+        got = prospect_read(ev)
+        if got:
+            return got[0], "feed:prospect"
+
     # A player's OWN usage rate outranks a depth chart that has written him
     # off. Byron Buxton takes 4.30 plate appearances per game played, above
     # the median Full Time hitter's 3.97 — when he is in the lineup he is an
@@ -713,6 +875,75 @@ def _lineup_read(ev: dict) -> tuple[str | None, bool]:
     return "Bench Bat", True
 
 
+def prospect_read(ev: dict, target_year: int = 2027
+                  ) -> tuple[dict[str, float], str] | None:
+    """The role and arrival of a player who is not up yet but is close.
+
+    None for anyone the table does not reach, which leaves the depth chart's
+    answer — usually the depth role — exactly as it was.
+    """
+    level = str(ev.get("level") or "").upper()
+    bands = PROSPECT_ARRIVAL.get(level)
+    if not bands:
+        return None
+    rank = ev.get("prospect_rank")
+    rank = float(rank) if rank is not None and np.isfinite(
+        float(rank or np.nan)) else 10_000.0
+    born = ev.get("birth_year")
+    if born is not None and np.isfinite(float(born or np.nan)):
+        if target_year - float(born) > PROSPECT_MAX_AGE:
+            return None
+    for cutoff, timing, mix in bands:
+        if rank <= cutoff:
+            return _scaled(mix), timing
+    return None
+
+
+def pitcher_prospect_read(ev: dict, target_year: int = 2027
+                          ) -> tuple[dict[str, float], str] | None:
+    """The role and arrival of an arm who is not up yet but is close.
+
+    Starters only, keyed on the pitcher's OWN record, because the prospects
+    feed calls every arm in it "P" and a rookie rotation piece takes eight
+    times the innings of a shuttle reliever. See PITCHER_ARRIVAL for why the
+    relievers are left at the floor.
+    """
+    level = str(ev.get("level") or "").upper()
+    bands = PITCHER_ARRIVAL.get(level)
+    if not bands:
+        return None
+    if str(ev.get("own_role") or "").strip().lower() != PITCHER_ARRIVAL_ROLE:
+        return None
+    rank = ev.get("prospect_rank")
+    rank = float(rank) if rank is not None and np.isfinite(
+        float(rank or np.nan)) else 10_000.0
+    born = ev.get("birth_year")
+    if born is not None and np.isfinite(float(born or np.nan)):
+        if target_year - float(born) > PROSPECT_MAX_AGE:
+            return None
+    for cutoff, timing, mix in bands:
+        if rank <= cutoff:
+            return _scaled(mix), timing
+    return None
+
+
+def _scaled(mix: dict[str, float]) -> dict[str, float]:
+    """Spend PROSPECT_VOLUME_SCALE of the arrival, the rest as bench time.
+
+    Expressed by moving weight onto the smallest real job rather than by
+    scaling the anchor, so the result is still a mixture over the taxonomy
+    and still sums to one.
+    """
+    k = float(np.clip(PROSPECT_VOLUME_SCALE, 0.0, 1.0))
+    if k >= 1.0:
+        return dict(mix)
+    spare = ("Bullpen Depth Arm" if "Bullpen Depth Arm" in mix
+             else "Injury Replacement / 26th Man")
+    out = {r: w * k for r, w in mix.items()}
+    out[spare] = out.get(spare, 0.0) + (1.0 - k)
+    return out
+
+
 def _depth_read(ev: dict) -> str | None:
     """The depth chart alone: a rank within one position group."""
     pos = (ev.get("depth_pos") or "").upper()
@@ -747,6 +978,22 @@ def pitcher_role_from_feeds(ev: dict) -> tuple[dict[str, float], str] | None:
     """
     pen = _bullpen_read(ev)
     rot = _rotation_read(ev)
+
+    # An arm one level away outranks a depth chart that has him in the farm
+    # system, because that is where the depth chart is supposed to have him.
+    # Only where NEITHER major-league feed has placed him: a pitcher in the
+    # rotation's order or in the bullpen's pecking order is up, and what the
+    # prospect list thought is out of date.
+    #
+    # No `from_absence` counterpart here, and none is needed. The hitters'
+    # version has one because a batting order is nine names and everyone else
+    # on the club reads as absent from it; a club's pitching staff is not
+    # published as a list of who is unavailable today.
+    if pen is None and (rot is None or is_depth_role(rot)):
+        got = pitcher_prospect_read(ev)
+        if got:
+            return got[0], "feed:prospect"
+
     if pen and rot:
         mix, w = pen
         heavy = max(mix, key=mix.get)
@@ -935,7 +1182,18 @@ def build_evidence(players: pd.DataFrame, kind: str,
             prospects["PlayerId"].astype(int)).first()
         for pid, row in best.iterrows():
             ev.setdefault(int(pid), {}).update(
-                level=row["level"], prospect_rank=row["prospect_rank"])
+                level=row["level"], prospect_rank=row["prospect_rank"],
+                birth_year=row.get("birth_year"))
+
+    # Starter or reliever, from the pitcher's own game log. Like the usage
+    # rate below it this is a source about HIM rather than about his club's
+    # plans, and it is the only thing that tells a rookie rotation arm apart
+    # from a shuttle reliever — the prospects feed lists both as "P".
+    if kind == "pitcher" and "role" in players.columns:
+        for pid, r in zip(pd.to_numeric(players["PlayerId"], errors="coerce"),
+                          players["role"].astype(str)):
+            if pd.notna(pid) and r and r.lower() != "nan":
+                ev.setdefault(int(pid), {})["own_role"] = r.strip().lower()
 
     # The player's own usage rate, which is a source like any other and the
     # only one that is about HIM rather than about his club's plans.
@@ -960,7 +1218,8 @@ def build_evidence(players: pd.DataFrame, kind: str,
     return ev, stats
 
 
-def _timing(e: dict, mix: dict[str, float], kind: str) -> str | None:
+def _timing(e: dict, mix: dict[str, float], kind: str,
+            source: str = "") -> str | None:
     """When a player arrives, which is what a prospect's LEVEL is about.
 
     Only ever applied to someone the other feeds do NOT already have in a
@@ -968,6 +1227,14 @@ def _timing(e: dict, mix: dict[str, float], kind: str) -> str | None:
     is not a July callup, he is the shortstop, and the depth chart is the
     better-informed feed about that.
     """
+    # An arrival the table has already decided: use its own answer rather
+    # than the level's generic one, since the table's timing is what its
+    # mixture was calibrated against.
+    if source == "feed:prospect":
+        got = (pitcher_prospect_read(e) if kind == "pitcher"
+               else prospect_read(e))
+        if got:
+            return got[1]
     level = str(e.get("level") or "").upper()
     if not level:
         return None
@@ -1079,7 +1346,8 @@ def apply_feed_roles(players: pd.DataFrame, kind: str, *,
         mix = {r: w / total for r, w in mix.items()}
         mixes.append(format_role_mix(mix))
         roles.append(max(mix, key=mix.get))
-        starts.append(_timing(e, mix, kind) or out["pt_role_start"].iloc[i])
+        starts.append(_timing(e, mix, kind, source)
+                      or out["pt_role_start"].iloc[i])
         sources.append(source)
         stats["applied"] += 1
         stats["sources"][source] = stats["sources"].get(source, 0) + 1

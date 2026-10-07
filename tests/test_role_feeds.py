@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 
 import playing_time_model as M  # noqa: E402
 import role_feeds as RF  # noqa: E402
-from role_taxonomy import parse_role_mix  # noqa: E402
+from role_taxonomy import TIMING, parse_role_mix  # noqa: E402
 
 FEEDS = ROOT / "feeds"
 has_feeds = pytest.mark.skipif(
@@ -456,6 +456,343 @@ def test_the_feeds_never_send_a_real_major_leaguer_to_the_floor(tmp_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Prospect arrivals
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_a_top_prospect_at_triple_a_is_not_a_depth_player():
+    """The reason this exists. Every Triple-A prospect sat at the 1-PA floor
+    however good he was, because the tier asks "has he real MLB evidence"
+    and for a man who has not debuted the answer is no and always will be
+    until he does. Real first-year position players take 8.9% of all league
+    plate appearances, so flooring them does not save that playing time — it
+    hands it to incumbents who will not be taking it.
+    """
+    mix, src = RF.hitter_role_from_feeds(
+        {"club_has_orders": True, "depth_pos": "PROS", "depth_rank": 4,
+         "level": "AAA", "prospect_rank": 12, "birth_year": 2005})
+    assert src == "feed:prospect"
+    assert mix["Full Time"] == pytest.approx(0.40)
+    assert "Depth (no MLB PA)" not in mix
+
+
+def test_the_arrival_mixture_is_wide_because_nobody_knows():
+    """This is the case the mixture machinery was built for. Whether a top
+    prospect called up in May finishes the year as the regular or back on the
+    bus is genuinely unknown, and 40/25/35 is the honest reading of it — it
+    is what puts the blended anchor near the real distribution instead of on
+    either tail of it. A narrow mixture here would be a claim nobody can
+    make.
+    """
+    mix, _ = RF.hitter_role_from_feeds(
+        {"club_has_orders": True, "depth_pos": "PROS", "depth_rank": 4,
+         "level": "AAA", "prospect_rank": 12, "birth_year": 2005})
+    assert len(mix) >= 3
+    assert max(mix.values()) < 0.5
+
+
+def test_further_away_and_further_down_means_less():
+    """Rank and level both have to bite, and in the right direction: the
+    arrival is earlier and bigger for a better prospect who is closer."""
+    def pa(level, rank):
+        mix, _ = RF.hitter_role_from_feeds(
+            {"club_has_orders": True, "depth_pos": "PROS", "depth_rank": 4,
+             "level": level, "prospect_rank": rank, "birth_year": 2005})
+        return mix.get("Full Time", 0.0) + mix.get("Strong Side Platoon", 0.0)
+
+    assert pa("AAA", 10) > pa("AAA", 120) > 0
+    assert pa("AAA", 10) > pa("AA", 10) > 0
+    # And past the end of the table there is no arrival at all, which is a
+    # different statement from a small one — see the note on PROSPECT_ARRIVAL.
+    assert pa("AAA", 900) == 0.0
+    assert pa("AA", 120) == 0.0
+
+
+def test_an_old_triple_a_prospect_is_organisational_depth():
+    """A 21-year-old at Triple-A is next year's regular; a 27-year-old at
+    Triple-A has been passed over. With no ETA field in the feed, age is the
+    only thing that separates them, and the table must not promote the
+    second one."""
+    ev = {"club_has_orders": True, "depth_pos": "PROS", "depth_rank": 4,
+          "level": "AAA", "prospect_rank": 12}
+    young, src = RF.hitter_role_from_feeds({**ev, "birth_year": 2005})
+    assert src == "feed:prospect"
+    old, src_old = RF.hitter_role_from_feeds({**ev, "birth_year": 1998})
+    assert RF.prospect_read({**ev, "birth_year": 1998}) is None
+    assert max(old, key=old.get) == "Depth (no MLB PA)"
+    assert src_old != "feed:prospect"
+    assert young != old
+
+
+def test_a_prospect_the_depth_chart_has_already_placed_is_up():
+    """The arrival only reaches a man no MLB feed has PLACED. A player the
+    depth chart lists at a position, or who appears in a batting order, is
+    already up, and what the prospect list thought about him is out of
+    date."""
+    placed = {"club_has_orders": True, "depth_pos": "SS", "depth_rank": 1}
+    mix, src = RF.hitter_role_from_feeds(
+        {**placed, "level": "AAA", "prospect_rank": 12, "birth_year": 2005})
+    assert src != "feed:prospect"
+    # Identical to the same player with no prospect evidence at all: the
+    # placement decides it, and the arrival table contributes nothing.
+    assert (mix, src) == RF.hitter_role_from_feeds(placed)
+
+    batting = {"club_has_orders": True, "spot_vs_r": 6, "spot_vs_l": 6}
+    mix, src = RF.hitter_role_from_feeds(
+        {**batting, "level": "AAA", "prospect_rank": 12, "birth_year": 2005})
+    assert src != "feed:prospect"
+    assert max(mix, key=mix.get) == "Full Time"
+
+
+def test_being_left_out_of_a_lineup_does_not_block_an_arrival():
+    """The bug that made the whole feature fire on nobody. Twenty-three
+    clubs have a current batting order, so a prospect on one of them reaches
+    the read as "a bench bat who did not make today's nine" — which is an
+    ABSENCE, not a placement, and the one case that has to fall through to
+    the arrival table anyway."""
+    ev = {"club_has_orders": True, "depth_pos": "PROS", "depth_rank": 4,
+          "level": "AAA", "prospect_rank": 12, "birth_year": 2005}
+    on_a_club_with_a_lineup = RF.hitter_role_from_feeds(ev)
+    without = RF.hitter_role_from_feeds({**ev, "club_has_orders": False})
+    assert on_a_club_with_a_lineup[1] == "feed:prospect"
+    assert on_a_club_with_a_lineup == without
+
+
+def test_the_arrival_carries_its_own_timing():
+    """A partial season is the point — the volume comes from arriving in May
+    or July, not from a full year at a reduced role — so the timing has to be
+    the arrival table's own rather than the level's generic answer."""
+    ev = {"club_has_orders": True, "depth_pos": "PROS", "depth_rank": 4,
+          "level": "AAA", "birth_year": 2005}
+    assert RF.prospect_read({**ev, "prospect_rank": 12})[1] \
+        == "Early Season (~May)"
+    assert RF.prospect_read({**ev, "prospect_rank": 150})[1] \
+        == "Mid Season (~July)"
+    assert RF.prospect_read({**ev, "level": "AA", "prospect_rank": 9})[1] \
+        == "Mid Season (~July)"
+
+
+def test_low_minors_are_still_nobody():
+    """The table reaches the top 200 of Triple-A and the top 40 of
+    Double-A, and nobody else. A High-A teenager is not taking plate
+    appearances off a major league roster next year however highly he is
+    ranked, and neither is the 300th-best player at Triple-A."""
+    for level in ("A", "A+", "ROOKIE", "A-"):
+        assert RF.prospect_read(
+            {"level": level, "prospect_rank": 1, "birth_year": 2007}) is None
+    assert RF.prospect_read(
+        {"level": "AAA", "prospect_rank": 300, "birth_year": 2005}) is None
+    assert RF.prospect_read(
+        {"level": "AA", "prospect_rank": 90, "birth_year": 2005}) is None
+
+
+def test_every_arrival_mixture_is_a_distribution():
+    from role_taxonomy import role_names
+    known = set(role_names("hitter"))
+    for level, bands in RF.PROSPECT_ARRIVAL.items():
+        cutoffs = [c for c, _, _ in bands]
+        assert cutoffs == sorted(cutoffs), level
+        for cutoff, timing, mix in bands:
+            assert sum(mix.values()) == pytest.approx(1.0), (level, cutoff)
+            assert set(mix) <= known, (level, cutoff)
+            assert timing in [t[0] for t in TIMING], (level, cutoff)
+
+
+@has_feeds
+def test_an_arrival_competes_for_his_playing_time_like_everyone_else():
+    """The bug that nearly got paid for with a global constant.
+
+    Two places treat the projected tier as "who is on the roster": the floor
+    in `allocate_playing_time` and the depth ranking in `apply_roster_depth`.
+    The arrivals were let through the first and not the second, so a prospect
+    skipped the ranking entirely, kept his whole anchor while the club's real
+    last men decayed past him, and inflated the pool from 23.8 players a club
+    to 26.0 — playing time from nowhere. The symptom showed up in the rank
+    curve, and the fix that suggested itself was steepening the depth decay
+    for all 2,894 hitters to pay for 65 prospects. The actual fix is here: a
+    prospect takes a rank in his club's depth order like anybody else.
+    """
+    src = pd.read_csv(ROOT / "out" / "hitter_pa_projections_2027.csv",
+                      low_memory=False)
+    df = src[[c for c in src.columns if not c.startswith("Proj_")
+              and not (c.startswith("pt_") and c != "pt_tier")]]
+    out, _, _ = M.project_playing_time(
+        df, "hitter", target_year=2027,
+        fielding=pd.read_csv(ROOT / "out" / "fielding_history_2027.csv",
+                             low_memory=False),
+        feed_dir=FEEDS)
+    up = out[out["pt_role_source"].astype(str) == "feed:prospect"]
+    assert up["pt_depth_rank"].notna().all()
+
+    # And the pool stays near the real one: a club carries about 23 position
+    # players who take a plate appearance, and the arrival is one of them
+    # rather than a twenty-sixth.
+    pool = out[out["pt_tier"].astype(str) != "floor"]
+    assert pool.groupby("Pred_target_team_id").size().mean() < 25.5
+
+
+@has_feeds
+def test_the_real_feed_sends_up_about_as_many_as_really_come_up():
+    """Calibrated against the real thing rather than against a feeling.
+
+    Real first-year position players: 114 a season, 3.8 a club, median 92
+    plate appearances, ninetieth percentile 368. The arrival table is not
+    trying to name WHICH prospects debut — it cannot — only to leave about
+    the right amount of playing time in about the right shape for the ones
+    who do.
+    """
+    src = pd.read_csv(ROOT / "out" / "hitter_pa_projections_2027.csv",
+                      low_memory=False)
+    df = src[[c for c in src.columns if not c.startswith("Proj_")
+              and not (c.startswith("pt_") and c != "pt_tier")]]
+    out, _, _ = M.project_playing_time(
+        df, "hitter", target_year=2027,
+        fielding=pd.read_csv(ROOT / "out" / "fielding_history_2027.csv",
+                             low_memory=False),
+        feed_dir=FEEDS)
+    up = out[out["pt_role_source"].astype(str) == "feed:prospect"]
+    assert 20 <= len(up) <= 60, len(up)
+
+    # Near the real debut median of 92, on the low side of it: the table
+    # roles 31 of the 114 who really come up, and the ones it leaves out are
+    # the ones nobody saw coming, who are at the floor where they belong.
+    pa = up["Proj_PA"]
+    assert 40 <= pa.median() <= 140, pa.median()
+    assert pa.max() < 500, pa.max()
+    # A handful become regulars, which is the shape that matters — the real
+    # season has 16 debutants over 300 plate appearances.
+    assert (pa > 250).sum() >= 3
+    # And it stays a small share of the league: these are the last men onto
+    # a roster, not a thirty-first club.
+    assert pa.sum() / out["Proj_PA"].sum() < 0.05
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Prospect arrivals: arms
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _arm(**kw):
+    ev = {"depth_pos": "PROS", "depth_rank": 3, "level": "AAA",
+          "prospect_rank": 22, "birth_year": 2004, "own_role": "starter"}
+    ev.update(kw)
+    return ev
+
+
+def test_a_starting_pitching_prospect_arrives_as_an_innings_limited_starter():
+    """The anchor that exists for exactly this man. A 23-year-old does not get
+    handed a rotation slot for a full season, and projecting him as one would
+    be the claim that he does."""
+    mix, src = RF.pitcher_role_from_feeds(_arm())
+    assert src == "feed:prospect"
+    assert max(mix, key=mix.get) == "Innings-Limited Starter"
+    assert len(mix) >= 3 and max(mix.values()) < 0.5
+
+
+def test_the_feed_cannot_tell_a_rotation_arm_from_a_shuttle_reliever():
+    """`Position` is a bare "P" for all 128 arms in the prospects feed, and
+    the two populations differ by a factor of eight in innings — a real debut
+    starter takes a median of 72, a debut reliever 9. The pitcher's OWN
+    record is what separates them, so without one there is no arrival."""
+    assert RF.pitcher_prospect_read(_arm(own_role=None)) is None
+    assert RF.pitcher_prospect_read(_arm(own_role="")) is None
+    pr = RF.read_prospects(FEEDS / "prospects.xml") if (
+        FEEDS / "prospects.xml").exists() else None
+    if pr is not None:
+        arms = pr[pr["feed_position"].astype(str).str.upper() == "P"]
+        assert len(arms) > 100
+        assert set(arms["feed_position"]) == {"P"}
+
+
+def test_a_relief_prospect_is_left_at_the_floor():
+    """Not an oversight — see PITCHER_ARRIVAL. Nine innings is not a
+    projection, a club's twentieth relief arm is past the end of the decay
+    anyway, and "reliever" on a six-inning record is the weakest reading in
+    the feed."""
+    assert RF.pitcher_prospect_read(_arm(own_role="reliever")) is None
+    mix, src = RF.pitcher_role_from_feeds(_arm(own_role="reliever"))
+    assert src != "feed:prospect"
+    assert max(mix, key=mix.get) == "Depth (no MLB IP)"
+
+
+def test_an_arm_the_staff_has_already_placed_is_up():
+    """The rotation's order and the bullpen's pecking order are both
+    placements, and either one means the prospect list is out of date."""
+    placed = {"depth_pos": "P", "depth_rank": 2}
+    mix, src = RF.pitcher_role_from_feeds(_arm(**placed))
+    assert src != "feed:prospect"
+    assert (mix, src) == RF.pitcher_role_from_feeds(placed)
+
+    mix, src = RF.pitcher_role_from_feeds(_arm(rw_role="CLOSER"))
+    assert src != "feed:prospect"
+    assert max(mix, key=mix.get) == "Closer"
+
+
+def test_the_arm_table_reaches_further_down_the_rank_list():
+    """Not generosity: the feed publishes ONE combined top 400, so a
+    pitcher's rank is his standing among bats as well as arms and the 128
+    arms are spread through it. Matching the hitters' cutoffs would mean
+    reaching a third as far, not being equally strict."""
+    for level in ("AAA", "AA"):
+        arm = max(c for c, _, _ in RF.PITCHER_ARRIVAL[level])
+        bat = max(c for c, _, _ in RF.PROSPECT_ARRIVAL[level])
+        assert arm > bat, level
+
+
+def test_an_arm_too_old_for_the_table_is_organisational_depth():
+    assert RF.pitcher_prospect_read(_arm(birth_year=1998)) is None
+    mix, _ = RF.pitcher_role_from_feeds(_arm(birth_year=1998))
+    assert max(mix, key=mix.get) == "Depth (no MLB IP)"
+
+
+def test_every_arm_arrival_mixture_is_a_distribution_of_starters():
+    from role_taxonomy import role_family, role_names
+    known = set(role_names("pitcher"))
+    for level, bands in RF.PITCHER_ARRIVAL.items():
+        cutoffs = [c for c, _, _ in bands]
+        assert cutoffs == sorted(cutoffs), level
+        for cutoff, timing, mix in bands:
+            assert sum(mix.values()) == pytest.approx(1.0), (level, cutoff)
+            assert set(mix) <= known, (level, cutoff)
+            assert timing in [t[0] for t in TIMING], (level, cutoff)
+            # The MODAL role picks the family a player is ranked in, and a
+            # rookie starter competes with his club's rotation for innings,
+            # not with its bullpen. A mixture that tipped to a relief role
+            # would quietly move him into a 20-deep queue with 8 slots.
+            assert role_family(max(mix, key=mix.get)) == "SP", (level, cutoff)
+
+
+@has_feeds
+def test_the_real_feed_calls_up_about_as_many_arms_as_really_start():
+    """Calibrated against the real thing. Real first-year pitchers are 181 a
+    season at a median of 12.7 innings, but that hides two populations: 23 to
+    34 of them START games and take a median of 72 innings, and the rest are
+    shuttle relievers. This table is aimed at the first group only.
+    """
+    src = pd.read_csv(ROOT / "out" / "pitcher_pa_projections_2027.csv",
+                      low_memory=False)
+    df = src[[c for c in src.columns if not c.startswith("Proj_")
+              and not (c.startswith("pt_") and c != "pt_tier")]]
+    out, _, _ = M.project_playing_time(
+        df, "pitcher", target_year=2027,
+        fielding=pd.read_csv(ROOT / "out" / "fielding_history_2027.csv",
+                             low_memory=False),
+        feed_dir=FEEDS)
+    up = out[out["pt_role_source"].astype(str) == "feed:prospect"]
+    assert 10 <= len(up) <= 40, len(up)
+
+    ip = up["Proj_IP"]
+    # Real debut arms sit at a median of 12.7 innings; these are the
+    # starting end of that population, so above it and well short of the
+    # 72-inning median of the ones who hold a rotation spot all year.
+    assert 10 <= ip.median() <= 45, ip.median()
+    assert ip.max() < 120, ip.max()
+    assert ip.sum() / out["Proj_IP"].sum() < 0.03
+
+    # They land in the band the model was starving: a real club's 18th to
+    # 25th arm takes 23 innings down to 6, where the model was giving 5 to 3.
+    assert up["pt_depth_rank"].notna().all()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Against the real snapshot
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -486,21 +823,45 @@ def test_the_real_feeds_resolve_at_the_rates_that_were_measured():
 
 
 @has_feeds
-def test_the_real_feeds_spread_the_playing_time_out():
-    """The point of the exercise, measured end to end: more players on jobs
-    that differ from each other, and the regulars pulling away from the
-    bench."""
-    src = pd.read_csv(ROOT / "out" / "hitter_pa_projections_2027.csv")
+def test_the_real_feeds_fit_the_real_rank_curve_better():
+    """The point of the exercise, measured against the target the anchors
+    are fitted on rather than against a spread statistic.
+
+    It used to compare the standard deviation of projected plate appearances
+    with and without the feeds, which stopped being like-for-like once the
+    prospect arrivals joined the projected pool: sixty-five more players,
+    most of them on partial seasons, lower the spread while improving the
+    fit. The rank curve is the thing that actually says whether a club's
+    playing time is distributed the way real clubs distribute it.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from fit_role_anchors import real_rank_curve
+
+    src = pd.read_csv(ROOT / "out" / "hitter_pa_projections_2027.csv",
+                      low_memory=False)
     df = src[[c for c in src.columns if not c.startswith("Proj_")
               and not (c.startswith("pt_") and c != "pt_tier")]]
-    before, _, _ = M.project_playing_time(df, "hitter", target_year=2027,
-                                          feed_dir=None)
-    after, _, _ = M.project_playing_time(df, "hitter", target_year=2027,
-                                         feed_dir=FEEDS)
-    b = before[before["pt_tier"].astype(str) != "floor"]["Proj_PA"]
-    a = after[after["pt_tier"].astype(str) != "floor"]["Proj_PA"]
-    assert a.std() > b.std()
-    assert a.quantile(0.90) > b.quantile(0.90)
+    fielding = pd.read_csv(ROOT / "out" / "fielding_history_2027.csv",
+                           low_memory=False)
+    curve, _ = real_rank_curve(fielding, "hitter")
+    ranks = [r for r in range(1, 21) if float(r) in curve.index]
+
+    def fit(feed_dir):
+        out, _, _ = M.project_playing_time(df, "hitter", target_year=2027,
+                                           fielding=fielding,
+                                           feed_dir=feed_dir)
+        p = out[out["pt_tier"].astype(str) != "floor"]
+        m = p.groupby(p.groupby("Pred_target_team_id")["Proj_PA"].rank(
+            "first", ascending=False))["Proj_PA"].mean()
+        rat = np.array([m.get(float(r), np.nan) / curve.loc[float(r)]
+                        for r in ranks])
+        rat = rat[np.isfinite(rat)]
+        return float(np.sqrt(((rat - 1) ** 2).mean())), out
+
+    without, _ = fit(None)
+    with_feeds, after = fit(FEEDS)
+    assert with_feeds < without, (with_feeds, without)
+
     # Roles the heuristic could not identify at all, which is what a feed is
     # for: it can see a platoon, and last season's plate-appearance count
     # cannot.
