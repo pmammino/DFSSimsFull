@@ -1151,9 +1151,38 @@ form through `evidence_volume`. Both are live; they are different channels for
 the same fact, which is why both forms still project a hurt pitcher for fewer
 innings and the test that checks it now runs under both.
 
-Worth re-measuring if pitcher durability is switched on, if the depth floor or
-decay move again (this margin reversed once already when they were refitted),
-or if the anchors are refitted.
+Worth re-measuring if the depth floor or decay move again (this margin reversed
+once already when they were refitted), or if the anchors are refitted.
+
+#### Why pitcher durability stays off
+
+It was measured again with the 2x2 of {durability off, on} x {product,
+decomposed}, and the answer is not the one in the original note. That note said
+appearances and innings are decoupled across roles (-0.217 league-wide) — still
+true of the data, but no longer the reason, because both `durability` and
+`expected_appearances` now regress within the `pt_role` cohort.
+
+The reason now is that pitcher durability is **redundant by construction in
+both forms**, because each one already reads a pitcher's absence from his own
+record exactly once. A second read can only cancel or leak:
+
+* **Decomposed** — computed and never used. `expected_appearances` takes the
+  pitcher's own weighted appearances regressed toward his role cohort and never
+  calls `durability()`. Switched on, the column varies (sd 0.066) and `Proj_IP`
+  is **bit-identical** for all 4,047 arms.
+* **Product** — cancels algebraically. `_evidence_factor` divides the evidence
+  by durability precisely to avoid double-counting an absence, and the raw
+  volume multiplies it straight back. What survives is only where the evidence
+  clip binds — 51% of the staff — and the effect there is 3.4x the unclipped
+  half (4.57% against 1.35% median change in innings, correlated +0.572 against
+  +0.237). A bound leaking, not a signal, and it measures like one: four of five
+  targets worse, including pitchers past 180 innings going 17 to 20 against a
+  real 17.7.
+
+Making it bite would mean removing the evidence-factor division — the
+double-count this model has already made four times — or replacing one of the
+existing reads rather than adding to it, which is a redesign of the volume chain
+rather than a constant.
 
 ### Availability, and why it is not a role
 

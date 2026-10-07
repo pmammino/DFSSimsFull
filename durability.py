@@ -123,29 +123,61 @@ TEAM_GAMES = 162.0
 # that correlation is roles persisting rather than health.
 REGULAR_GAMES = {"hitter": 100.0, "pitcher": 18.0}
 
-# ...and pitchers are nonetheless OFF. That is a finding, and the reason is
-# not the one first guessed, so both are recorded here.
+# ...and pitchers are nonetheless OFF. That is a finding, it has been
+# re-measured since it was first recorded, and the reason has CHANGED — so
+# the current one is given first and the superseded one kept below it.
 #
 # For a HITTER, games played and playing time are very nearly the same
 # quantity: across 2,663 real player-seasons they correlate +0.973. Turning
 # up is the whole of it, which is why this works so well on that side — the
 # rank curve improves from 0.076 to 0.013.
 #
-# For a PITCHER they are not the same quantity and are not even pointed the
-# same way. Across 2,256 pitcher-seasons, APPEARANCES and INNINGS correlate
-# -0.217, because a starter makes about 30 appearances for 170 innings and a
-# reliever 65 for 65. Within a role the sign is right (+0.769 for starters,
-# +0.865 for relievers), but a pitcher who moves between roles across seasons
-# is then judged on a scale belonging to the job he no longer holds: a
-# reliever's 65 appearances against a rotation cohort's 30 reads as the
-# ceiling of durability, and the reverse reads as a wreck. Switched on, it
-# takes pitchers projected past 180 innings from 21 to 29 against a real 18
-# and makes the pitcher rank curve worse (0.0264 to 0.0292).
+# For a PITCHER it is now REDUNDANT BY CONSTRUCTION, in both volume forms,
+# because each one already reads his absence from his own record exactly
+# once. Durability would be a second read of the same fact, and there are
+# only two things a second read can do: cancel, or leak.
+#
+#   * DECOMPOSED (appearances x innings per appearance). `pt_durability` is
+#     computed and never used. `expected_appearances` takes the pitcher's
+#     own weighted appearances regressed toward his role cohort — it does
+#     not call `durability()` — so the appearance record carries the health
+#     signal directly. Switched on, the column varies (sd 0.066) and
+#     `Proj_IP` is BIT-IDENTICAL for all 4,047 arms.
+#
+#   * PRODUCT (anchor x season share x evidence factor). Here it cancels
+#     algebraically: `_evidence_factor` divides the evidence by durability
+#     to avoid double-counting an absence, and the raw volume multiplies it
+#     straight back. What survives is only where the evidence clip binds —
+#     51% of the staff — and the effect there is 3.4x larger than on the
+#     unclipped half (4.57% against 1.35% median change in innings,
+#     correlated +0.572 against +0.237). That is a BOUND LEAKING, not a
+#     signal, and it measures like one: rank rmse 1-12 0.0225 -> 0.0250,
+#     per-player error 0.1781 -> 0.1815, ranks 18-32 0.851 -> 0.824, and
+#     pitchers past 180 innings 17 -> 20 against a real 17.7. Four of five
+#     targets worse.
+#
+# So there is nothing left for it to explain. Making it bite would mean
+# either removing the evidence-factor division — which is the double-count
+# this model has already made four times — or replacing one of the existing
+# reads rather than adding to it, which is a redesign of the volume chain
+# and not a constant.
+#
+# SUPERSEDED REASON, kept because it is still true about the data and would
+# otherwise be rediscovered. Across 2,256 pitcher-seasons, APPEARANCES and
+# INNINGS correlate -0.217, because a starter makes about 30 appearances for
+# 170 innings and a reliever 65 for 65. Within a role the sign is right
+# (+0.769 for starters, +0.865 for relievers), and a pitcher who moved
+# between roles across seasons was being judged on a scale belonging to the
+# job he no longer held. That objection has since been answered — both
+# `durability` and `expected_appearances` regress within the `pt_role`
+# cohort — so it is NOT why the gate is still closed. The reason above is.
 #
 # Measuring it on INNINGS instead fixes the decoupling and cannot be used:
 # the evidence factor already divides by durability and the raw volume
 # multiplies it back, so an innings-based durability cancels itself wherever
-# the clip does not bind, and bites only as a widened clip band.
+# the clip does not bind, and bites only as a widened clip band. (That
+# cancellation is the same one the product form shows above, arrived at from
+# the other direction.)
 #
 # An upstream repair was tried, on the theory that the trouble was
 # `evidence_volume` being a best-of-three season and so biased high (+16.6
@@ -156,12 +188,6 @@ REGULAR_GAMES = {"hitter": 100.0, "pitcher": 18.0}
 # spread between players and it is the SHAPE within a club, not the level,
 # that survives closure. Individual accuracy and the rank curve disagree here,
 # and the rank curve is what the gate measures.
-#
-# What would actually work is decomposing a pitcher's innings the way his job
-# does: starts times innings per start for a rotation arm, appearances times
-# innings per appearance for a bullpen one. The model already carries
-# Proj_GS and pt_anchor_GS. That is a redesign of the pitcher volume chain
-# rather than a constant, and it is not this change.
 DURABILITY_KINDS = {"hitter"}
 
 # How far availability may move a player. The spread the fit supports is

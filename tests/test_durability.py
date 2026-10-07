@@ -557,3 +557,56 @@ def test_the_decomposition_earns_its_place_against_the_product():
     # And it is still in range on the workhorse count, which is the target
     # that caught the product form projecting 29 pitchers past 180 innings.
     assert abs(scores[True][1] - 17.67) <= 6, scores
+
+
+@has_history
+def test_pitcher_durability_has_nothing_left_to_explain():
+    """Why the gate is still closed, pinned so the reason cannot rot again.
+
+    It was closed originally because appearances and innings are decoupled
+    across roles (-0.217 league-wide), and that objection has since been
+    answered — both `durability` and `expected_appearances` regress within
+    the `pt_role` cohort. The reason now is different and stronger: each
+    volume form already reads a pitcher's absence from his own record
+    exactly once, so durability would be a SECOND read of the same fact, and
+    a second read can only cancel or leak.
+    """
+    fielding = pd.read_csv(FIELDING, low_memory=False)
+    players = pd.read_csv(ROOT / "out" / "pitcher_pa_projections_2027.csv",
+                          low_memory=False)
+
+    def run(decomposed, on):
+        import durability as D
+        keep = (M.PITCHER_VOLUME_DECOMPOSED, set(D.DURABILITY_KINDS))
+        M.PITCHER_VOLUME_DECOMPOSED = decomposed
+        D.DURABILITY_KINDS = {"hitter", "pitcher"} if on else {"hitter"}
+        try:
+            out, _, _ = M.project_playing_time(
+                players, "pitcher", target_year=2027, fielding=fielding,
+                feed_dir=ROOT / "feeds")
+        finally:
+            M.PITCHER_VOLUME_DECOMPOSED, D.DURABILITY_KINDS = keep
+        return out
+
+    # DECOMPOSED: computed and never used. `expected_appearances` reads the
+    # appearance record itself, so the column moves and the innings do not.
+    off, on = run(True, False), run(True, True)
+    assert on["pt_durability"].std() > 0.01, "the column should vary"
+    assert off["pt_durability"].std() == pytest.approx(0.0, abs=1e-9)
+    pd.testing.assert_series_equal(off["Proj_IP"], on["Proj_IP"])
+
+    # PRODUCT: cancels, except where the evidence clip binds — which is half
+    # the staff, and where its effect is several times larger. A bound
+    # leaking is not a signal.
+    off, on = run(False, False), run(False, True)
+    assert not off["Proj_IP"].equals(on["Proj_IP"])
+    m = off[["PlayerId", "pt_tier", "Proj_IP"]].merge(
+        on[["PlayerId", "pt_evidence_factor", "Proj_IP"]], on="PlayerId",
+        suffixes=("_off", "_on"))
+    m = m[m["pt_tier"].astype(str) == "projected"]
+    clipped = ((m["pt_evidence_factor"] <= M.EVIDENCE_FACTOR_MIN + 1e-9)
+               | (m["pt_evidence_factor"] >= M.EVIDENCE_FACTOR_MAX - 1e-9))
+    chg = (m["Proj_IP_on"] / m["Proj_IP_off"] - 1).abs()
+    assert clipped.mean() > 0.4, clipped.mean()
+    assert chg[clipped].median() > 2 * chg[~clipped].median(), (
+        chg[clipped].median(), chg[~clipped].median())
