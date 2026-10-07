@@ -30,7 +30,8 @@ sys.path.insert(0, str(ROOT))
 
 import playing_time_model as M  # noqa: E402
 import role_feeds as RF  # noqa: E402
-from role_taxonomy import TIMING, parse_role_mix  # noqa: E402
+from role_taxonomy import (  # noqa: E402
+    TIMING, is_depth_role, parse_role_mix)
 
 FEEDS = ROOT / "feeds"
 has_feeds = pytest.mark.skipif(
@@ -572,7 +573,7 @@ def test_the_arrival_carries_its_own_timing():
 
 
 def test_low_minors_are_still_nobody():
-    """The table reaches the top 200 of Triple-A and the top 40 of
+    """The table reaches the top 200 of Triple-A and the top 100 of
     Double-A, and nobody else. A High-A teenager is not taking plate
     appearances off a major league roster next year however highly he is
     ranked, and neither is the 300th-best player at Triple-A."""
@@ -582,7 +583,7 @@ def test_low_minors_are_still_nobody():
     assert RF.prospect_read(
         {"level": "AAA", "prospect_rank": 300, "birth_year": 2005}) is None
     assert RF.prospect_read(
-        {"level": "AA", "prospect_rank": 90, "birth_year": 2005}) is None
+        {"level": "AA", "prospect_rank": 220, "birth_year": 2005}) is None
 
 
 def test_every_arrival_mixture_is_a_distribution():
@@ -650,13 +651,15 @@ def test_the_real_feed_sends_up_about_as_many_as_really_come_up():
                              low_memory=False),
         feed_dir=FEEDS)
     up = out[out["pt_role_source"].astype(str) == "feed:prospect"]
-    assert 20 <= len(up) <= 60, len(up)
+    assert 25 <= len(up) <= 70, len(up)
 
-    # Near the real debut median of 92, on the low side of it: the table
-    # roles 31 of the 114 who really come up, and the ones it leaves out are
-    # the ones nobody saw coming, who are at the floor where they belong.
+    # Below the real debut median of 92: the table roles 42 of the 114 who
+    # really come up, and the ones it leaves out are the ones nobody saw
+    # coming, who are at the floor where they belong. The second Double-A
+    # band pulls the median down because its men are bench bats arriving in
+    # July, which is what a top-100-but-not-top-40 prospect gets.
     pa = up["Proj_PA"]
-    assert 40 <= pa.median() <= 140, pa.median()
+    assert 20 <= pa.median() <= 140, pa.median()
     assert pa.max() < 500, pa.max()
     # A handful become regulars, which is the shape that matters — the real
     # season has 16 debutants over 300 plate appearances.
@@ -664,6 +667,67 @@ def test_the_real_feed_sends_up_about_as_many_as_really_come_up():
     # And it stays a small share of the league: these are the last men onto
     # a roster, not a thirty-first club.
     assert pa.sum() / out["Proj_PA"].sum() < 0.05
+
+
+def test_a_callup_and_a_depth_role_cannot_both_be_true():
+    """Andrew Fischer read "Depth (no MLB PA), Mid Season (~July)" — the
+    engine expecting him in July and expecting him to do nothing when he got
+    there. 169 hitters and 58 pitchers said that, because the timing came
+    from LEVEL_TIMING, which is a statement about a LEVEL: "players at
+    Double-A tend to arrive in July" is not a claim that THIS Double-A player
+    arrives at all.
+
+    The arrival table decides which half gives. A player it reaches gets a
+    role and a timing; a player it does not gets neither.
+    """
+    depth = {"Depth (no MLB PA)": 1.0}
+    assert RF._timing({"level": "AA"}, depth, "hitter") is None
+    assert RF._timing({"level": "AAA"}, depth, "hitter") is None
+    assert RF._timing({"level": "A+"}, {"Depth (no MLB IP)": 1.0},
+                      "pitcher") is None
+    # Still fires for a real job the feeds place at a level away.
+    assert RF._timing({"level": "AAA"}, {"Bench Bat": 1.0}, "hitter") \
+        == "Early Season (~May)"
+
+
+def test_a_top_hundred_double_a_bat_gets_a_bench_job_not_nothing():
+    """Fischer's own case: 93rd on the list, 23 years old, sixth in his
+    club's farm system. A July callup to a bench job is a real thing that
+    happens to such a player, and it is what separates this band from the one
+    that was measured and rejected — that one claimed a SEPTEMBER arrival to
+    an injury-replacement job, which is a fifth of a season of nothing.
+    """
+    mix, src = RF.hitter_role_from_feeds(
+        {"club_has_orders": True, "depth_pos": "PROS", "depth_rank": 6,
+         "level": "AA", "prospect_rank": 93, "birth_year": 2004})
+    assert src == "feed:prospect"
+    assert max(mix, key=mix.get) == "Bench Bat"
+    assert RF.prospect_read({"level": "AA", "prospect_rank": 93,
+                             "birth_year": 2004})[1] == "Mid Season (~July)"
+
+    # And he is still behind the top-40 man, who gets a shot at the job.
+    top = RF.prospect_read({"level": "AA", "prospect_rank": 12,
+                            "birth_year": 2004})[0]
+    assert top.get("Full Time", 0) > 0 and "Full Time" not in mix
+
+
+@has_feeds
+def test_no_player_in_the_real_projection_is_called_up_to_do_nothing():
+    """The invariant, end to end on the real feeds and both sides."""
+    for kind, vol in (("hitter", "Proj_PA"), ("pitcher", "Proj_IP")):
+        src = pd.read_csv(ROOT / "out" / f"{kind}_pa_projections_2027.csv",
+                          low_memory=False)
+        df = src[[c for c in src.columns if not c.startswith("Proj_")
+                  and not (c.startswith("pt_") and c != "pt_tier")]]
+        out, _, _ = M.project_playing_time(
+            df, kind, target_year=2027,
+            fielding=pd.read_csv(ROOT / "out" / "fielding_history_2027.csv",
+                                 low_memory=False),
+            feed_dir=FEEDS)
+        late = out["pt_role_start"].astype(str) != "Opening Day"
+        depth = out["pt_role"].astype(str).map(is_depth_role)
+        assert not (late & depth).any(), \
+            out.loc[late & depth, ["Name", "pt_role", "pt_role_start"]]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

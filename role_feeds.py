@@ -154,6 +154,9 @@ PROSPECT_ARRIVAL = {
         (40, "Mid Season (~July)",
          {"Full Time": 0.25, "Strong Side Platoon": 0.30,
           "Bench Bat": 0.45}),
+        (100, "Mid Season (~July)",
+         {"Strong Side Platoon": 0.20, "Bench Bat": 0.50,
+          "Injury Replacement / 26th Man": 0.30}),
     ),
 }
 
@@ -166,7 +169,15 @@ PROSPECT_ARRIVAL = {
 # appearance anchor is a fifth of a season of a job that barely exists, and
 # the roster-depth decay then takes what is left. They were not projections;
 # they were noise with a name attached, and they cost the rank curve 0.0250
-# against 0.0228 for stopping here, at the same share of the league.
+# against 0.0228 for the top 200 and top 40 alone.
+#
+# The second Double-A band is NOT a retreat from that, and the difference is
+# the reason it works. The rejected band was LATE SEASON on an injury-
+# replacement mixture — a fifth of a season of nothing. This one is a July
+# callup to a bench job, which is a real thing that happens to a top-100
+# prospect, and it measures like one: eleven more names at a median of 31
+# plate appearances, a minimum of 5.5, and the rank curve IMPROVES to 0.0212.
+# The lesson is about what a band claims, not about how far down it reaches.
 #
 # The league's playing time is fixed, so a name that takes nothing still
 # takes a roster place. Better to leave the September cup-of-coffee man at
@@ -1246,6 +1257,19 @@ def _timing(e: dict, mix: dict[str, float], kind: str,
         "End-of-Rotation Starter (SP4-5)", "Closer",
         "Late Inning RP (Setup)"}
     if established:
+        return None
+    # A DEPTH ROLE CANNOT CARRY A CALLUP. The level alone used to decide the
+    # timing, so a Double-A bat the arrival table does not reach came out as
+    # "Depth (no MLB PA), Mid Season (~July)" — the engine saying it expects
+    # him in July and expects him to do nothing when he gets there. 169
+    # hitters and 58 pitchers read that way, Andrew Fischer among them.
+    #
+    # The two halves have to agree, and which half gives is decided by the
+    # arrival table: a player it reaches gets a role AND a timing, a player
+    # it does not gets neither. LEVEL_TIMING is a statement about a LEVEL,
+    # and "players at Double-A tend to arrive in July" is not a claim that
+    # THIS Double-A player arrives at all.
+    if is_depth_role(heavy):
         return None
     return LEVEL_TIMING.get(level)
 
