@@ -1072,6 +1072,62 @@ That takes the defaulted hitters from 1,941 to 1,746 and the pitchers from
 disk names**, and they need either a working Chadwick fetch or a hydrated
 statsapi person object — both of which the code now consumes when present.
 
+#### The depth ranking, and two things it was getting wrong
+
+The roster-depth discount is what decides how much of his anchor a player
+keeps once he is past his club's core, and it was wrong in two independent
+ways that only showed up when the prospect arrivals landed in the middle of
+it.
+
+**A late arrival was charged for arriving twice.** `pt_raw` already carries
+the timing share, so a July callup reached the ranking at half volume, sorted
+*below* the incumbents for it, and then had the decay take most of what was
+left. The depth rank means "he is the Nth man at this job on this club" — a
+statement about the job, not about when he takes it up; a shortstop back from
+a broken hand in June is still the shortstop. This is the same pathology as
+the lineup-spot multiplier and the pitcher's season share: one signal spent in
+two places. Dividing the timing back out before sorting takes the median
+prospect arrival from **38.5 plate appearances to 88.5**, against a real debut
+median of 92. It is worth almost nothing on a pitching staff, where an
+arriving arm is already near the top of his role tier, and it is kept there
+anyway because it is a correction rather than a knob.
+
+**The decay ran off a cliff rather than tapering.** At `ROSTER_DEPTH_FLOOR =
+0.04`, 0.66 and 0.75 to the tenth power are both effectively zero, so everyone
+past about the tenth man beyond the core sat on the same floor. A club's 18th
+to 32nd came out at **57% (arms) and 65% (bats)** of what real clubs give those
+ranks. The real curves do not end — a real club's 30th pitcher throws three
+innings and its 24th position player bats — so the floor has to be high enough
+to carry that tail. It and `ROSTER_DEPTH_DECAY_PITCHER` had to be refitted
+*together*, because the floor decides where the taper ends and the decay how
+fast it gets there; fitting either alone finds a compromise that is wrong for
+both.
+
+| | hitters | pitchers |
+|---|---|---|
+| per-player error vs the real curve | 0.217 → **0.205** | 0.248 → **0.166** |
+| ranks 18-32 as a share of real | 0.647 → **0.973** | 0.566 → **0.874** |
+| top-twenty rank rmse | 0.0200 → 0.0232 | 0.0736 → **0.0464** |
+| median prospect arrival | 38.5 PA → **88.5** | 23.2 IP → **25.4** |
+
+Settings: `ROSTER_DEPTH_FLOOR` 0.04 → **0.10**, `ROSTER_DEPTH_DECAY_PITCHER`
+0.66 → **0.70**, hitter decay unchanged at 0.75.
+
+The one thing that gets worse is the hitters' top-twenty fit, and it is a real
+trade rather than a rounding error: the regulars give up a little so that the
+bottom half of a roster stops being empty. It is still far better than the
+0.0762 this started at.
+
+**A side effect worth knowing about.** The refit flipped which pitcher volume
+form fits the top of the staff better. The decomposition (appearances x innings
+per appearance) used to beat the product form on ranks 1-12, 0.0269 to 0.0291;
+afterwards *both* improved but the product form improved more, to 0.0225
+against 0.0265. The decomposition is kept, because it is right about more of
+the staff (per-player error 0.166 against 0.178) and because keeping innings as
+two numbers is what lets a reliever's durability mean anything — but the test
+that asserted the old margin now measures the staff rather than its top twelve,
+which is the claim the decomposition actually earns.
+
 ### Availability, and why it is not a role
 
 A season's plate appearances are the product of two unrelated things — how

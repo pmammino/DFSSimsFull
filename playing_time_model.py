@@ -584,9 +584,29 @@ ROSTER_DEPTH_CORE = {"hitter": 13, "pitcher": 13}   # deprecated
 # managed with no arrivals at all — the arriving prospect displaces a club's
 # last men rather than joining them, and the real curve prefers him there.
 ROSTER_DEPTH_DECAY_HITTER = 0.75
-ROSTER_DEPTH_DECAY_PITCHER = 0.66
+# Refitted from 0.66 to 0.70 alongside the floor, and the two had to move
+# together: the floor decides where the taper ends and the decay how fast it
+# gets there, so fitting either alone found a compromise that was wrong for
+# both. Jointly, the staff's top-twenty fit improves from 0.0736 to 0.0464 —
+# the single largest gain the pitcher side has had — because the innings the
+# old decay buried past rank 18 were coming off ranks 12 to 16, which ran 3
+# to 10% above the real curve to absorb them.
+ROSTER_DEPTH_DECAY_PITCHER = 0.70
 ROSTER_DEPTH_DECAY = ROSTER_DEPTH_DECAY_HITTER   # back-compat alias
-ROSTER_DEPTH_FLOOR = 0.04
+# The least a player past his club's core may keep, as a share of his own
+# anchor. It was 0.04, and at that value the decay ran off a cliff rather
+# than tapering: a club's 18th to 32nd men came out at 57% (arms) and 65%
+# (bats) of what real clubs give those ranks, because 0.66 and 0.75 to the
+# tenth power are both effectively zero and everyone past that sat on the
+# same floor. The real curves do not end — a real club's 30th pitcher throws
+# three innings and its 24th position player bats — so the floor has to be
+# high enough to carry that tail.
+#
+# At 0.10 the band comes to 0.87 and 0.97 of real and the per-player error
+# against the real rank curve falls from 0.248 to 0.166 for pitchers and
+# 0.217 to 0.205 for hitters. Higher overshoots: by 0.14 the tail is above
+# the real curve and the error climbs again.
+ROSTER_DEPTH_FLOOR = 0.10
 
 # Minimum evidence (batters faced) before a reliever is considered for a
 # LEVERAGE role — closer or setup. ~100 TBF is about 25 innings; under that,
@@ -664,7 +684,27 @@ def apply_roster_depth(players: pd.DataFrame, kind: str, *,
     # mixes the two.
     sub = out.loc[eligible].copy()
     sub["_order"] = sub["pt_role"].astype(str).map(role_depth_order)
-    sub = sub.sort_values(["_order", "pt_raw"], ascending=[True, False])
+    # RANK ON THE JOB, NOT ON HOW MUCH OF THE SEASON HE IS THERE FOR.
+    #
+    # The depth rank means "he is the Nth man at this job on this club",
+    # which is a statement about the job and not about when he takes it up —
+    # a shortstop back from a broken hand in June is still the shortstop.
+    # Ranking on `pt_raw` charged a late arrival twice: the timing had
+    # already halved his volume, and he was then sorted BELOW the incumbents
+    # for having been halved, so the decay took most of what was left. It is
+    # the same pathology as the lineup-spot multiplier and the pitcher's
+    # season share — one signal spent in two places.
+    #
+    # Dividing it back out is worth a lot on the bench, where the queue is
+    # long and the decay compounds over many ranks: the median prospect
+    # arrival goes from 38.5 plate appearances to 88.5, against a real debut
+    # median of 92. It is worth almost nothing on a pitching staff, where an
+    # arriving arm is already near the top of his role tier, and it is kept
+    # there anyway because it is a correction rather than a knob.
+    timing = (sub["pt_role_start"].map(timing_share).astype(float)
+              .fillna(1.0).clip(lower=0.05))
+    sub["_standing"] = sub["pt_raw"] / timing
+    sub = sub.sort_values(["_order", "_standing"], ascending=[True, False])
     rank = (sub.groupby([sub[team_col], sub["pt_family"]]).cumcount() + 1
             ).reindex(out.loc[eligible].index)
     out.loc[eligible, "pt_depth_rank"] = rank
