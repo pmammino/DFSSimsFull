@@ -901,6 +901,48 @@ without an MLBAM id (only the prospects feed carries one);
 the run log prints exactly which rows those are. Pass `feed_dir=None` to skip
 the feeds entirely.
 
+### Trades the orders feed hasn't caught up to
+
+`orders.xml` is a snapshot, and a player who moves clubs after it was taken
+still has rows in it — under his OLD club. `resolve_ids` is right to keep
+using them for identity ("the club is a tie-breaker, never a filter": 99.6%
+of batting-order hitters resolve by name regardless of which team the row
+says), but a downstream step was treating "a club publishes a current order"
+as true of the PLAYER rather than of the roster he used to be on.
+
+Luis Arraez's only `orders.xml` rows are two legacy entries for Minnesota.
+Philadelphia's depth chart has him at rank 1 — he was traded. Philadelphia
+publishes a current order, so `club_has_orders` read `True` off ANOTHER
+Phillies hitter's presence in it, and Arraez himself, with zero rows in it,
+read as "his new club benched him today": a genuine disagreement against the
+depth chart's Full Time claim, split 60/40. It is not a disagreement — the
+orders feed has never placed him on this club at all, under any flag, so it
+has nothing to disagree with the depth chart ABOUT. The same mechanism hit
+Willy Adames, each docked from an everyday role to a part-time one on
+evidence that was entirely about a team they no longer play for.
+
+The fix tracks, per player, every team his name has EVER resolved to in the
+orders feed — legacy rows included, since a legacy flag marks a stale
+LINEUP FORMAT, not a stale team, and a current-format row for a club he has
+since left is just as uninformative. Where that set exists and does not
+contain his current team, `club_has_orders` reads `False` for him
+specifically, and the depth chart stands unopposed — the same read a club
+with no order feed at all already gets.
+
+Thirteen hitters' mixtures changed, all recently traded or signed: Arraez
+(418 → 588 plate appearances), Willy Adames (284 → 687), Christian Vázquez,
+Kyle Farmer, Rowdy Tellez, Luis Urías, Cedric Mullins, Matt Vierling,
+José Barrero, LaMonte Wade Jr., and three bench arms correctly dropped from
+a false disagreement to the depth-only read. A real cost came with it: the
+top-twenty rank-curve rmse moves from 0.0232 to 0.0276, because several of
+these are now legitimately among the strongest hitters on their new club,
+concentrating plate appearances onto a few clubs' top ranks in a way the
+pooled-across-30-clubs metric does not reward. That is accepted rather than
+tuned away — a curve fit by construction cannot outrank getting a named
+player's own role right, and gaming it back down would mean re-introducing
+the wrong answer for players whose team the depth chart has already caught
+up to.
+
 ### Prospect arrivals
 
 A player one level away is not a depth player, and calling him one was costing
