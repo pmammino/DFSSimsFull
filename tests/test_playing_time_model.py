@@ -177,6 +177,85 @@ def test_no_player_is_left_without_a_volume():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# a clip must not compound onto the next-biggest player
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_a_clip_no_longer_compounds_onto_the_next_biggest_player():
+    """The Mets case, reduced to its numbers.
+
+    A staff of six: one arm whose own evidence already clips the ceiling,
+    and five more with unequal raw. The club's own evidence undersubscribes
+    its budget, so everyone needs lifting to close it — and the question is
+    what happens to the slack the first player's clip leaves behind.
+
+    Proportional redistribution hands that slack to the unclipped in
+    proportion to what they already hold, so the second-biggest arm — who
+    needed no help to begin with — gets a SECOND, bigger lift stacked on
+    top of the team's own uniform shortfall. Even redistribution gives
+    everyone the same absolute amount instead, so the second-biggest arm's
+    final lift matches the team's own shortfall and no more.
+    """
+    # Nolan McLean and Sean Manaea's own pre-closure raw, and the Mets'
+    # own measured 1.276x team-wide shortfall.
+    raw = np.array([177.46, 154.02, 80.1, 60.5, 50.2, 2.2])
+    scale = 1.276
+    target = raw.sum() * scale
+    ceiling = 215.0
+
+    out = M._close_one_team(raw.copy(), target, ceiling)
+    assert out[0] == pytest.approx(ceiling)
+    assert np.isclose(out.sum(), target)
+
+    base = M._close_one_team(raw.copy(), target, ceiling,
+                             spread="proportional")
+    assert base[0] == pytest.approx(ceiling)
+    assert np.isclose(base.sum(), target)
+
+    # This is what failed before: the second-biggest arm's lift should be
+    # close to the team's own uniform shortfall, not meaningfully above
+    # it. Proportional redistribution hands him a SECOND lift on top —
+    # even redistribution gives him less of one.
+    even_lift = out[1] / raw[1]
+    prop_lift = base[1] / raw[1]
+    assert even_lift < prop_lift
+    assert even_lift < scale + 0.02
+    assert prop_lift > scale + 0.02
+
+
+def test_even_redistribution_still_respects_the_ceiling():
+    """Multiple passes: giving everyone a flat share can push someone else
+    over the line too, and the next pass has to catch that."""
+    raw = np.array([210.0, 208.0, 206.0, 5.0, 5.0])
+    out = M._close_one_team(raw, raw.sum() * 1.15, 215.0)
+    assert out.max() <= 215.0 + 1e-9
+    assert np.isclose(out.sum(), raw.sum() * 1.15)
+
+
+def test_even_redistribution_never_takes_room_from_anyone():
+    """Every unclipped player is, by definition, under the ceiling — the
+    flat share must never ask one of them to give room up."""
+    raw = np.array([214.9, 214.9, 214.9, 1.0])
+    out = M._close_one_team(raw, 800.0, 215.0)
+    assert out.min() >= 0.0
+    assert np.isclose(out.sum(), 800.0)
+
+
+def test_games_started_still_uses_the_old_redistribution():
+    """Games started crowds the ceiling on most staffs — several starters
+    sit at 34 at once — a range narrow enough that an even split of the
+    slack can push several still-unclipped starters over the line in the
+    same pass. Measured: one real club's rotation under-closed to 151 of
+    162 starts under an even split, six games short of where proportional
+    converges inside the pass budget. This asserts the call site still
+    passes `spread="proportional"` rather than relying on the default.
+    """
+    out, _, _ = _run(_pitchers(n_per_team=8), "pitcher")
+    tot = out.groupby("Pred_target_team_id")["Proj_GS"].sum()
+    assert (tot <= M.TEAM_GS_BUDGET + 0.5).all()
+    assert (tot >= M.TEAM_GS_BUDGET - 1.5).all()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # reserves — a team we expect to sign someone must be under-projected
 # ─────────────────────────────────────────────────────────────────────────────
 

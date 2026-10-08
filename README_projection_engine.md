@@ -1226,6 +1226,52 @@ double-count this model has already made four times — or replacing one of the
 existing reads rather than adding to it, which is a redesign of the volume chain
 rather than a constant.
 
+#### A clip must not compound onto the next-biggest player
+
+Team closure (`_close_one_team`) scales every player on a club by the same
+ratio to hit the budget exactly, clips anyone the physical ceiling catches,
+and redistributes the clipped slack among the rest. The redistribution used
+to be PROPORTIONAL — each unclipped player gets the same share of the slack
+he already holds of the unclipped total — and that compounds a clip onto
+whoever is next biggest rather than spreading it.
+
+The Mets' projected pitching pool undersubscribed its budget by 27.6%, the
+largest shortfall in the league (next closest: 15.3%), because their
+collective evidence factor (0.726) ran well below league average (0.852) —
+several arms had less established track record than the role the depth
+chart assigned them. Closing that shortfall the old way clipped Nolan
+McLean's raw at the 215-inning physical ceiling and handed his slack to Sean
+Manaea IN PROPORTION TO MANAEA'S OWN RAW — already the second-largest on the
+staff — lifting him 28.8%, *more* than the team's own uniform shortfall, on
+top of it.
+
+That direction is backwards. Measured across 150 real team-seasons, how many
+different pitchers a team actually uses correlates **negatively** with how
+much its single best arm throws (−0.41, −0.43 by share of team innings): a
+real staff short on established depth spreads the work across *more* arms,
+it does not lean harder on the one it has proven.
+
+`_close_one_team` now spreads a clip's slack **evenly** — the same absolute
+amount to every unclipped player — by default, so a clip no longer has a
+second, bigger effect on whoever happens to be next in line. Manaea's final
+lift drops from 198.3 to 196.9 innings, in line with the team's own 27.6%
+shortfall rather than above it; the rest of the staff's slack cascades down
+toward the back of the roster instead of concentrating on the arm right
+behind the one that clipped. League-wide the aggregate targets barely move
+(top-twenty rank rmse and per-player error against the real curve are
+unchanged to four digits), because this is a narrow, two-team phenomenon —
+only the Mets and, much more mildly, the Giants had a scale factor large
+enough for it to matter.
+
+**Games started keeps the old, proportional redistribution**, passed
+explicitly as `spread="proportional"` at that call site. The measurement
+above was about innings specifically; starts are a much narrower, more
+homogeneous range (most staffs crowd the 34-start ceiling at several
+positions at once), and an even split there pushed one club's rotation to
+under-close by six starts inside the iteration budget. Proportional
+redistribution already converges fine for that quantity, so it keeps using
+it.
+
 ### Availability, and why it is not a role
 
 A season's plate appearances are the product of two unrelated things — how
