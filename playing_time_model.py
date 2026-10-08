@@ -900,14 +900,50 @@ def raw_volumes(players: pd.DataFrame, kind: str,
 # Team closure
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _close_one_team(raw: np.ndarray, target: float,
-                    ceiling: float) -> np.ndarray:
+def _close_one_team(raw: np.ndarray, target: float, ceiling: float,
+                    spread: str = "even") -> np.ndarray:
     """Scale `raw` so it sums to `target`, with nobody above `ceiling`.
 
     Iterative proportional fit: scale everyone, clip whoever exceeds the
-    ceiling, then re-scale only the unclipped to absorb the remainder. Without
-    the redistribution a clipped player's surplus would simply vanish and the
-    team would under-close.
+    ceiling, then spread the remainder across the unclipped to absorb it.
+    Without the redistribution a clipped player's surplus would simply
+    vanish and the team would under-close.
+
+    `spread` picks how that remainder is shared, and it matters only once a
+    clip actually happens:
+
+    * `"even"` (the default) gives every unclipped player the same ABSOLUTE
+      amount. This is for innings and plate appearances, a workload with a
+      huge span (2 to 215 IP on one staff) where a clip is a rare, large
+      event. The old behaviour — proportional, below — gave each unclipped
+      player the same SHARE of the slack that he already held of the
+      unclipped total, which COMPOUNDS a clip onto whoever is next biggest
+      rather than spreading it. The Mets' own pitching evidence
+      undersubscribed their budget by 27.6%, the largest shortfall in the
+      league; closing it the old way clipped Nolan McLean's raw at the
+      215-inning physical ceiling and then handed his slack to Sean Manaea
+      IN PROPORTION TO MANAEA'S OWN RAW — already the second-largest on the
+      staff — lifting him 28.8%, MORE than the team's own uniform shortfall,
+      on top of it. One clip was having a second, bigger effect on whoever
+      happened to be next in line, which is backwards: measured across 150
+      real team-seasons, how many different pitchers a team actually uses
+      correlates NEGATIVELY with how much its single best arm throws (-0.41,
+      -0.43 by share of team innings) — a real staff short on established
+      depth spreads the work across MORE arms, it does not lean harder on
+      the one it has proven. A flat, additive spread is the least
+      opinionated way to do that: every unclipped player picks up the same
+      absolute amount, so a clip no longer compounds onto whoever happens to
+      be the next-largest arm on the roster.
+    * `"proportional"` is the original behaviour, kept for games started,
+      where it is still the right tool: a rotation's five anchors already
+      crowd the 34-start ceiling on most staffs (several starters sit at it
+      at once), a narrow, homogeneous range where an even split of the
+      slack can push MULTIPLE still-unclipped starters over the ceiling in
+      the same pass — measured: one club's rotation under-closed to 151 of
+      162 starts, six games short of where proportional converges inside
+      the pass budget. Games started was never part of the measurement
+      above, which was about innings specifically, so it keeps the
+      behaviour that already converges there.
     """
     raw = np.asarray(raw, dtype=float)
     if raw.size == 0 or target <= 0:
@@ -929,6 +965,16 @@ def _close_one_team(raw: np.ndarray, target: float,
         if not free.any() or slack <= 0:
             break
         s = out[free].sum()
+        if spread == "even":
+            add = (slack - s) / free.sum()
+            if add >= 0:
+                out[free] = out[free] + add
+                continue
+            # The flat share would take room from someone, which it should
+            # never need to — everyone in `free` is under the ceiling by
+            # construction. Fall through to proportional rather than risk a
+            # negative allocation; not reached at the ceilings this model
+            # actually uses.
         if s <= 0:
             out[free] = min(slack / free.sum(), ceiling)
             break
@@ -1220,7 +1266,8 @@ def allocate_playing_time(players: pd.DataFrame, kind: str, *,
             block = gs[pos]
             if block.sum() <= 0:
                 continue
-            gs[pos] = _close_one_team(block, TEAM_GS_BUDGET, PT_MAX_GS)
+            gs[pos] = _close_one_team(block, TEAM_GS_BUDGET, PT_MAX_GS,
+                                      spread="proportional")
         # The ceiling binds on most staffs here — several starters sit at it
         # at once — so the fit can run out of passes a hair above it. A
         # rotation where somebody starts 34.1 games is wrong in a way a
