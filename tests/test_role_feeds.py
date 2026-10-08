@@ -173,6 +173,123 @@ def test_a_club_with_no_lineup_in_the_feed_is_not_a_club_of_bench_players():
     assert src == "feed:depth"
 
 
+def test_a_trade_does_not_manufacture_a_disagreement_with_the_depth_chart():
+    """Luis Arraez's only orders.xml rows were two legacy entries for
+    Minnesota; Philadelphia's depth chart has him at rank 1, because he was
+    traded there. Philadelphia publishes a current order, so
+    `club_has_orders` read True off ANOTHER Phillies hitter's presence in
+    it, and Arraez himself — zero rows in it — read as "his new club
+    benched him today", a genuine disagreement against the depth chart's
+    Full Time claim: Bench Bat 0.6 / Full Time 0.4.
+
+    It is not a disagreement. The orders feed has never placed him on this
+    club at all, under any flag, so it has nothing to disagree with the
+    depth chart ABOUT — same mechanism as the "no lineup feed at all" case
+    above, just scoped to one player on a club that otherwise has one. Four
+    everyday players this season (Arraez and Willy Adames among them) were
+    being docked to a 60/40 bench split on evidence that was entirely about
+    a team they no longer play for.
+    """
+    players = pd.DataFrame({
+        "PlayerId": [1, 2],
+        "Name": ["Luis Arraez", "Bryce Harper"],
+        "Pred_target_team_id": [143, 143],   # both on Philadelphia now
+    })
+    feeds = {
+        "orders": pd.DataFrame({
+            "name_key": ["luis arraez", "luis arraez", "bryce harper"],
+            "feed_team_id": [142, 142, 143],       # Arraez's rows: Minnesota
+            "feed_position": ["1B", "1B", "RF"],
+            "vs_hand": ["L", "R", "R"],
+            "spot": [8, 1, 3],
+            "legacy": [True, True, False],
+        }),
+        "depth": pd.DataFrame({
+            "name_key": ["luis arraez", "bryce harper"],
+            "feed_team_id": [143, 143],
+            "depth_pos": ["2B", "RF"],
+            "depth_rank": [1, 1],
+        }),
+    }
+    ev, _ = RF.build_evidence(players, "hitter", feeds)
+    assert ev[1]["club_has_orders"] is False
+    assert "spot_vs_r" not in ev[1] and "spot_vs_l" not in ev[1]
+    # Harper actually is in Philadelphia's current order, and that is
+    # unaffected: the fix is scoped to a player, not a blanket override of
+    # the mechanism.
+    assert ev[2]["club_has_orders"] is True
+
+    mix, src = RF.hitter_role_from_feeds(ev[1])
+    assert mix["Full Time"] == pytest.approx(RF.DEPTH_ONLY["hitter"])
+    assert src == "feed:depth"
+
+
+def test_a_stale_row_need_not_be_flagged_legacy_to_be_caught():
+    """The legacy flag marks a stale LINEUP FORMAT (the old eight-spot
+    orders), not a stale TEAM. A player's current-format row for a club he
+    has since left is just as uninformative about his new club as a legacy
+    one, and the fix does not rely on the flag to catch it."""
+    players = pd.DataFrame({
+        "PlayerId": [1],
+        "Name": ["Trade Case"],
+        "Pred_target_team_id": [143],
+    })
+    feeds = {
+        "orders": pd.DataFrame({
+            "name_key": ["trade case", "someone else"],
+            "feed_team_id": [142, 143],
+            "feed_position": ["1B", "RF"],
+            "vs_hand": ["R", "R"],
+            "spot": [3, 4],
+            "legacy": [False, False],
+        }),
+        "depth": pd.DataFrame({
+            "name_key": ["trade case"],
+            "feed_team_id": [143],
+            "depth_pos": ["1B"],
+            "depth_rank": [1],
+        }),
+    }
+    ev, _ = RF.build_evidence(players, "hitter", feeds)
+    assert ev[1]["club_has_orders"] is False
+
+
+def test_a_player_genuinely_absent_from_his_own_current_club_still_disagrees():
+    """The fix is scoped to a TEAM mismatch. A player who has never moved
+    and simply did not make one day's nine is still a real disagreement —
+    this is the case `test_absence_still_contradicts_a_depth_chart_that_
+    says_starter` covers, reconfirmed end to end through `build_evidence`
+    so the two paths cannot drift apart."""
+    players = pd.DataFrame({
+        "PlayerId": [1, 2],
+        "Name": ["Still Here", "Teammate"],
+        "Pred_target_team_id": [143, 143],
+    })
+    feeds = {
+        # A teammate resolves fine and establishes that this club HAS a
+        # current order; "Still Here" simply is not in it today.
+        "orders": pd.DataFrame({
+            "name_key": ["teammate"],
+            "feed_team_id": [143],
+            "feed_position": ["RF"],
+            "vs_hand": ["R"],
+            "spot": [4],
+            "legacy": [False],
+        }),
+        "depth": pd.DataFrame({
+            "name_key": ["still here"],
+            "feed_team_id": [143],
+            "depth_pos": ["SS"],
+            "depth_rank": [1],
+        }),
+    }
+    ev, _ = RF.build_evidence(players, "hitter", feeds)
+    assert ev[1]["club_has_orders"] is True
+    mix, src = RF.hitter_role_from_feeds(ev[1])
+    assert set(mix) == {"Bench Bat", "Full Time"}
+    assert mix["Bench Bat"] == pytest.approx(RF.DISAGREE)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Width is disagreement
 # ─────────────────────────────────────────────────────────────────────────────

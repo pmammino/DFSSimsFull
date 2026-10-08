@@ -1207,6 +1207,39 @@ def build_evidence(players: pd.DataFrame, kind: str,
                 spot_vs_r=spots.get("R"), spot_vs_l=spots.get("L"),
                 feed_position=grp.iloc[0].get("feed_position"))
 
+    # Every team a player has EVER appeared under in the orders feed,
+    # legacy rows included — not to use as evidence (the legacy filter
+    # above already excluded those rows for that reason) but to catch a
+    # player who has moved CLUBS since the feed's lineups were captured.
+    #
+    # Luis Arraez's only orders.xml rows are two legacy entries for
+    # Minnesota; he is now with Philadelphia, whose depth chart has him at
+    # rank 1. Philadelphia publishes a current order, so `with_orders`
+    # contains it, and Arraez himself has zero rows in it — read, by the
+    # logic above, as "his new club benched him", a real disagreement
+    # against the depth chart. It is not a disagreement: the feed has
+    # never placed him on this club at all, under any flag, so it has
+    # nothing to disagree with the depth chart ABOUT. Same mechanism hit
+    # Willy Adames (traded from MIL), Roman Anthony and Brendan Donovan —
+    # four everyday players docked to a 60/40 bench split on evidence that
+    # was entirely about a team they no longer play for.
+    moved_since: dict[int, bool] = {}
+    if kind == "hitter":
+        raw = feeds.get("orders")
+        if raw is not None and not raw.empty:
+            raw = raw[raw["feed_position"].astype(str).str.upper() != "P"]
+            raw_resolved, _ = resolve_ids(raw, players, aliases=aliases,
+                                          team_col=team_col,
+                                          label="orders_any_team")
+            raw_resolved = raw_resolved[raw_resolved["PlayerId"].notna()]
+            for pid, grp in raw_resolved.groupby(
+                    raw_resolved["PlayerId"].astype(int)):
+                teams = {int(t) for t in
+                         pd.to_numeric(grp["feed_team_id"],
+                                       errors="coerce").dropna().unique()}
+                moved_since[pid] = bool(teams)
+                ev.setdefault(pid, {})["_orders_teams"] = teams
+
     if not depth.empty:
         for pid, grp in depth.groupby(depth["PlayerId"].astype(int)):
             ev.setdefault(pid, {}).update(_best_depth_row(grp, kind))
@@ -1253,7 +1286,11 @@ def build_evidence(players: pd.DataFrame, kind: str,
             for p, t in zip(players["PlayerId"], tids)}
     for pid, e in ev.items():
         t = club.get(pid)
-        e["club_has_orders"] = t is not None and t in with_orders
+        has_orders = t is not None and t in with_orders
+        seen = e.pop("_orders_teams", None)
+        if has_orders and seen and t not in seen:
+            has_orders = False
+        e["club_has_orders"] = has_orders
 
     stats["clubs_with_orders"] = len(with_orders)
     stats["players_with_evidence"] = len(ev)
