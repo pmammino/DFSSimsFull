@@ -757,6 +757,27 @@ provisional table once history is cached.
 **Positions come free with this fetch** — the fielding group returns one row per
 (player, position), supplying the `Pos` field the pipeline has never had.
 
+## Season floor and ceiling (`season_sim.py`)
+
+`scripts/export_projections.py` simulates each projected player's season
+(`--n-sims`, default 2,000; `0` skips) and adds `<stat>_floor` and
+`<stat>_ceil` beside every simulated stat. The existing column is the median;
+floor is the 25th-percentile outcome and ceiling the 75th, **read in the
+direction that is good for the stat**. HR, SB, R, RBI, AVG, pitcher SO and SV
+have the ceiling above the median; ERA, WHIP, BB, H and HR allowed, ER, and
+hitter SO and CS have it below, because a lower number is the better season.
+`HITTER_STATS` / `PITCHER_STATS` in `season_sim.py` are the one place that sets
+each stat's direction. Each stat's range is its own percentile, not one
+scenario. Floor-tier players are not simulated and have blank ranges.
+
+The draw is role (from the role mixture) -> health -> talent uncertainty (the
+`SD_*` columns) -> event luck. The health and overdispersion constants are
+named assumptions at the top of the file, not fitted values. The projection is
+an expected value, so for skewed stats (saves, holds, volume in a job battle)
+the simulation's own median can sit off it; the bracket is widened to contain
+the projection, and the simulation's median and mean are in
+`out/projections_{hitters,pitchers}_sim_<year>.csv`.
+
 ## Season category projections
 
 `deliverables/projection_engine/SEASON_CATEGORIES.md` maps all 54 requested

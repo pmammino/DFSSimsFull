@@ -188,6 +188,47 @@ def build_pitchers(p: pd.DataFrame, pools: pd.DataFrame) -> pd.DataFrame:
     return out[order].sort_values("IP", ascending=False).reset_index(drop=True)
 
 
+def _with_brackets(df: pd.DataFrame, stats: dict) -> pd.DataFrame:
+    """Put `<stat>_floor` and `<stat>_ceil` right after each simulated stat."""
+    cols = []
+    for c in df.columns:
+        if c.endswith(("_floor", "_ceil")) and c.rsplit("_", 1)[0] in stats:
+            continue
+        cols.append(c)
+        if c in stats and f"{c}_floor" in df.columns:
+            cols += [f"{c}_floor", f"{c}_ceil"]
+    return df[cols]
+
+
+def add_brackets(hitters, pitchers, h_raw, p_raw, n_sims, seed):
+    """Season simulation -> floor (25th) and ceiling (75th) beside each stat.
+
+    Direction-aware: for ERA, WHIP, hits allowed and the other stats where
+    lower is better, the ceiling is the 25th percentile (see season_sim).
+    The projection already in the sheet is the median.
+    """
+    if n_sims <= 0:
+        return hitters, pitchers, pd.DataFrame(), pd.DataFrame()
+    import season_sim as SS
+    print(f"  simulating {n_sims:,} seasons per player ...")
+    sim_h = SS.simulate_hitters(h_raw, n_sims, seed)
+    sim_p = SS.simulate_pitchers(p_raw, n_sims, seed + 1,
+                                 sv_hld=pitchers[["PlayerId", "SV", "HLD"]])
+    hitters, rep_h = SS.bracket(hitters, sim_h, SS.HITTER_STATS)
+    pitchers, rep_p = SS.bracket(pitchers, sim_p, SS.PITCHER_STATS)
+    print(SS.reconcile(hitters, sim_h, ("PA", "H", "HR", "R", "RBI", "SB")))
+    print(SS.reconcile(pitchers, sim_p, ("IP", "SO", "ER", "H", "BB", "HR")))
+    for label, rep in (("hitters", rep_h), ("pitchers", rep_p)):
+        moved = {k: v for k, v in rep.items() if v[0]}
+        if moved:
+            worst = max(moved, key=lambda k: moved[k][1])
+            print(f"  bracket clipped to the projection ({label}): "
+                  f"{sum(v[0] for v in moved.values()):,} cells; largest gap "
+                  f"{moved[worst][1]:.3f} on {worst}")
+    return (_with_brackets(hitters, SS.HITTER_STATS),
+            _with_brackets(pitchers, SS.PITCHER_STATS), sim_h, sim_p)
+
+
 def team_pools(hitters: pd.DataFrame, pitchers: pd.DataFrame) -> pd.DataFrame:
     """Per-club wins and save/hold pools, from the season layer's own models."""
     try:
@@ -298,6 +339,20 @@ def _read_me(ws, meta: dict):
         ("  (Role, Role Start, Availability) and re-run. RoleSource tells you", None),
         ("  whether a row came from the model ('default') or from you", None),
         ("  ('override').", None),
+        ("", None),
+        ("FLOOR AND CEILING", "head"),
+        ("  Each simulated stat carries <stat>_floor and <stat>_ceil beside the", None),
+        ("  projection, which is the MEDIAN. Floor is the 25th-percentile", None),
+        ("  outcome and ceiling the 75th, read in the direction that is good", None),
+        ("  for the stat: HR, SO (pitchers), SB, R, RBI, AVG, SV have the", None),
+        ("  ceiling ABOVE the median; ERA, WHIP, BB, H and HR allowed, ER and", None),
+        ("  hitter SO and CS have it BELOW, because a lower number is the", None),
+        ("  better season. The floor is always the opposite tail.", None),
+        ("  Each stat's range is its own percentile — a player's HR ceiling and", None),
+        ("  R ceiling are not one scenario. Floor-tier players have no range.", None),
+        ("  It comes from simulating the season (season_sim.py): role draw from", None),
+        ("  the role mixture, health, talent uncertainty, then event luck. The", None),
+        ("  health and noise constants are assumptions, not fitted values.", None),
         ("", None),
         ("KNOWN LIMITS — read before trusting a single player", "head"),
         (f"  * Runs scored ({meta['r_scored']:,.0f}) exceeds runs allowed "
@@ -472,6 +527,10 @@ def main(argv=None) -> int:
     ap.add_argument("--out-dir", type=Path, default=ROOT / "out")
     ap.add_argument("--dest", type=Path, default=ROOT / "out")
     ap.add_argument("--run", default="local")
+    ap.add_argument("--n-sims", type=int, default=2000,
+                    help="season simulations per player for the floor / "
+                         "ceiling columns (0 skips them)")
+    ap.add_argument("--seed", type=int, default=20270401)
     a = ap.parse_args(argv)
     y = a.target_year
 
@@ -492,6 +551,8 @@ def main(argv=None) -> int:
     pools = team_pools(h_raw, p_raw)
     hitters = build_hitters(h_raw)
     pitchers = build_pitchers(p_raw, pools)
+    hitters, pitchers, sim_h, sim_p = add_brackets(
+        hitters, pitchers, h_raw, p_raw, a.n_sims, a.seed)
 
     tc_path = season / "team_context.csv"
     teams = pools.copy()
@@ -507,7 +568,8 @@ def main(argv=None) -> int:
 
     a.dest.mkdir(parents=True, exist_ok=True)
     for name, df in (("hitters", hitters), ("pitchers", pitchers),
-                     ("teams", teams)):
+                     ("teams", teams), ("hitters_sim", sim_h),
+                     ("pitchers_sim", sim_p)):
         if len(df):
             path = a.dest / f"projections_{name}_{y}.csv"
             df.to_csv(path, index=False)
@@ -542,10 +604,12 @@ def main(argv=None) -> int:
     _read_me(wb.active, meta)
     wb.active.title = "Read Me"
     hrates = set(HITTER_RATES) | {"r_ERA", "r_RA9"} | set(PITCHER_RATES)
+    br = lambda names: {f"{n}{t}" for n in names for t in ("", "_floor",
+                                                           "_ceil")}
     _write_sheet(wb.create_sheet("Hitters"), hitters, rate_cols=hrates,
-                 three_dp={"AVG", "OBP", "SLG", "OPS"})
+                 three_dp=br(("AVG", "OBP", "SLG", "OPS")))
     _write_sheet(wb.create_sheet("Pitchers"), pitchers, rate_cols=hrates,
-                 three_dp={"ERA", "WHIP", "K9", "BB9", "HR9"})
+                 three_dp=br(("ERA", "WHIP", "K9", "BB9", "HR9")))
     if len(teams):
         _write_sheet(wb.create_sheet("Teams"), teams,
                      three_dp={"win_pct", "team_factor", "rs_per_game",
