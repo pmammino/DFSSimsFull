@@ -1,0 +1,46 @@
+{
+  "_comment": [
+    "TEMPLATE -- roster overrides for the 2027 season projection. Fill in the",
+    "'assignments' list below. As shipped it is EMPTY, which changes nothing:",
+    "every player keeps the team inferred from his most recent playing time.",
+    "",
+    "Why fill it in: that inference is wrong for every offseason move until the",
+    "season's data exists. List each signing, trade, retirement and correction",
+    "here and re-run (see README: a full run_pipeline.py run applies team changes",
+    "to the club playing-time closure, then season_engine.py and the export).",
+    "A move recomputes BOTH clubs' run environments, so both lineups' R/RBI shift.",
+    "",
+    "Each assignment (add one object per player to the list):",
+    "  player_id  (required) MLBAM id -- the PlayerId column in out/*.csv.",
+    "             Find it with e.g.:  grep -i 'judge' out/hitter_pa_projections_2027.csv",
+    "  team       club code or full name: ARI ATL BAL BOS CHC CIN CLE COL CWS DET",
+    "             HOU KC LAA LAD MIA MIL MIN NYM NYY OAK/ATH PHI PIT SD SEA SF STL",
+    "             TB TEX TOR WSH (also 'CHW', 'New York Yankees', ...).",
+    "             Special values:",
+    "               \"FA\"  unsigned free agent: keeps his full rate line and gets",
+    "                     playing time from his role, but sits outside all 30 clubs.",
+    "                     Assign him a club here once he signs.",
+    "               null  team genuinely unknown (bad id/data). NOT the same as FA.",
+    "  team_id    alternative to 'team': explicit MLBAM team id (e.g. 147 = NYY).",
+    "  note       free text, ignored by the loader. Record the move and its date.",
+    "",
+    "Example entries (copy into 'assignments', then edit):",
+    "  {\"player_id\": 592450, \"team\": \"SF\",  \"note\": \"signed 2026-12-01\"}",
+    "  {\"player_id\": 660271, \"team_id\": 147, \"note\": \"traded 2026-12-10\"}",
+    "  {\"player_id\": 111111, \"team\": \"FA\",  \"note\": \"unsigned, 2026-12-01\"}",
+    "(Those ids/moves are illustrative only -- do not paste them in as real.)",
+    "",
+    "Unresolvable teams and entries with no usable player_id are skipped with a",
+    "warning, not a failure. Ids that match nobody are silently harmless, so",
+    "double-check an id if a move seems to have no effect.",
+    "",
+    "See rosters/team_assignments.example.json for the long-form explanation and",
+    "the 'reserves' block (leave it empty; it does nothing in the default mode)."
+  ],
+
+  "target_year": 2027,
+
+  "assignments": [],
+
+  "reserves": []
+}
