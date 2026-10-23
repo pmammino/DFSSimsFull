@@ -395,6 +395,162 @@ def add_rotowire_ids(df: pd.DataFrame, ids: pd.Series) -> pd.DataFrame:
     return out
 
 
+def build_fielding(h_raw: pd.DataFrame, p_raw: pd.DataFrame,
+                   history: pd.DataFrame, y: int) -> pd.DataFrame:
+    """Season fielding: one row per (player, position).
+
+    The fielding model needs innings at each position, which nothing upstream
+    supplies, so it is built here from what the season layer does know:
+
+    * **Hitters.** A projected hitter's defensive innings are his projected PA
+      x 2.13 (a club's 1,458 innings at each of eight fielding positions is
+      11,664, over the ~5,472 PA taken by the eight non-DH lineup slots), split
+      across the positions he actually played in the last two seasons, or all
+      at `pt_position` when he has no history. DH-only and position-less
+      players field nothing.
+    * **Slots.** Every club plays exactly 1,458 innings at each position, so
+      innings at each (club, position) are scaled to that total. Without it
+      two first basemen who are both "Full Time" would both be credited a full
+      season there.
+    * **Pitchers.** A pitcher fields his own innings.
+
+    Rates are the model's own (position baseline, shrunk toward the player's
+    history); a team's strikeout rate moves fielders' chances and the
+    catcher's putouts the opposite way. Reported as expected values.
+    """
+    import fielding_model as FM
+    from fielding_model import (BASELINES, ensure_rate_coverage,
+                                project_fielding, project_fielding_rates,
+                                team_putout_check)
+    team_innings = 162 * 9.0
+
+    # The shipped position baselines are provisional (assembled from the
+    # arithmetic of the game): left alone they credit pitchers ~1.8x the
+    # assists they really get and outfielders ~20% too many. The model's own
+    # `fit_position_baselines` replaces them from measured history, so use it
+    # for this run — the last three seasons, every player-season (the pooled
+    # rate is innings-weighted, so thin samples cannot skew it) — then put
+    # the table back so nothing else in the process sees the change.
+    window = history[(history["Season"] < y) & (history["Season"] >= y - 3)]
+    fitted = FM.fit_position_baselines(window, min_innings=1.0)
+    saved = {k: dict(v) for k, v in BASELINES.items()}
+    try:
+        for pos, rec in fitted.items():
+            BASELINES[pos].update(rec)
+        total_po = sum(BASELINES[p]["po"] for p in FM.ALIGNMENT)
+        for p in FM.ALIGNMENT:                  # keep the 27-putout identity
+            BASELINES[p]["po"] *= FM.OUTS_PER_9 / total_po
+        return _fielding_rows(h_raw, p_raw, history, y, team_innings)
+    finally:
+        for pos, rec in saved.items():
+            BASELINES[pos].clear()
+            BASELINES[pos].update(rec)
+
+
+def _fielding_rows(h_raw, p_raw, history, y, team_innings):
+    from fielding_model import (BASELINES, ensure_rate_coverage,
+                                project_fielding, project_fielding_rates,
+                                team_putout_check)
+
+    hit = h_raw[h_raw["pt_tier"].astype(str) != "floor"].copy() \
+        if "pt_tier" in h_raw.columns else h_raw.copy()
+    pit = p_raw[p_raw["pt_tier"].astype(str) != "floor"].copy() \
+        if "pt_tier" in p_raw.columns else p_raw.copy()
+    hit["Pos"] = hit.get("pt_position")
+
+    prior = history[(history["Season"] < y) & (history["Season"] >= y - 2)
+                    & history["Pos"].isin([b for b in BASELINES if b != "P"])]
+    mix = (prior.groupby(["PlayerId", "Pos"])["Innings"].sum()
+           .rename("w").reset_index())
+    mix["share"] = mix["w"] / mix.groupby("PlayerId")["w"].transform("sum")
+    mix = mix[mix["share"] >= 0.05]
+    mix["share"] = mix["share"] / mix.groupby("PlayerId")["share"].transform(
+        "sum")
+
+    rows = []
+    mixed = {pid: g for pid, g in mix.groupby("PlayerId")}
+    for r in hit.itertuples(index=False):
+        pid = int(r.PlayerId)
+        pa = float(getattr(r, "Proj_PA", 0.0) or 0.0)
+        if pa <= 0:
+            continue
+        tid = getattr(r, "team_id", np.nan)
+        pos_now = getattr(r, "Pos", None)
+        if pid in mixed:
+            splits = list(zip(mixed[pid]["Pos"], mixed[pid]["share"]))
+        elif isinstance(pos_now, str) and pos_now in BASELINES \
+                and pos_now != "P":
+            splits = [(pos_now, 1.0)]
+        else:
+            continue
+        for pos, share in splits:
+            rows.append({"PlayerId": pid, "Pos": pos, "team_id": tid,
+                         "Innings": pa * 13122.0 / 6156.0 * share})
+    exposure = pd.DataFrame(rows)
+    if len(exposure):
+        tot = exposure.groupby(["team_id", "Pos"])["Innings"].transform("sum")
+        exposure["Innings"] *= np.where(
+            exposure["team_id"].notna() & (tot > 0), team_innings / tot, 1.0)
+    prow = pd.DataFrame({
+        "PlayerId": pit["PlayerId"].astype(int), "Pos": "P",
+        "team_id": pit["team_id"] if "team_id" in pit.columns else np.nan,
+        "Innings": pd.to_numeric(pit["Proj_IP"], errors="coerce")})
+    exposure = pd.concat([exposure, prow[prow["Innings"] > 0]],
+                         ignore_index=True)
+
+    roster = exposure[["PlayerId", "Pos", "team_id"]].drop_duplicates()
+    rates = ensure_rate_coverage(project_fielding_rates(history, y), roster)
+    rates = rates.drop(columns=["team_id"], errors="ignore").merge(
+        roster, on=["PlayerId", "Pos"], how="inner")
+
+    k9 = {}
+    if "team_id" in pit.columns:
+        ip = pd.to_numeric(pit["Proj_IP"], errors="coerce").fillna(0.0)
+        tbf = pd.to_numeric(pit.get("TBF_per_IP"), errors="coerce").fillna(4.3)
+        k = pd.to_numeric(pit.get("P_K"), errors="coerce").fillna(0.0) * ip * tbf
+        agg = pd.DataFrame({"t": pit["team_id"], "k": k, "ip": ip}) \
+            .groupby("t").sum()
+        k9 = (agg["k"] / agg["ip"] * 9.0).to_dict()
+    att = float((pd.to_numeric(hit.get("P_SB_ATTEMPT"), errors="coerce")
+                 .fillna(0) * pd.to_numeric(hit["Proj_PA"], errors="coerce")
+                 .fillna(0)).sum()) / 30.0
+    sb_att = {int(t): att for t in set(exposure["team_id"].dropna())}
+
+    out = project_fielding(rates, exposure, team_k_per_9=k9 or None,
+                           team_col="team_id", sb_attempts_against=sb_att)
+    if out.empty:
+        return out
+    check = team_putout_check(out)
+    if len(check):
+        print(f"  fielding: putouts per 9 by club {check['po_per_9'].min():.2f}"
+              f"-{check['po_per_9'].max():.2f} (identity is 27)")
+    meta = pd.concat([
+        hit.assign(Tier=hit.get("pt_tier"))[["PlayerId", "Name", "Tier"]],
+        pit.assign(Tier=pit.get("pt_tier"))[["PlayerId", "Name", "Tier"]],
+    ]).drop_duplicates("PlayerId")
+    abbr = pd.concat([h_raw[["PlayerId", "team_abbr"]],
+                      p_raw[["PlayerId", "team_abbr"]]]) \
+        .drop_duplicates("PlayerId") if "team_abbr" in h_raw.columns \
+        else pd.DataFrame(columns=["PlayerId", "team_abbr"])
+    out = (out.merge(meta, on="PlayerId", how="left")
+              .merge(abbr, on="PlayerId", how="left")
+              .rename(columns={"team_abbr": "Team"}))
+    src = rates[["PlayerId", "Pos", "fielding_source"]].drop_duplicates(
+        ["PlayerId", "Pos"])
+    out = out.merge(src, on=["PlayerId", "Pos"], how="left")
+    out["FldPct"] = (1.0 - out["E"] / out["Chances"].replace(0, np.nan)).round(3)
+    cols = ["PlayerId", "Name", "Team", "Tier", "Pos", "Innings", "PO", "A",
+            "E", "DP", "Chances", "FldPct", "PB", "CI", "OF_A", "CS_attempts",
+            "CS", "fielding_source"]
+    out = out[[c for c in cols if c in out.columns]]
+    for c in ("Innings", "PO", "A", "E", "DP", "Chances", "PB", "CI", "OF_A",
+              "CS_attempts", "CS"):
+        if c in out.columns:
+            out[c] = out[c].round(1)
+    return out.sort_values(["Pos", "Innings"], ascending=[True, False]) \
+        .reset_index(drop=True)
+
+
 def team_pools(hitters: pd.DataFrame, pitchers: pd.DataFrame) -> pd.DataFrame:
     """Per-club wins and save/hold pools, from the season layer's own models."""
     try:
@@ -465,6 +621,8 @@ def _read_me(ws, meta: dict):
         ("TABS", "head"),
         ("  Hitters      one row per hitter, sorted by projected PA", None),
         ("  Pitchers     one row per pitcher, sorted by projected IP", None),
+        ("  Fielding     one row per player and position: PO, A, E, DP, chances,", None),
+        ("               PB, CI, OF assists, catcher CS (see FIELDING below)", None),
         ("  Teams        per-club run environment, wins, save and hold pools", None),
         ("", None),
         ("  A companion file, mlb_" + str(meta["year"]) + "_what_if.xlsx, holds "
@@ -505,6 +663,17 @@ def _read_me(ws, meta: dict):
         ("  (Role, Role Start, Availability) and re-run. RoleSource tells you", None),
         ("  whether a row came from the model ('default') or from you", None),
         ("  ('override').", None),
+        ("", None),
+        ("FIELDING", "head"),
+        ("  Innings at each position are projected PA x 2.13 split by where the", None),
+        ("  player actually played the last two seasons (all at his listed", None),
+        ("  position if he has no history), then scaled so each club plays", None),
+        ("  exactly 1,458 innings at every position; pitchers field their own", None),
+        ("  innings. Rates are the position's measured league rate over the last", None),
+        ("  three seasons, shrunk toward the player's own history; a staff's", None),
+        ("  strikeout rate moves fielders' chances and the catcher's putouts the", None),
+        ("  opposite way. Chances = PO + A + E. Expected values, no ranges yet;", None),
+        ("  a hitter who changes position mid-season is not modelled.", None),
         ("", None),
         ("WINS AND QUALITY STARTS", "head"),
         ("  W and QS come from a start-by-start simulation of every starter", None),
@@ -736,6 +905,14 @@ def main(argv=None) -> int:
                       ROOT / "rosters" / f"player_id_aliases_{y}.csv", y)
     hitters, pitchers = (add_rotowire_ids(hitters, rw),
                          add_rotowire_ids(pitchers, rw))
+    fielding = pd.DataFrame()
+    hist_path = a.out_dir / f"fielding_history_{y}.csv"
+    if hist_path.exists():
+        fielding = build_fielding(h_raw, p_raw, pd.read_csv(hist_path), y)
+        fielding = add_rotowire_ids(fielding, rw)
+        print(f"  fielding: {len(fielding):,} player-positions")
+    else:
+        print(f"  no {hist_path.name}; fielding projections skipped")
     for label, df in (("hitters", hitters), ("pitchers", pitchers)):
         proj = df[df["Tier"].astype(str) != "floor"]
         if "RotoWireId" in df.columns:
@@ -757,7 +934,8 @@ def main(argv=None) -> int:
 
     a.dest.mkdir(parents=True, exist_ok=True)
     for name, df in (("hitters", hitters), ("pitchers", pitchers),
-                     ("teams", teams), ("hitters_sim", sim_h),
+                     ("teams", teams), ("fielding", fielding),
+                     ("hitters_sim", sim_h),
                      ("pitchers_sim", sim_p)):
         if len(df):
             path = a.dest / f"projections_{name}_{y}.csv"
@@ -799,6 +977,9 @@ def main(argv=None) -> int:
                  three_dp=br(("AVG", "OBP", "SLG", "OPS")))
     _write_sheet(wb.create_sheet("Pitchers"), pitchers, rate_cols=hrates,
                  three_dp=br(("ERA", "WHIP", "K9", "BB9", "HR9")))
+    if len(fielding):
+        _write_sheet(wb.create_sheet("Fielding"), fielding,
+                     three_dp={"FldPct"})
     if len(teams):
         _write_sheet(wb.create_sheet("Teams"), teams,
                      three_dp={"win_pct", "team_factor", "rs_per_game",
