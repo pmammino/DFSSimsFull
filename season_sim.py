@@ -71,6 +71,23 @@ RUN_LINK = 0.5             # elasticity of R/RBI to simulated production
 RUN_CV = 0.15              # teammates / context noise on R and RBI
 SEQ_CV = 0.12              # sequencing noise on a pitcher's earned runs
 OPP_CV = 0.25              # save / hold opportunity noise
+# Per-start model for wins and quality starts (starters only). The shape
+# constants below were calibrated so a league of projected starters comes out
+# near 5.3 IP, ~0.40 QS and ~0.25 W per start. Those targets are benchmarks
+# recalled from recent MLB seasons, NOT checked against data in this repo, so
+# treat the absolute W/QS level as provisional.
+START_IP_SD = 1.2          # sd of planned innings in a start
+START_ER_CV = 0.60         # start-to-start run-environment noise on ER
+HOOK_SLOPE = 0.25          # share of the outing lost per earned run past 3
+IP_PLAN_K = 1.25           # planned-IP scale so the post-hook mean IP/start
+                           # lands on the season projection (calibrated)
+TEAM_RS_CV = 0.30          # game-to-game noise on the club's runs scored
+BULLPEN_RA_SHARE = 1.30    # leverage: relievers pitch the innings where a lead
+                           # is given back, so they cost starters more wins
+                           # than their ERA says (calibrated, see below)
+SP_WIN_SHARE = 0.49        # share of a club's wins the starters take; the rest
+                           # is the relief-win pool (checked against the sim)
+LEAGUE_RS_PER_GAME = 4.45
 # Linear-weight runs of an event over the out it replaces (outs, including
 # strikeouts, are the zero point; TBF is fixed so a hit displaces an out).
 LW = {"1B": 0.74, "2B": 1.04, "3B": 1.31, "HR": 1.67, "BB": 0.58, "HBP": 0.60}
@@ -91,7 +108,7 @@ PITCHER_STATS = {
     "BB": False, "HBP": False,
     "SO": True,
     "ER": False, "R": False,
-    "SV": True, "HLD": True,
+    "SV": True, "HLD": True, "W": True, "QS": True,
     "ERA": False, "WHIP": False,
     "K9": True, "BB9": False, "HR9": False,
 }
@@ -298,8 +315,52 @@ def simulate_hitters(raw: pd.DataFrame, n_sims: int = N_SIMS_DEFAULT,
 _P_EVENTS = ["K", "BB", "HBP", "HR", "3B", "2B", "1B", "SF", "BIPOut"]
 
 
+def _starts_wl(rng, ip_per_gs, er_per_ip, unearned, gs_n, team_rs, team_ra):
+    """Wins and quality starts, played out start by start.
+
+    Shapes: everything is (players, sims) except `team_*` and `unearned`,
+    which are per player. A start draws planned innings, then earned runs
+    (overdispersed Poisson); a bad start is cut short by a hook, which is what
+    makes IP >= 6 and ER <= 3 negatively correlated within a start, so QS is
+    not P(IP >= 6) x P(ER <= 3). A win needs 5+ IP, the lead when he leaves,
+    and the bullpen not giving the lead back. Returns (wins, quality starts,
+    innings) per player-sim; the innings are for calibration checks.
+    """
+    shape = ip_per_gs.shape
+    wins = np.zeros(shape)
+    qs = np.zeros(shape)
+    ip_tot = np.zeros(shape)
+    ga = 1.0 / START_ER_CV ** 2
+    ra_ = 1.0 / TEAM_RS_CV ** 2
+    for j in range(int(gs_n.max()) if gs_n.size else 0):
+        active = j < gs_n
+        plan = np.clip(ip_per_gs * IP_PLAN_K
+                       + START_IP_SD * rng.standard_normal(shape), 1.0, 9.0)
+        plan = np.round(plan * 3.0) / 3.0
+        er = rng.poisson(er_per_ip * plan * rng.gamma(ga, 1.0 / ga, shape))
+        ip = np.round(plan * np.clip(1.0 - HOOK_SLOPE * np.maximum(er - 3, 0),
+                                     0.25, 1.0) * 3.0) / 3.0
+        qs += active & (ip >= 6.0) & (er <= 3)
+        r_p = er + rng.poisson(er * (unearned[:, None] - 1.0))
+        rs = rng.poisson(team_rs[:, None] * rng.gamma(ra_, 1.0 / ra_, shape))
+        rs_p = rng.binomial(rs, np.clip(ip / 9.0, 0.0, 1.0))
+        bp = rng.poisson(team_ra[:, None] * BULLPEN_RA_SHARE
+                         * (9.0 - ip) / 9.0
+                         * rng.gamma(ra_, 1.0 / ra_, shape))
+        ip_tot += np.where(active, ip, 0.0)
+        # Credit needs the lead when he leaves AND that the bullpen does not
+        # give it back: runs scored while he was in, less the ones he allowed,
+        # must exceed what the bullpen then allows.
+        wins += active & (ip >= 5.0) & ((rs_p - r_p) > bp)
+    return wins, qs, ip_tot
+
+
 def _sim_pitcher_block(rng, d: pd.DataFrame, sv_mean: np.ndarray,
-                       hld_mean: np.ndarray, n: int) -> dict[str, np.ndarray]:
+                       hld_mean: np.ndarray, n: int,
+                       team_rs: np.ndarray | None = None,
+                       team_ra: np.ndarray | None = None,
+                       w_rp_mean: np.ndarray | None = None
+                       ) -> dict[str, np.ndarray]:
     k = len(d)
     proj_ip, proj_g, proj_gs = (_col(d, "Proj_IP"), _col(d, "Proj_G"),
                                 _col(d, "Proj_GS"))
@@ -359,6 +420,27 @@ def _sim_pitcher_block(rng, d: pd.DataFrame, sv_mean: np.ndarray,
     out["SV"] = np.minimum(out["SV"], cap_g)
     out["HLD"] = np.minimum(out["HLD"], np.maximum(cap_g - out["SV"], 0.0))
 
+    # Wins and quality starts. Starters are played out start by start; a
+    # pitcher who does not start earns his wins from the club's relief pool.
+    team_rs = (np.full(k, LEAGUE_RS_PER_GAME) if team_rs is None else team_rs)
+    team_ra = (np.full(k, LEAGUE_RS_PER_GAME) if team_ra is None else team_ra)
+    starter = is_sp | (proj_gs >= 1.0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ip_gs = np.where(gs >= 0.5, ip / np.maximum(gs, 0.5), 0.0)
+    lw = np.array([LW.get(e, 0.0) for e in _P_EVENTS])
+    adj = tbf_ip[:, None] * ((probs - P[:, None, :]) @ lw)
+    er_per_ip = np.clip(era[:, None] / 9.0 + adj, 0.05, None)
+    gs_n = np.where(starter[:, None], np.round(gs), 0.0)
+    w_sp, qs_sp, _ = _starts_wl(rng, ip_gs, er_per_ip, np.maximum(unearned, 1.0),
+                             gs_n, team_rs, team_ra)
+    a3 = 1.0 / OPP_CV ** 2
+    w_rp = np.nan_to_num(w_rp_mean if w_rp_mean is not None
+                         else np.zeros(k))[:, None]
+    w_rp = rng.poisson(np.clip(w_rp * roles["ip"] * health
+                               * rng.gamma(a3, 1.0 / a3, (k, n)), 0.0, None))
+    out["W"] = np.where(starter[:, None], w_sp, w_rp).astype(float)
+    out["QS"] = qs_sp
+
     with np.errstate(divide="ignore", invalid="ignore"):
         ipn = np.where(ip > 0, ip, np.nan)
         out["ERA"] = 9.0 * er / ipn
@@ -371,15 +453,40 @@ def _sim_pitcher_block(rng, d: pd.DataFrame, sv_mean: np.ndarray,
 
 def simulate_pitchers(raw: pd.DataFrame, n_sims: int = N_SIMS_DEFAULT,
                       seed: int = 20270402,
-                      sv_hld: pd.DataFrame | None = None) -> pd.DataFrame:
+                      sv_hld: pd.DataFrame | None = None,
+                      teams: pd.DataFrame | None = None) -> pd.DataFrame:
     """Floor / ceiling / sim median / sim mean per stat, one row per pitcher.
 
     `sv_hld` is a frame with PlayerId, SV, HLD — the club-pool allocation the
     export already computes — because saves and holds are not a per-pitcher
     rate and cannot be rebuilt from the per-PA file alone.
+
+    `teams` (team_id, rs_per_game, ra_per_game, expected_wins) supplies the
+    run support and the win pool for W. Without it every club is league
+    average and relievers get no wins.
     """
     mask = _projected_mask(raw)
     idx = np.flatnonzero(mask)
+    tcol = "team_id" if "team_id" in raw.columns else "Pred_target_team_id"
+    tid = (pd.to_numeric(raw[tcol], errors="coerce") if tcol in raw.columns
+           else pd.Series(np.nan, index=raw.index))
+    rs_all = np.full(len(raw), LEAGUE_RS_PER_GAME)
+    ra_all = np.full(len(raw), LEAGUE_RS_PER_GAME)
+    w_rp_all = np.zeros(len(raw))
+    if teams is not None and len(teams):
+        t = teams.drop_duplicates("team_id").set_index("team_id")
+        rs_all = tid.map(t["rs_per_game"]).fillna(LEAGUE_RS_PER_GAME).to_numpy()
+        ra_all = tid.map(t["ra_per_game"]).fillna(LEAGUE_RS_PER_GAME).to_numpy()
+        # Relief wins: what the club's win total leaves after the starters,
+        # shared by innings among its non-starters.
+        gs_ = _col(raw, "Proj_GS")
+        g_ = _col(raw, "Proj_G")
+        reliever = mask & ~((gs_ >= 0.5 * np.maximum(g_, 1.0)) | (gs_ >= 1.0))
+        w_ip = np.where(reliever, _col(raw, "Proj_IP"), 0.0)
+        tot = pd.Series(w_ip).groupby(tid.to_numpy()).transform("sum").to_numpy()
+        pool = tid.map(t["expected_wins"]).to_numpy() * (1.0 - SP_WIN_SHARE)
+        w_rp_all = np.where((tot > 0) & np.isfinite(pool),
+                            pool * w_ip / np.where(tot > 0, tot, 1.0), 0.0)
     sv_map = hld_map = None
     if sv_hld is not None and len(sv_hld):
         s = sv_hld.drop_duplicates("PlayerId").set_index("PlayerId")
@@ -393,8 +500,11 @@ def simulate_pitchers(raw: pd.DataFrame, n_sims: int = N_SIMS_DEFAULT,
               else np.zeros(len(d)))
         hl = (ids.map(hld_map).to_numpy(dtype=float) if hld_map is not None
               else np.zeros(len(d)))
+        rows = idx[lo:lo + CHUNK]
         sims = _sim_pitcher_block(np.random.default_rng(ss[b]), d, sv, hl,
-                                  n_sims)
+                                  n_sims, team_rs=rs_all[rows],
+                                  team_ra=ra_all[rows],
+                                  w_rp_mean=w_rp_all[rows])
         parts.append(_frame(ids.to_numpy(),
                             {s: _summ(sims[s], hib)
                              for s, hib in PITCHER_STATS.items()}))

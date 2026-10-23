@@ -122,6 +122,35 @@ def test_saves_never_exceed_appearances():
     assert (sims["SV"] + sims["HLD"] <= np.floor(sims["G"]) + 1e-9).all()
 
 
+def test_wins_and_quality_starts_follow_pitcher_quality():
+    ace = _pitcher(1, ERA=2.8, Proj_IP=200.0, Proj_GS=32.0, P_K=0.30,
+                   P_HR=0.022)
+    bad = _pitcher(2, ERA=5.4, Proj_IP=150.0, Proj_GS=30.0, P_K=0.20,
+                   P_HR=0.04)
+    sim = ss.simulate_pitchers(pd.DataFrame([ace, bad]), 1500, seed=5)
+    a, b = sim.iloc[0], sim.iloc[1]
+    assert a["QS_simmean"] > b["QS_simmean"]
+    assert a["W_simmean"] > b["W_simmean"]
+    assert a["QS_floor"] < a["QS_ceil"] and a["W_floor"] < a["W_ceil"]
+    # a quality start needs 6 IP and a start is at most ~9
+    assert a["QS_simmean"] <= a["GS_simmean"]
+    qs_rate = a["QS_simmean"] / a["GS_simmean"]
+    assert 0.45 < qs_rate < 0.85
+
+
+def test_relievers_take_wins_from_the_club_pool():
+    rp = _pitcher(1, Proj_IP=65.0, Proj_G=65.0, Proj_GS=0.0,
+                  pt_role="Middle Relief", pt_role_mix="Middle Relief:1",
+                  team_id=1)
+    teams = pd.DataFrame({"team_id": [1], "rs_per_game": [4.5],
+                          "ra_per_game": [4.5], "expected_wins": [90.0]})
+    sim = ss.simulate_pitchers(pd.DataFrame([rp]), 1500, seed=6, teams=teams)
+    # the lone reliever is handed the whole relief pool of the club
+    expected = 90.0 * (1.0 - ss.SP_WIN_SHARE)
+    assert abs(sim.iloc[0]["W_simmean"] / expected - 1) < 0.05
+    assert sim.iloc[0]["QS_simmean"] == 0.0
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

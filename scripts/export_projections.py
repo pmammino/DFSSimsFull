@@ -180,9 +180,12 @@ def build_pitchers(p: pd.DataFrame, pools: pd.DataFrame) -> pd.DataFrame:
         if impossible:
             print(f"  WARNING: {impossible} pitchers still show more saves + "
                   "holds than appearances")
+    out["W"] = np.nan          # filled from the season simulation
+    out["QS"] = np.nan
     order = ["PlayerId", "Name", "Team", "Age", "Tier", "Role", "RoleSource",
              "SP_RP", "Origin", "IP", "G", "GS", "TBF", "H", "1B", "2B", "3B",
-             "HR", "BB", "HBP", "SO", "ER", "R", "SV", "HLD", "ERA", "WHIP",
+             "HR", "BB", "HBP", "SO", "ER", "R", "SV", "HLD", "W", "QS", "ERA",
+             "WHIP",
              "K9", "BB9", "HR9", "TBF_per_IP"] + list(PITCHER_RATES) \
         + ["r_ERA", "r_RA9"]
     return out[order].sort_values("IP", ascending=False).reset_index(drop=True)
@@ -200,12 +203,17 @@ def _with_brackets(df: pd.DataFrame, stats: dict) -> pd.DataFrame:
     return df[cols]
 
 
-def add_brackets(hitters, pitchers, h_raw, p_raw, n_sims, seed):
-    """Season simulation -> floor (25th) and ceiling (75th) beside each stat.
+def add_brackets(hitters, pitchers, h_raw, p_raw, n_sims, seed, pools=None,
+                 brackets=True):
+    """Season simulation: W and QS, plus floor (25th) and ceiling (75th).
 
     Direction-aware: for ERA, WHIP, hits allowed and the other stats where
     lower is better, the ceiling is the 25th percentile (see season_sim).
-    The projection already in the sheet is the median.
+    The projection already in the sheet is the median. W and QS come from the
+    per-start simulation and are reported as its mean, like the other counting
+    stats, with the simulation's own median in the *_sim CSV.
+
+    `brackets=False` keeps W and QS but drops every floor / ceiling column.
     """
     if n_sims <= 0:
         return hitters, pitchers, pd.DataFrame(), pd.DataFrame()
@@ -213,11 +221,24 @@ def add_brackets(hitters, pitchers, h_raw, p_raw, n_sims, seed):
     print(f"  simulating {n_sims:,} seasons per player ...")
     sim_h = SS.simulate_hitters(h_raw, n_sims, seed)
     sim_p = SS.simulate_pitchers(p_raw, n_sims, seed + 1,
-                                 sv_hld=pitchers[["PlayerId", "SV", "HLD"]])
+                                 sv_hld=pitchers[["PlayerId", "SV", "HLD"]],
+                                 teams=pools)
+    wq = sim_p[["PlayerId", "W_simmean", "QS_simmean"]].rename(
+        columns={"W_simmean": "W", "QS_simmean": "QS"})
+    wq[["W", "QS"]] = wq[["W", "QS"]].round(1)
+    pitchers = pitchers.drop(columns=["W", "QS"]).merge(
+        wq, on="PlayerId", how="left")
     hitters, rep_h = SS.bracket(hitters, sim_h, SS.HITTER_STATS)
     pitchers, rep_p = SS.bracket(pitchers, sim_p, SS.PITCHER_STATS)
     print(SS.reconcile(hitters, sim_h, ("PA", "H", "HR", "R", "RBI", "SB")))
     print(SS.reconcile(pitchers, sim_p, ("IP", "SO", "ER", "H", "BB", "HR")))
+    proj = pitchers[pitchers["Tier"].astype(str) != "floor"]
+    starters = proj[proj["GS"] >= 1]
+    print(f"  W: {proj['W'].sum():,.0f} league total "
+          f"(starters {starters['W'].sum():,.0f}, "
+          f"{starters['W'].sum() / max(proj['W'].sum(), 1):.0%}); "
+          f"QS {starters['QS'].sum():,.0f} in {starters['GS'].sum():,.0f} "
+          f"starts ({starters['QS'].sum() / max(starters['GS'].sum(), 1):.0%})")
     for label, rep in (("hitters", rep_h), ("pitchers", rep_p)):
         moved = {k: v for k, v in rep.items() if v[0]}
         if moved:
@@ -225,8 +246,61 @@ def add_brackets(hitters, pitchers, h_raw, p_raw, n_sims, seed):
             print(f"  bracket clipped to the projection ({label}): "
                   f"{sum(v[0] for v in moved.values()):,} cells; largest gap "
                   f"{moved[worst][1]:.3f} on {worst}")
-    return (_with_brackets(hitters, SS.HITTER_STATS),
-            _with_brackets(pitchers, SS.PITCHER_STATS), sim_h, sim_p)
+    hitters = _with_brackets(hitters, SS.HITTER_STATS)
+    pitchers = _with_brackets(pitchers, SS.PITCHER_STATS)
+    if not brackets:
+        drop = lambda df: df[[c for c in df.columns
+                              if not c.endswith(("_floor", "_ceil"))]]
+        hitters, pitchers = drop(hitters), drop(pitchers)
+        sim_h = sim_p = pd.DataFrame()
+    return hitters, pitchers, sim_h, sim_p
+
+
+def rotowire_ids(h_raw, p_raw, feed_dir="feeds",
+                 alias_path=None) -> pd.Series:
+    """MLBAM PlayerId -> RotoWire player id, from the usage feeds.
+
+    The feeds carry RotoWire's own `Id` on every player but join to us by
+    NAME (club as a tie-breaker) — only the prospects feed has an MLBAM id.
+    So this covers the players the feeds list, and a name shared by two
+    people, or an id the two ids disagree on, is left blank rather than
+    guessed. Anyone not on a depth chart, order, closer list or prospect list
+    (most of the floor tier) has no RotoWire id here.
+    """
+    from role_feeds import load_aliases, read_feeds, resolve_ids
+    feeds = {k: v for k, v in read_feeds(feed_dir).items() if len(v)}
+    if not feeds:
+        return pd.Series(dtype=object)
+    pool = (pd.concat([h_raw, p_raw])[["PlayerId", "Name",
+                                       "Pred_target_team_id"]]
+            .drop_duplicates("PlayerId"))
+    rows = pd.concat([v.assign(feed=k) for k, v in feeds.items()],
+                     ignore_index=True)
+    aliases = load_aliases(alias_path) if alias_path else {}
+    res, _ = resolve_ids(rows, pool, aliases=aliases)
+    # a prospect's own MLBAM id beats a name match
+    direct = pd.to_numeric(rows["PlayerId"], errors="coerce") \
+        if "PlayerId" in rows.columns else None
+    if direct is not None:
+        res["PlayerId"] = direct.where(direct.notna(), res["PlayerId"])
+    res = res.dropna(subset=["PlayerId", "rw_id"])
+    res["PlayerId"] = res["PlayerId"].astype(int)
+    pairs = res[["PlayerId", "rw_id"]].drop_duplicates()
+    one = pairs.groupby("PlayerId")["rw_id"].nunique()
+    pairs = pairs[pairs["PlayerId"].isin(one[one == 1].index)]
+    # two players cannot share a RotoWire id either
+    two = pairs.groupby("rw_id")["PlayerId"].nunique()
+    pairs = pairs[pairs["rw_id"].isin(two[two == 1].index)]
+    return pairs.set_index("PlayerId")["rw_id"].astype(int)
+
+
+def add_rotowire_ids(df: pd.DataFrame, ids: pd.Series) -> pd.DataFrame:
+    if ids.empty:
+        return df
+    out = df.copy()
+    out.insert(1, "RotoWireId",
+               out["PlayerId"].map(ids).astype("Int64"))
+    return out
 
 
 def team_pools(hitters: pd.DataFrame, pitchers: pd.DataFrame) -> pd.DataFrame:
@@ -531,6 +605,9 @@ def main(argv=None) -> int:
                     help="season simulations per player for the floor / "
                          "ceiling columns (0 skips them)")
     ap.add_argument("--seed", type=int, default=20270401)
+    ap.add_argument("--median-only", action="store_true",
+                    help="drop every floor / ceiling column (and the *_sim "
+                         "CSVs); W and QS stay")
     a = ap.parse_args(argv)
     y = a.target_year
 
@@ -552,7 +629,18 @@ def main(argv=None) -> int:
     hitters = build_hitters(h_raw)
     pitchers = build_pitchers(p_raw, pools)
     hitters, pitchers, sim_h, sim_p = add_brackets(
-        hitters, pitchers, h_raw, p_raw, a.n_sims, a.seed)
+        hitters, pitchers, h_raw, p_raw, a.n_sims, a.seed, pools,
+        brackets=not a.median_only)
+    rw = rotowire_ids(h_raw, p_raw, ROOT / "feeds",
+                      ROOT / "rosters" / f"player_id_aliases_{y}.csv")
+    hitters, pitchers = (add_rotowire_ids(hitters, rw),
+                         add_rotowire_ids(pitchers, rw))
+    for label, df in (("hitters", hitters), ("pitchers", pitchers)):
+        proj = df[df["Tier"].astype(str) != "floor"]
+        if "RotoWireId" in df.columns:
+            print(f"  RotoWire ids ({label}): "
+                  f"{proj['RotoWireId'].notna().mean():.0%} of projected, "
+                  f"{df['RotoWireId'].notna().mean():.0%} of all")
 
     tc_path = season / "team_context.csv"
     teams = pools.copy()
