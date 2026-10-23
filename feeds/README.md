@@ -8,6 +8,7 @@ Four XML files that decide what a player's job is. `role_feeds.py` reads them;
 | `depth.xml` | every club's depth chart, ranked within a position group (`1B`..`RF`, `DH`, `C` for the lineup, `P` the rotation, `BP` the bullpen, `CL` the closer, `PROS` the farm) | all 30 clubs, ~1,690 players |
 | `orders.xml` | a batting order against LHP and against RHP | 23 clubs — ARI, CHC, CWS, LAA, LAD, NYM and NYY have none |
 | `closers.xml` | bullpen pecking order 1..12, RotoWire's role label, and a Stability rating on each club's top arm | all 30 clubs |
+| `players.xml` | RotoWire's player master list: every free agent and every club's full organization (7,030 players) with RotoWire's `Id`, birth date and position — **no MLBAM id**. Used only to put a `RotoWireId` on the season export (name + birth year); the role model does not read it | free agents + 30 organizations |
 | `prospects.xml` | the top 400 with a league level; the only feed carrying an MLBAM id, and that for 261 of them | — |
 
 ## Refreshing them

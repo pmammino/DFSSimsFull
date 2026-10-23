@@ -256,21 +256,118 @@ def add_brackets(hitters, pitchers, h_raw, p_raw, n_sims, seed, pools=None,
     return hitters, pitchers, sim_h, sim_p
 
 
-def rotowire_ids(h_raw, p_raw, feed_dir="feeds",
-                 alias_path=None) -> pd.Series:
-    """MLBAM PlayerId -> RotoWire player id, from the usage feeds.
+def read_rw_master(path) -> pd.DataFrame:
+    """RotoWire's player master list (`feeds/players.xml`): id, name, birth year.
 
-    The feeds carry RotoWire's own `Id` on every player but join to us by
-    NAME (club as a tie-breaker) — only the prospects feed has an MLBAM id.
-    So this covers the players the feeds list, and a name shared by two
-    people, or an id the two ids disagree on, is left blank rather than
-    guessed. Anyone not on a depth chart, order, closer list or prospect list
-    (most of the floor tier) has no RotoWire id here.
+    Every free agent and every club's full organization, with RotoWire's own
+    `Id`, a birth date and a position, but NO MLBAM id — so it still has to
+    be joined to our players by name, with the birth year doing the work that
+    a club cannot (the club is stale in the offseason).
     """
-    from role_feeds import load_aliases, read_feeds, resolve_ids
+    import xml.etree.ElementTree as ET
+
+    from role_feeds import name_key
+    p = Path(path)
+    if not p.exists():
+        return pd.DataFrame()
+    text = p.read_text(encoding="utf-8", errors="replace")
+    try:
+        root = ET.fromstring(text[text.find("<"):])
+    except ET.ParseError as ex:
+        print(f"  RotoWire master {p.name} unparseable ({ex}); ignored")
+        return pd.DataFrame()
+    rows = []
+    for el in root.iter("Player"):
+        if el.get("Id") is None:
+            continue
+        born = el.find("Profile/Birth")
+        date = (born.get("Date") if born is not None else "") or ""
+        rows.append({
+            "rw_id": int(el.get("Id")),
+            "name_key": name_key(el.findtext("FirstName") or "",
+                                 el.findtext("LastName") or ""),
+            "birth_year": pd.to_numeric(date[:4], errors="coerce"),
+            "is_pitcher": (el.findtext("Position") or "").strip() == "P",
+        })
+    return pd.DataFrame(rows).drop_duplicates("rw_id")
+
+
+BIRTH_YEAR_TOLERANCE = 2   # projection Age is rounded and as-of differs
+
+
+def match_rw_master(pool: pd.DataFrame, master: pd.DataFrame,
+                    target_year: int) -> pd.Series:
+    """MLBAM PlayerId -> RotoWire id by name, then birth year.
+
+    `pool` needs PlayerId, name_key, Age and is_pitcher. A name with several
+    RotoWire players is settled by the closest birth year within
+    `BIRTH_YEAR_TOLERANCE` (then by hitter/pitcher); a tie is left blank.
+    A lone name whose birth year is further out than the tolerance is a
+    different person and is left blank too, rather than guessed.
+    """
+    by_key = {k: g for k, g in master.groupby("name_key")}
+    out: dict[int, int] = {}
+    for pid, key, age, pit in zip(pool["PlayerId"], pool["name_key"],
+                                  pool["Age"], pool["is_pitcher"]):
+        c = by_key.get(key)
+        if c is None:
+            continue
+        born = target_year - age if pd.notna(age) else np.nan
+        if pd.notna(born) and c["birth_year"].notna().any():
+            gap = (c["birth_year"] - born).abs()
+            c = c[gap <= BIRTH_YEAR_TOLERANCE].assign(
+                _gap=gap[gap <= BIRTH_YEAR_TOLERANCE])
+            if len(c) > 1:
+                c = c[c["_gap"] == c["_gap"].min()]
+        if len(c) > 1:
+            same = c[c["is_pitcher"] == bool(pit)]
+            c = same if len(same) else c
+        if len(c) == 1:
+            out[int(pid)] = int(c["rw_id"].iloc[0])
+    ids = pd.Series(out, dtype="int64")
+    ids = ids[~ids.duplicated(keep=False)] if len(ids) else ids
+    return ids
+
+
+def rotowire_ids(h_raw, p_raw, feed_dir="feeds", alias_path=None,
+                 target_year=2027) -> pd.Series:
+    """MLBAM PlayerId -> RotoWire player id.
+
+    Preferred source is the RotoWire player master list (`players.xml`):
+    name + birth year. A prospect's own MLBAM id in `prospects.xml` is exact
+    and wins over any name match. Without the master list this falls back to
+    the usage feeds alone, which cover far fewer players.
+
+    Nothing here is an id-to-id join except the prospects. Anyone the sources
+    do not list, or whose name and birth year do not settle on one RotoWire
+    player, has no RotoWire id rather than a guessed one.
+    """
+    from role_feeds import load_aliases, name_key, read_feeds, resolve_ids
+    feed_dir = Path(feed_dir)
     feeds = {k: v for k, v in read_feeds(feed_dir).items() if len(v)}
+    master = read_rw_master(feed_dir / "players.xml")
+
+    exact = pd.Series(dtype="int64")
+    pros = feeds.get("prospects")
+    if pros is not None and "PlayerId" in pros.columns:
+        d = pros.dropna(subset=["PlayerId", "rw_id"])
+        exact = pd.Series(d["rw_id"].astype(int).to_numpy(),
+                          index=d["PlayerId"].astype(int).to_numpy())
+        exact = exact[~exact.index.duplicated()]
+
+    if len(master):
+        both = pd.concat([h_raw.assign(is_pitcher=False),
+                          p_raw.assign(is_pitcher=True)])
+        pool = both.drop_duplicates("PlayerId", keep="first").copy()
+        pool["name_key"] = pool["Name"].astype(str).map(
+            lambda s: name_key(*s.split(" ", 1)) if " " in s
+            else name_key(s, ""))
+        pool["Age"] = pd.to_numeric(pool.get("Age"), errors="coerce")
+        ids = match_rw_master(pool, master, target_year)
+        return pd.concat([ids[~ids.index.isin(exact.index)], exact])
+
     if not feeds:
-        return pd.Series(dtype=object)
+        return exact
     pool = (pd.concat([h_raw, p_raw])[["PlayerId", "Name",
                                        "Pred_target_team_id"]]
             .drop_duplicates("PlayerId"))
@@ -278,20 +375,15 @@ def rotowire_ids(h_raw, p_raw, feed_dir="feeds",
                      ignore_index=True)
     aliases = load_aliases(alias_path) if alias_path else {}
     res, _ = resolve_ids(rows, pool, aliases=aliases)
-    # a prospect's own MLBAM id beats a name match
-    direct = pd.to_numeric(rows["PlayerId"], errors="coerce") \
-        if "PlayerId" in rows.columns else None
-    if direct is not None:
-        res["PlayerId"] = direct.where(direct.notna(), res["PlayerId"])
     res = res.dropna(subset=["PlayerId", "rw_id"])
     res["PlayerId"] = res["PlayerId"].astype(int)
     pairs = res[["PlayerId", "rw_id"]].drop_duplicates()
     one = pairs.groupby("PlayerId")["rw_id"].nunique()
     pairs = pairs[pairs["PlayerId"].isin(one[one == 1].index)]
-    # two players cannot share a RotoWire id either
     two = pairs.groupby("rw_id")["PlayerId"].nunique()
     pairs = pairs[pairs["rw_id"].isin(two[two == 1].index)]
-    return pairs.set_index("PlayerId")["rw_id"].astype(int)
+    ids = pairs.set_index("PlayerId")["rw_id"].astype(int)
+    return pd.concat([ids[~ids.index.isin(exact.index)], exact])
 
 
 def add_rotowire_ids(df: pd.DataFrame, ids: pd.Series) -> pd.DataFrame:
@@ -641,7 +733,7 @@ def main(argv=None) -> int:
         hitters, pitchers, h_raw, p_raw, a.n_sims, a.seed, pools,
         brackets=not a.median_only)
     rw = rotowire_ids(h_raw, p_raw, ROOT / "feeds",
-                      ROOT / "rosters" / f"player_id_aliases_{y}.csv")
+                      ROOT / "rosters" / f"player_id_aliases_{y}.csv", y)
     hitters, pitchers = (add_rotowire_ids(hitters, rw),
                          add_rotowire_ids(pitchers, rw))
     for label, df in (("hitters", hitters), ("pitchers", pitchers)):
