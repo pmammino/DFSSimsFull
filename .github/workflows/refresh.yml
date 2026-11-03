@@ -11,21 +11,11 @@
 name: refresh-sims
 
 on:
-  schedule:
-    # 09:17 UTC ≈ 5am ET — rebuild projections early so they're ready well
-    # before the day's users arrive. Projections don't need posted lineups, so
-    # building this early is safe and gives the biggest head start. (Cron is
-    # fixed UTC; this lands at 5am during EDT / 4am during EST.)
-    #
-    # Deliberately NOT on the hour: GitHub documents that schedule events are
-    # delayed during high-load periods, "including the start of every hour",
-    # and recommends picking a non-round minute to reduce queueing delay. The
-    # previous "0 11 * * *" (top of the hour) drifted from ~30min late in
-    # early runs to >10 hours late by late August, pushing the "morning"
-    # refresh into the afternoon. Moving off :00 and building in a 2-hour
-    # earlier buffer gives slack for GitHub's scheduler jitter without
-    # changing when users actually see fresh data.
-    - cron: "17 9 * * *"
+  # Daily schedule DISABLED: the MLB season has ended (2026). To resume next
+  # season, restore the trigger below:
+  #   schedule:
+  #     - cron: "17 9 * * *"   # ≈5am ET; deliberately off the top of the hour
+  #       (GitHub delays :00 schedule events under load)
   workflow_dispatch:
     inputs:
       stage:
