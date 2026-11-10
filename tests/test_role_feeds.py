@@ -154,12 +154,60 @@ def test_absence_from_a_lineup_cannot_promote_a_prospect():
     assert "Bench Bat" not in mix
 
 
-def test_absence_still_contradicts_a_depth_chart_that_says_starter():
-    """The case where it IS a disagreement, and has to stay one."""
-    mix, _ = RF.hitter_role_from_feeds(
+def test_one_days_absence_does_not_outvote_a_depth_chart_that_says_starter():
+    """The orders feed is ONE captured lineup per hand, and the committed
+    snapshot is the last day of the regular season. Absence from it is weak
+    evidence, so against a rank-1 depth chart it widens the mixture without
+    leading it. It used to lead (Bench Bat 0.6), which made Bench Bat the modal
+    role and decayed Roman Anthony from 330 to 116 PA."""
+    mix, src = RF.hitter_role_from_feeds(
         {"club_has_orders": True, "depth_pos": "SS", "depth_rank": 1})
-    assert set(mix) == {"Bench Bat", "Full Time"}
-    assert mix["Bench Bat"] == pytest.approx(RF.DISAGREE)
+    assert max(mix, key=mix.get) == "Full Time"
+    assert mix["Full Time"] == pytest.approx(RF.DEPTH_ONLY["hitter"])
+    assert "Bench Bat" not in mix
+    assert src == "feed:depth"
+
+
+def test_absence_plus_an_everyday_record_is_settled_not_benched():
+    mix, src = RF.hitter_role_from_feeds(
+        {"club_has_orders": True, "depth_pos": "DH", "depth_rank": 1,
+         "play_rate": 4.15})
+    assert mix == {"Everyday DH / 1B-DH": 1.0}
+    assert src == "feed:depth+record"
+
+
+def test_absence_still_contradicts_a_depth_chart_that_says_bench():
+    """Where the depth chart does not say everyday there is nothing for the
+    absence to be outvoted by, and the original disagreement logic stands."""
+    mix, _ = RF.hitter_role_from_feeds(
+        {"club_has_orders": True, "depth_pos": "1B", "depth_rank": 2})
+    assert max(mix, key=mix.get) in {"Bench Bat", "Utility IF"}
+
+
+def test_a_catcher_the_record_rescues_keeps_the_catcher_ladder():
+    """Agustin Ramirez: C #2 on the depth chart, 4.30 PA a game. 'Full Time'
+    is a 630-PA job; a catcher's is ~500, so the record's generic label is
+    mapped to Catcher - Primary."""
+    mix, src = RF.hitter_role_from_feeds(
+        {"club_has_orders": False, "depth_pos": "C", "depth_rank": 2,
+         "play_rate": 4.30})
+    assert mix == {"Catcher - Primary": 1.0}
+    assert src == "feed:record over depth"
+
+
+def test_a_starter_parked_in_the_bullpen_group_keeps_his_starter_record():
+    ev = {"depth_pos": "BP", "depth_rank": 12, "own_role": "starter"}
+    mix, src = RF.pitcher_role_from_feeds(ev)
+    assert src == "feed:record over depth"
+    assert set(mix) == set(RF.BURIED_STARTER_MIX)
+    # A reliever with the same chart position is untouched.
+    mix, src = RF.pitcher_role_from_feeds({**ev, "own_role": "reliever"})
+    assert src != "feed:record over depth"
+    # And a starter ranked deep in the ROTATION order is a deep-staff
+    # statement, not a parked injury: left to the depth chart.
+    mix, src = RF.pitcher_role_from_feeds(
+        {"depth_pos": "P", "depth_rank": 9, "own_role": "starter"})
+    assert src != "feed:record over depth"
 
 
 def test_a_club_with_no_lineup_in_the_feed_is_not_a_club_of_bench_players():
@@ -254,11 +302,11 @@ def test_a_stale_row_need_not_be_flagged_legacy_to_be_caught():
     assert ev[1]["club_has_orders"] is False
 
 
-def test_a_player_genuinely_absent_from_his_own_current_club_still_disagrees():
+def test_a_player_genuinely_absent_from_his_own_current_club_is_still_read_as_absent():
     """The fix is scoped to a TEAM mismatch. A player who has never moved
     and simply did not make one day's nine is still a real disagreement —
-    this is the case `test_absence_still_contradicts_a_depth_chart_that_
-    says_starter` covers, reconfirmed end to end through `build_evidence`
+    this is the case `test_one_days_absence_does_not_outvote_a_depth_
+    chart_that_says_starter` covers, reconfirmed end to end through `build_evidence`
     so the two paths cannot drift apart."""
     players = pd.DataFrame({
         "PlayerId": [1, 2],
@@ -286,8 +334,10 @@ def test_a_player_genuinely_absent_from_his_own_current_club_still_disagrees():
     ev, _ = RF.build_evidence(players, "hitter", feeds)
     assert ev[1]["club_has_orders"] is True
     mix, src = RF.hitter_role_from_feeds(ev[1])
-    assert set(mix) == {"Bench Bat", "Full Time"}
-    assert mix["Bench Bat"] == pytest.approx(RF.DISAGREE)
+    # Still the club's own current order and not a trade artefact, so it is
+    # read as absence — but absence alone no longer leads a rank-1 depth chart.
+    assert max(mix, key=mix.get) == "Full Time"
+    assert mix["Full Time"] == pytest.approx(RF.DEPTH_ONLY["hitter"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
