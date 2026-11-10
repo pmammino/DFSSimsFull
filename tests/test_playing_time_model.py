@@ -1097,3 +1097,32 @@ def test_the_workbook_shows_the_role_the_model_assigned(tmp_path):
                 f"{kind} {pid}: workbook says {row[i_role]!r}, the model "
                 f"assigned {assigned[kind][int(pid)]!r}")
         assert seen > 0, "no player rows were compared"
+
+
+# ── hitter playing-time fixes (gaps against FG) ───────────────────────────
+
+def test_hitters_in_one_family_rank_on_volume_not_on_role_grade():
+    """A club with eleven lineup-family hitters used to push its starting
+    catcher (Catcher - Primary, grade 2) past the core regardless of volume."""
+    from role_taxonomy import role_depth_order
+    for r in ("Full Time", "Everyday DH / 1B-DH", "Catcher - Primary",
+              "Strong Side Platoon", "Catcher - Tandem"):
+        assert role_depth_order(r) == role_depth_order("Full Time")
+    # Pitchers keep their grades: bullpen volume is flat.
+    assert role_depth_order("Closer") < role_depth_order("Bullpen Depth Arm")
+
+
+def test_a_rookie_regular_is_not_read_as_a_part_timer_by_his_partial_season():
+    players = pd.DataFrame({
+        "pt_anchor": [630.0, 630.0, 230.0],
+        # ~70 games at 4.24 a game, an established regular, a platoon bat
+        "evidence_volume": [300.0, 600.0, 150.0],
+        "pt_durability": [1.0, 1.0, 1.0],
+        "pt_play_rate": [4.24, 4.2, 3.2],
+    })
+    f = M._evidence_factor(players, "hitter")
+    assert f.iloc[0] > 0.9            # was clipped to the 0.55 floor
+    assert f.iloc[1] == pytest.approx(1.0)   # lifted to par, never above it
+    # An everyday-sized anchor only: a platoon bat's rate says nothing about
+    # the size of the job, and it is left exactly as it was.
+    assert f.iloc[2] == pytest.approx(150 / 230, rel=1e-6)

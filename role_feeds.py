@@ -845,7 +845,27 @@ def hitter_role_from_feeds(ev: dict) -> tuple[dict[str, float], str] | None:
     # the roster and write an override if the depth chart was right.
     if record and _is_everyday(record) and not _is_everyday(
             depth or lineup or ""):
-        return _mix(record, SETTLED, "hitter"), "feed:record over depth"
+        # The record's label is generic ("Full Time"), but a catcher's season
+        # is the catcher ladder's (~500 PA), not the 630 of an outfielder.
+        # Agustin Ramirez — C #2 on the depth chart, 4.30 PA a game — came
+        # out Full Time at 607 PA because of it.
+        pos = (ev.get("depth_pos") or ev.get("feed_position") or "").upper()
+        job = "Catcher - Primary" if pos == "C" else record
+        return _mix(job, SETTLED, "hitter"), "feed:record over depth"
+
+    # ONE absence is not a verdict. Each club's order is a single captured
+    # lineup per hand (the committed snapshot is the last day of the regular
+    # season), so "not in it" also means rested, hurt that day, or lost to a
+    # September call-up. When that is the ONLY thing against a depth chart
+    # that says everyday, the depth chart leads: Roman Anthony (DH #1, 4.15
+    # PA a game, absent from both orders) was read "Bench Bat 0.6 / Everyday
+    # 0.4", which made Bench Bat his modal role, put him in the bench family
+    # at rank 7 and decayed him x0.42 — 330 anchor to 116 PA, for one day's
+    # lineup. The same happened to Donovan, Robert, Jung and Valdez.
+    if lineup and depth and from_absence and _is_everyday(depth):
+        if _confirms(record, depth):
+            return _mix(depth, SETTLED, "hitter"), "feed:depth+record"
+        return _mix(depth, DEPTH_ONLY["hitter"], "hitter"), "feed:depth"
 
     if lineup and depth:
         # Being left out of a nine-man lineup is a CAP, not a job. Read as a
@@ -1008,7 +1028,60 @@ def _depth_read(ev: dict) -> str | None:
     return role
 
 
+# A starter whose feeds have buried him: the weight the feeds put on a bullpen
+# or depth job before his own record is allowed to overrule them, and what he
+# is read as instead. Half end-of-rotation, half swing arm — he is a starter
+# by record, but a club that has parked him in the bullpen group has told us
+# the job is not settled, so the width is kept rather than assumed away.
+BURIED_JOBS = {"Middle Relief", "Bullpen Depth Arm", "Depth (no MLB IP)"}
+BURIED_STARTER_MIX = {"End-of-Rotation Starter (SP4-5)": 0.5,
+                      "Swing Arm / Long Relief": 0.5}
+
+
 def pitcher_role_from_feeds(ev: dict) -> tuple[dict[str, float], str] | None:
+    """The feeds' read of a pitcher, with his own record as a check on it.
+
+    This is the pitcher counterpart of the hitters' "record over depth". The
+    depth chart parks an injured or returning starter in its bullpen group (or
+    far down the rotation), and the read then called him a Bullpen Depth Arm
+    — which also swapped his innings per appearance for the role's 2.5, so
+    Justin Steele (starter record, 5.6 IP an appearance) projected 2.2 innings
+    against FG's 170, and Strider, Woodruff, Lopez, Scott, Brown, Harrison and
+    Weathers went the same way (~790 innings between them). A starter's own
+    record outranks a feed that has him in a bullpen JOB, because being hurt
+    is a fact about availability and the role is about the job.
+
+    Only where the feeds' answer is a low-leverage or depth role: a starter
+    the closers feed really has pitching the ninth keeps that job.
+    """
+    got = _pitcher_role_from_feeds(ev)
+    if not got:
+        return got
+    mix, source = got
+    if source == "feed:prospect":
+        return got
+    if str(ev.get("own_role") or "").strip().lower() != PITCHER_ARRIVAL_ROLE:
+        return got
+    # An arm LISTED in the farm group is not an injured starter parked in the
+    # bullpen — it is the depth chart saying he is in the minors, and his
+    # record there is a translation, not a major-league workload.
+    #
+    # And only the BULLPEN group. A starter ranked 6th-9th in the rotation's
+    # own order is a long way down a deep staff, which is a real statement
+    # about the job; pulling those arms up too put ~60 starters at an
+    # end-of-rotation volume, compressed every ace (10 pitchers over 180 IP
+    # against a real 18) and failed `test_the_projected_staff_matches_the_
+    # real_one_at_the_top`. A starter listed among the RELIEVERS is different
+    # in kind — that is where the chart parks a man who is hurt or returning.
+    if str(ev.get("depth_pos") or "").upper() != "BP":
+        return got
+    buried = sum(w for r, w in mix.items() if r in BURIED_JOBS)
+    if buried >= 0.5:
+        return dict(BURIED_STARTER_MIX), "feed:record over depth"
+    return got
+
+
+def _pitcher_role_from_feeds(ev: dict) -> tuple[dict[str, float], str] | None:
     """What the feeds say a pitcher's job is.
 
     The bullpen feed wins where it speaks, because it is the more specific of

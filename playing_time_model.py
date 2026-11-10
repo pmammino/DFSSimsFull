@@ -526,6 +526,10 @@ def assign_default_roles(players: pd.DataFrame, kind: str, *,
 # curve error on both sides (pitchers 12.8% -> 12.2%, hitters 10.9% ->
 # 10.7%), so it is not a trade.
 EVIDENCE_FACTOR_MIN = 0.55
+# Games in a full everyday season, and the smallest anchor that counts as an
+# everyday-sized role, for the rate-based floor in `_evidence_factor`.
+FULL_SEASON_GAMES = 150.0
+EVERYDAY_ANCHOR_MIN = 450.0
 EVIDENCE_FACTOR_MAX = 1.22
 
 
@@ -564,6 +568,28 @@ def _evidence_factor(players: pd.DataFrame, kind: str) -> pd.Series:
     ev = ev / dur.where(dur > 0).fillna(1.0)
 
     factor = (ev / anchor.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
+
+    # A SEASON TOTAL READS A DEBUT AS A PART-TIME JOB. Konnor Griffin bats
+    # leadoff at 4.24 PA a game and every feed agrees he is the everyday
+    # shortstop, but he played ~70 games, so ev/anchor is ~0.48 and the clip
+    # took him to 0.55 — 630 became 346 before any closure. Durability cannot
+    # rescue him: a rookie's missing games are pre-debut, not missed, so it
+    # reads 1.0. Fourteen of the sixty-one hitters 100+ PA below FG sat on the
+    # 0.55 floor (Griffin, Lombard, Culpepper, Jenkins...).
+    #
+    # What a rookie's partial season CAN say is how often he plays when he is
+    # there, and `pt_play_rate` is exactly that. For the everyday-sized roles
+    # only — a platoon bat's PA per game is low because of the job, and the
+    # anchor already says so — the factor may not fall below the rate-implied
+    # one. It can only lift a penalty, never add a bonus.
+    if kind == "hitter" and "pt_play_rate" in players.columns:
+        rate = pd.to_numeric(players["pt_play_rate"], errors="coerce")
+        implied = (rate * FULL_SEASON_GAMES
+                   / anchor.replace(0, np.nan)).clip(upper=1.0)
+        implied = implied.where(anchor >= EVERYDAY_ANCHOR_MIN)
+        factor = np.maximum(factor.fillna(-np.inf), implied.fillna(-np.inf))
+        factor = pd.Series(factor, index=players.index).replace(
+            -np.inf, np.nan)
     # No evidence -> 1.0, i.e. take the role at face value.
     return factor.fillna(1.0).clip(EVIDENCE_FACTOR_MIN, EVIDENCE_FACTOR_MAX)
 

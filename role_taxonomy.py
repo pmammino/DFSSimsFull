@@ -288,13 +288,27 @@ ROLE_DEPTH_ORDER: dict[str, int] = {
     # bullpen
     "Closer": 1, "Late Inning RP (Setup)": 2, "Middle Relief": 3,
     "Rehab / Injury Return": 4, "Bullpen Depth Arm": 5,
-    # lineup
-    "Full Time": 1, "Everyday DH / 1B-DH": 1, "Catcher - Primary": 2,
-    "Strong Side Platoon": 3, "Catcher - Tandem": 4,
-    # bench
-    "Utility IF": 1, "Utility OF / 4th OF": 1, "Catcher - Backup": 2,
-    "Weak Side Platoon": 3, "Bench Bat": 4,
-    "Injury Replacement / 26th Man": 5,
+    # lineup and bench: ONE tier per family, so hitters rank on volume.
+    #
+    # These used to be graded (Catcher - Primary 2, Strong Side Platoon 3,
+    # Catcher - Tandem 4...) on the theory that a role encodes job security.
+    # For hitters that was wrong in a way that cost real playing time: a club
+    # routinely carries 11-13 hitters in the 9-slot LINEUP family, and the
+    # grade meant the starting catcher and the strong-side platoon bat were
+    # ALWAYS the ones pushed past the core and decayed x0.42-0.32, whatever
+    # their volume. Gabriel Moreno (raw 549, depth rank 12 of ARI's lineup
+    # family) finished at 199 PA; Austin Wells 115; Hunter Goodman 313.
+    # Ranking on raw volume inside the family — the tie-break that was always
+    # there — put them at 462 / 360 / 546 and cut the error against FG on the
+    # 227 largest hitter gaps from 100.9 to 87.9 PA. The mixture has already
+    # priced job security into the anchor, so it is not priced again here.
+    # Pitchers keep their grades: bullpen anchors are flat, so volume cannot
+    # separate a closer from a middle man.
+    "Full Time": 1, "Everyday DH / 1B-DH": 1, "Catcher - Primary": 1,
+    "Strong Side Platoon": 1, "Catcher - Tandem": 1,
+    "Utility IF": 1, "Utility OF / 4th OF": 1, "Catcher - Backup": 1,
+    "Weak Side Platoon": 1, "Bench Bat": 1,
+    "Injury Replacement / 26th Man": 1,
     # depth
     "Depth (no MLB PA)": 9, "Depth (no MLB IP)": 9,
 }

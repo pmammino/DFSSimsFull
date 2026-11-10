@@ -12,8 +12,15 @@ Instead we use:
     * log(prior PA), log(career PA)
     * Age
 
-For K% and BB% this still significantly beats naive shrinkage because the
-model learns the rate of mean-regression as a function of PA and age.
+NOTE — K% and BB% no longer use that model. They go through
+`project_rate_with_decay` below (decay-weighted history shrunk to the league
+mean), which has NO age term. An age adjustment was tested against it
+(scripts/backtest_rate_age.py, walk-forward, 2008-2021) and does not help:
+the age SHAPE alone is worth ~0-1% of weighted MAE; every gain came from a
+league LEVEL shift, because K% rose every year of the test window and a
+trailing league mean lags a rising league. That is a trend artefact, not an
+age effect, so nothing was added. The age-driven ML features above remain only
+for the other rates (HR, hits on balls in play, ...).
 
 For HBP% and SF% — both very rare and very noisy — we use pure Bayesian
 shrinkage against the league mean. Trying to fit ML models adds complexity
