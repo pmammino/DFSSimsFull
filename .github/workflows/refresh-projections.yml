@@ -184,6 +184,16 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit $STATUS
 
+      - name: Keep any rejected feed payloads for inspection
+        if: always() && inputs.fetch_feeds
+        uses: actions/upload-artifact@v4
+        with:
+          name: rejected-feeds-${{ github.run_id }}
+          path: feeds/.rejected/
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7
+
       - name: Rebuild the per-PA baselines
         run: |
           ARGS="--target-year $TARGET_YEAR --bip-dir bip_inputs --output-dir out"
