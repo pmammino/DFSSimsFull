@@ -12,7 +12,29 @@ Four XML files that decide what a player's job is. `role_feeds.py` reads them;
 
 ## Refreshing them
 
-Save each feed's XML over the file of the same name. Saving straight out of a
+Run `python scripts/fetch_role_feeds.py` (also Stage 0 of `refresh_and_run.py`;
+skip with `--skip-feeds`). It reads the URLs from environment variables so the
+API keys stay out of the repo:
+
+| variable | required | feed |
+|---|---|---|
+| `RW_DEPTH_URL` | yes | `api.rotowire.com/Baseball/MLB/DepthChart.php?key=...` |
+| `RW_CLOSERS_URL` | yes | `api.rotowire.com/Baseball/MLB/Closers.php?key=...` |
+| `RW_ORDERS_URL` | no | batting-orders proxy (defaults to the slate-feed host) |
+| `RW_PROSPECTS_URL` | no | rotowire.com top-prospects table (public default) |
+
+A download is validated before it replaces the saved file; a failed or garbled
+one leaves the old file alone and stops the run (`--allow-stale` to carry on).
+Rejected payloads land in `feeds/.rejected/`. `feeds/fetch_log.json` records
+when each feed was last pulled.
+
+`depth.xml` also drives **team context**: a player whose depth-chart club
+differs from the club his last season implies is treated as having moved, in
+`run_pipeline.py`, for hitters and pitchers. The hand-written
+`rosters/team_assignments_<year>.json` still wins. Changes are printed and
+written to `out/depth_team_moves_*.csv`.
+
+By hand: save each feed's XML over the file of the same name. Saving straight out of a
 browser tab is fine: the parser skips the "This XML file does not appear to
 have any style information" banner that adds.
 

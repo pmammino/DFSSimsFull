@@ -793,7 +793,8 @@ def step9_project_runs_rbi(h_final: pd.DataFrame, hit_df: pd.DataFrame,
         load_team_overrides,
     )
 
-    overrides = load_team_overrides(TEAM_OVERRIDE_PATH(target_year))
+    overrides = _team_overrides(hit_df, target_year, "PA", "hitters",
+                                load_team_overrides(TEAM_OVERRIDE_PATH(target_year)))
     hit_assign = assign_target_teams(
         hit_df, target_year, id_col="PlayerId", volume_col="PA",
         min_volume=25.0, overrides=overrides,
@@ -876,6 +877,35 @@ def step9_project_runs_rbi(h_final: pd.DataFrame, hit_df: pd.DataFrame,
     return h_final
 
 
+def _team_overrides(history, target_year, volume_col, label, manual):
+    """Roster moves for a target year: the depth chart's clubs, then the
+    hand-written `team_assignments_<year>.json` on top (it always wins).
+
+    Without this the team is whatever the player's last season of playing time
+    implies, which is wrong for every offseason move. Needs feeds/depth.xml;
+    absent that, only the manual file applies.
+    """
+    from pathlib import Path
+    from role_feeds import depth_team_overrides
+    overrides, moves = depth_team_overrides(
+        history, target_year, volume_col=volume_col, manual=manual,
+        alias_path=Path("rosters") / f"player_id_aliases_{target_year}.csv")
+    print(f"  Team context ({label}): {len(moves)} club changes from the depth "
+          f"chart, {len(manual)} manual overrides")
+    if len(moves):
+        print("    " + moves.head(12).to_string(index=False)
+              .replace("\n", "\n    "))
+        if len(moves) > 12:
+            print(f"    ... {len(moves) - 12} more")
+        try:
+            Path("out").mkdir(exist_ok=True)
+            moves.to_csv(Path("out") / f"depth_team_moves_{label}_{target_year}.csv",
+                         index=False)
+        except OSError:
+            pass
+    return overrides
+
+
 def step10_apply_park_factors(h_final: pd.DataFrame, p_final: pd.DataFrame,
                                hit_df: pd.DataFrame, pit_df: pd.DataFrame,
                                target_year: int, force: bool = False
@@ -941,9 +971,13 @@ def step10_apply_park_factors(h_final: pd.DataFrame, p_final: pd.DataFrame,
         # club could outrank a full season with the old one.
         from team_context import assign_target_teams
 
+        from team_context import TEAM_OVERRIDE_PATH, load_team_overrides
         pit_assign = assign_target_teams(
             pit_df, target_year, id_col="PlayerId", volume_col="TBF",
             min_volume=25.0,
+            overrides=_team_overrides(
+                pit_df, target_year, "TBF", "pitchers",
+                load_team_overrides(TEAM_OVERRIDE_PATH(target_year))),
         )
         p_final = p_final.merge(
             pit_assign.rename(columns={"team_id": "Pred_target_team_id",

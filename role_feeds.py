@@ -93,7 +93,7 @@ from durability import record_read
 from role_taxonomy import (DEPTH_HITTER_ROLE, DEPTH_PITCHER_ROLE,
                            format_role_mix, is_depth_role, role_anchor,
                            role_names)
-from team_context import canonical_team, team_id_for_abbr
+from team_context import abbr_for_team_id, canonical_team, team_id_for_abbr
 
 FEED_DIR = "feeds"
 FEED_FILES = {"depth": "depth.xml", "orders": "orders.xml",
@@ -1649,3 +1649,73 @@ def feed_report(stats: dict) -> str:
         lines.append(f"    WARNING: roles not in the taxonomy were produced "
                      f"and dropped: {sorted(stats['unknown_roles'])}")
     return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Team context from the depth chart
+# ─────────────────────────────────────────────────────────────────────────────
+
+def depth_team_overrides(history: pd.DataFrame, target_year: int, *,
+                         volume_col: str = "PA",
+                         feed_dir: str | Path = FEED_DIR,
+                         alias_path: str | Path | None = None,
+                         manual: dict[int, int | None] | None = None,
+                         ) -> tuple[dict[int, int | None], pd.DataFrame]:
+    """Roster moves read off the depth chart: {PlayerId -> MLBAM team id}.
+
+    The depth chart lists every club's players, so a man whose chart club is
+    not the club his last season's playing time implies has moved — a signing,
+    a trade, a waiver claim. That is exactly what `team_assignments_<year>.json`
+    exists to say, and what nobody was maintaining.
+
+    Only DISAGREEMENTS are returned, so "override" keeps meaning "moved" and a
+    player who has not changed clubs keeps his history provenance. Rules:
+
+      * `manual` (the hand-written file) always wins over the feed.
+      * A player the chart lists under two different clubs is dropped.
+      * An ambiguous name is dropped, never guessed (see `resolve_ids`).
+      * A player the chart does not list at all is left on his history club —
+        he may be a free agent, but absence from a chart is not a signing.
+
+    Returns (overrides, moves) where `moves` is a frame of what changed, for
+    the run log and for review.
+    """
+    from team_context import assign_target_teams
+
+    manual = dict(manual or {})
+    cols = ["PlayerId", "Name", "from_team", "to_team"]
+    empty = pd.DataFrame(columns=cols)
+    depth = read_depth(Path(feed_dir) / FEED_FILES["depth"])
+    if depth.empty or history.empty or "Name" not in history.columns:
+        return manual, empty
+
+    base = assign_target_teams(history, target_year, id_col="PlayerId",
+                               volume_col=volume_col, min_volume=25.0)
+    players = (history[["PlayerId", "Name"]].drop_duplicates("PlayerId")
+               .merge(base[["PlayerId", "team_id"]], on="PlayerId", how="left")
+               .rename(columns={"team_id": "Pred_target_team_id"}))
+    depth = depth[depth["feed_team_id"].notna()]
+    aliases = load_aliases(alias_path) if alias_path else {}
+    resolved, _ = resolve_ids(depth, players, aliases=aliases,
+                              label="depth team")
+    resolved = resolved[resolved["PlayerId"].notna()]
+
+    clubs = resolved.groupby("PlayerId")["feed_team_id"].agg(
+        lambda s: sorted({int(x) for x in s}))
+    current = dict(zip(base["PlayerId"], base["team_id"]))
+    names = dict(zip(players["PlayerId"], players["Name"]))
+
+    out = dict(manual)
+    rows = []
+    for pid, tids in clubs.items():
+        pid = int(pid)
+        if len(tids) != 1 or pid in manual:
+            continue
+        new, old = tids[0], current.get(pid)
+        if old is not None and pd.notna(old) and int(old) == new:
+            continue
+        out[pid] = new
+        rows.append({"PlayerId": pid, "Name": names.get(pid, ""),
+                     "from_team": abbr_for_team_id(old),
+                     "to_team": abbr_for_team_id(new)})
+    return out, (pd.DataFrame(rows, columns=cols) if rows else empty)

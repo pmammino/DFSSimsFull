@@ -5,6 +5,7 @@ slate → matchup → 10k correlated DK sims → deliverables.
 
 This is the top-level entry point. It chains:
 
+  STAGE 0  scripts/fetch_role_feeds.py  RotoWire depth/orders/closers/prospects feeds
   STAGE A  prefetch_bip.py        pull Statcast BIP seasons (imputation + XGB pool)
   STAGE B  run_pipeline.py        handedness per-PA projections (BIP/XGBoost engine)
   STAGE C  run_slate.py           slate ingest → matchup splits → correlated sims
@@ -51,6 +52,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--skip-refresh', action='store_true',
                     help='skip BIP scrape + projection rebuild; reuse cached projections')
+    ap.add_argument('--skip-feeds', action='store_true',
+                    help='do not download the RotoWire role/depth feeds; use feeds/ as saved')
     ap.add_argument('--skip-bip', action='store_true',
                     help='skip BIP scrape only (reuse bip_inputs/), still rebuild projections')
     ap.add_argument('--confirmed'); ap.add_argument('--expected'); ap.add_argument('--vegas')
@@ -59,6 +62,13 @@ def main():
     args = ap.parse_args()
 
     os.makedirs('bip_inputs', exist_ok=True)
+
+    if not args.skip_refresh and not args.skip_feeds:
+        # STAGE 0 — RotoWire role + depth feeds (roles, team context). Needs
+        # RW_DEPTH_URL and RW_CLOSERS_URL in the environment; see the script.
+        # Stops the run if a feed fails rather than projecting on a stale one.
+        run([PY, 'scripts/fetch_role_feeds.py'],
+            "STAGE 0: RotoWire role / depth-chart feeds")
 
     if not args.skip_refresh:
         # STAGE A — refresh Statcast BIP seasons
