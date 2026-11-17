@@ -17,7 +17,11 @@ an API key:
     RW_CLOSERS_URL    required   .../Baseball/MLB/Closers.php?key=...
     RW_ORDERS_URL     optional   batting-orders proxy (defaults to the same
                                  proxy host the slate feeds use)
-    RW_PROSPECTS_URL  optional   rotowire.com top-prospects table (public)
+    RW_PROSPECTS_URL  optional   the keyed api.rotowire.com prospects XML. There
+                                 is deliberately NO default: the public
+                                 top-prospects.php table returns JSON, 5 rows,
+                                 and no MLBId, which is not this feed. Unset =
+                                 the committed prospects.xml is kept.
 
     bash:        export RW_DEPTH_URL='https://api.rotowire.com/...'
     PowerShell:  $env:RW_DEPTH_URL = 'https://api.rotowire.com/...'
@@ -48,10 +52,6 @@ FEED_DIR = ROOT / "feeds"
 REJECT_DIR = FEED_DIR / ".rejected"
 LOG_PATH = FEED_DIR / "fetch_log.json"
 
-DEFAULT_PROSPECTS_URL = ("https://www.rotowire.com/baseball/tables/"
-                         "top-prospects.php?pos=All&league=3&eta=All"
-                         "&signed=All&fypd=All")
-
 # name -> (env var, file name, required?)
 FEEDS = {
     "depth":     ("RW_DEPTH_URL",     "depth.xml",     True),
@@ -63,8 +63,6 @@ FEEDS = {
 
 def default_url(name: str) -> str | None:
     """Defaults for the feeds that carry no secret."""
-    if name == "prospects":
-        return DEFAULT_PROSPECTS_URL
     if name == "orders":
         # Same proxy host the daily slate feeds already use (slate_config).
         try:
@@ -88,6 +86,8 @@ def http_get(url: str, timeout: int = 60) -> bytes:
 def parse_xml(raw: bytes) -> ET.Element:
     """Parse, tolerating a banner or BOM before the first tag."""
     text = raw.decode("utf-8", "replace")
+    if text.lstrip()[:1] in ("[", "{"):
+        raise ValueError("response is JSON, not the XML feed")
     start = text.find("<")
     if start < 0:
         raise ValueError("response contains no XML")
