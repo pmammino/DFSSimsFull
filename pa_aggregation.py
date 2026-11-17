@@ -375,7 +375,8 @@ def _rescale_hits_to_complement_out(df: pd.DataFrame) -> pd.DataFrame:
 def build_pa_projections(bip_aggregated: pd.DataFrame,
                          rate_projections: pd.DataFrame,
                          group_col: str,
-                         id_col: str = "PlayerId") -> pd.DataFrame:
+                         id_col: str = "PlayerId",
+                         no_bip_n_eff: float = 150.0) -> pd.DataFrame:
     """Combine BIP probabilities (per-BIP, summing to 1) with PA-level rates
     (K%, BB%, HBP%, SF%) into a 9-event PA-level distribution that sums to 1.
 
@@ -502,7 +503,22 @@ def build_pa_projections(bip_aggregated: pd.DataFrame,
     # We use the player's BIP count for the SE term (real + imputed; imputed
     # rows add weight but don't carry true outcome signal, so this is a
     # conservative — slightly tight — estimator).
-    n_eff = np.sqrt(np.maximum(df["N_BIP"].fillna(1), 1))
+    #
+    # A player with NO batted balls (a minor-league-translated prospect, or an
+    # MLB player who never put one in play) used to land on N_BIP = 0, which the
+    # max(., 1) above turned into ONE. That made his "standard error" the
+    # spread of a SINGLE batted ball — SD_HR 0.106 against a projected P_HR of
+    # 0.027, SD_1B 0.178 against 0.138 — about twenty times a real hitter's.
+    # The simulation draws each rate from N(P, SD) and clips at zero, so a
+    # spread that wide only adds: simulated OPS ran 0.90 against a projected
+    # 0.70 for these players and their ceilings read 1.18-1.29, the highest on
+    # the board. Everyone WITH batted balls is topped up to a standard sample
+    # by the imputation (`IMP_TARGET_N_*`), so a player with none is given that
+    # same sample: the projection for him is the population's, which is worth
+    # exactly what a topped-up sample is worth.
+    n_bip = df["N_BIP"].fillna(0)
+    n_eff = np.sqrt(np.maximum(
+        np.where(n_bip > 0, n_bip, float(no_bip_n_eff)), 1.0))
     out["SD_HR"]     = (df["home_run_sd"].fillna(0) / n_eff) * bip_share
     out["SD_3B"]     = (df["triple_sd"].fillna(0)   / n_eff) * bip_share
     out["SD_2B"]     = (df["double_sd"].fillna(0)   / n_eff) * bip_share

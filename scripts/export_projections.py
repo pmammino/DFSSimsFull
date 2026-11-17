@@ -86,22 +86,32 @@ def build_hitters(h: pd.DataFrame) -> pd.DataFrame:
     })
     for k, src in HITTER_RATES.items():
         out[k] = _num(h, src)
-    out["PA"] = _num(h, "Proj_PA").round(1)
+    pa_x = _num(h, "Proj_PA")                     # UNROUNDED
+    out["PA"] = pa_x.round(1)
     out["G"] = _num(h, "Proj_G").round(1)
+    # Counts are shown to a tenth, but the rate stats are computed from the
+    # UNROUNDED counts. A floor-tier hitter has 1 PA, so a count of 0.18 hits
+    # displays as 0.2 and 0.9 AB — and 0.2 / 0.9 is a .222 average from a true
+    # .20, a .856 OPS from a true .77. Rounding first is invisible at 600 PA
+    # and wrong by 10-20% at 1.
+    x = {}
     for stat, rate in (("1B", "r_1B"), ("2B", "r_2B"), ("3B", "r_3B"),
                        ("HR", "r_HR"), ("BB", "r_BB"), ("HBP", "r_HBP"),
                        ("SF", "r_SF"), ("SO", "r_SO"), ("SB", "r_SB"),
                        ("CS", "r_CS"), ("R", "r_R"), ("RBI", "r_RBI")):
-        out[stat] = (out[rate] * out["PA"]).round(1)
-    out["H"] = (out["1B"] + out["2B"] + out["3B"] + out["HR"]).round(1)
-    out["AB"] = (out["PA"] - out["BB"] - out["HBP"] - out["SF"]).round(1)
-    out["TB"] = (out["1B"] + 2 * out["2B"] + 3 * out["3B"]
-                 + 4 * out["HR"]).round(1)
-    ab = out["AB"].replace(0, np.nan)
-    pa = out["PA"].replace(0, np.nan)
-    out["AVG"] = (out["H"] / ab).round(3)
-    out["OBP"] = ((out["H"] + out["BB"] + out["HBP"]) / pa).round(3)
-    out["SLG"] = (out["TB"] / ab).round(3)
+        x[stat] = out[rate] * pa_x
+        out[stat] = x[stat].round(1)
+    h_x = x["1B"] + x["2B"] + x["3B"] + x["HR"]
+    ab_x = pa_x - x["BB"] - x["HBP"] - x["SF"]
+    tb_x = x["1B"] + 2 * x["2B"] + 3 * x["3B"] + 4 * x["HR"]
+    out["H"] = h_x.round(1)
+    out["AB"] = ab_x.round(1)
+    out["TB"] = tb_x.round(1)
+    ab = ab_x.replace(0, np.nan)
+    pa = pa_x.replace(0, np.nan)
+    out["AVG"] = (h_x / ab).round(3)
+    out["OBP"] = ((h_x + x["BB"] + x["HBP"]) / pa).round(3)
+    out["SLG"] = (tb_x / ab).round(3)
     out["OPS"] = (out["OBP"] + out["SLG"]).round(3)
     order = ["PlayerId", "Name", "Team", "Age", "Bats", "Pos", "Tier", "Role",
              "RoleSource", "Origin", "LineupSlot", "PA", "G", "AB", "H", "1B",
@@ -130,23 +140,28 @@ def build_pitchers(p: pd.DataFrame, pools: pd.DataFrame) -> pd.DataFrame:
     out["TBF_per_IP"] = tbf_ip.round(3)
     out["r_ERA"] = _num(p, "ERA")
     out["r_RA9"] = _num(p, "RA9")
-    out["IP"] = _num(p, "Proj_IP").round(1)
+    ip_x = _num(p, "Proj_IP")                     # UNROUNDED, as for hitters
+    out["IP"] = ip_x.round(1)
     out["G"] = _num(p, "Proj_G").round(1)
     out["GS"] = _num(p, "Proj_GS").round(1)
-    out["TBF"] = (out["IP"] * out["TBF_per_IP"]).round(1)
+    tbf_x = ip_x * out["TBF_per_IP"]
+    out["TBF"] = tbf_x.round(1)
+    px = {}
     for stat, rate in (("SO", "r_SO"), ("BB", "r_BB"), ("HBP", "r_HBP"),
                        ("HR", "r_HR"), ("1B", "r_1B"), ("2B", "r_2B"),
                        ("3B", "r_3B")):
-        out[stat] = (out[rate] * out["TBF"]).round(1)
-    out["H"] = (out["1B"] + out["2B"] + out["3B"] + out["HR"]).round(1)
-    out["ER"] = (out["r_ERA"] * out["IP"] / 9.0).round(1)
-    out["R"] = (out["r_RA9"] * out["IP"] / 9.0).round(1)
-    ip = out["IP"].replace(0, np.nan)
+        px[stat] = out[rate] * tbf_x
+        out[stat] = px[stat].round(1)
+    h_px = px["1B"] + px["2B"] + px["3B"] + px["HR"]
+    out["H"] = h_px.round(1)
+    out["ER"] = (out["r_ERA"] * ip_x / 9.0).round(1)
+    out["R"] = (out["r_RA9"] * ip_x / 9.0).round(1)
+    ip = ip_x.replace(0, np.nan)
     out["ERA"] = out["r_ERA"].round(2)
-    out["WHIP"] = ((out["H"] + out["BB"]) / ip).round(2)
-    out["K9"] = (out["SO"] * 9 / ip).round(2)
-    out["BB9"] = (out["BB"] * 9 / ip).round(2)
-    out["HR9"] = (out["HR"] * 9 / ip).round(2)
+    out["WHIP"] = ((h_px + px["BB"]) / ip).round(2)
+    out["K9"] = (px["SO"] * 9 / ip).round(2)
+    out["BB9"] = (px["BB"] * 9 / ip).round(2)
+    out["HR9"] = (px["HR"] * 9 / ip).round(2)
 
     # Saves and holds: each club's pool, split by the NORMALISED role share.
     # The raw `pt_save_share` is a per-role weight and sums past 1 over a real
