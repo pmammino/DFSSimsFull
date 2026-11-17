@@ -10,6 +10,10 @@
 # store. This one does the projection side only, then verifies the result and
 # builds the season layer on top:
 #
+#   0. fetch_role_feeds.py        pull the RotoWire depth / orders / closers /
+#                                 prospects feeds into feeds/ (roles + team
+#                                 context). On by default; needs the RW_*
+#                                 repository secrets (see below).
 #   1. run_pipeline.py            per-PA baselines -> out/*.csv
 #   2. scripts/verify_refresh.py  ASSERT the known defects are actually gone
 #   3. audit_baselines.py         full diagnostic, written to the run summary
@@ -36,6 +40,14 @@ on:
         description: "season to project"
         default: "2027"
         type: string
+      fetch_feeds:
+        description: "pull the live RotoWire depth/orders/closers/prospects feeds first (roles + team context); off = use feeds/ as committed"
+        default: true
+        type: boolean
+      allow_stale:
+        description: "if a feed fails to download, carry on with the committed copy instead of failing the run"
+        default: false
+        type: boolean
       scrape_bip:
         description: "re-scrape Statcast batted-ball data, replacing bip_inputs/ (slow, ~10min)"
         default: false
@@ -78,6 +90,16 @@ jobs:
     timeout-minutes: 120
     env:
       TARGET_YEAR: ${{ inputs.target_year }}
+      # RotoWire feed URLs. Repository secrets (Settings -> Secrets and
+      # variables -> Actions), because two carry an API key:
+      #   RW_DEPTH_URL    https://api.rotowire.com/Baseball/MLB/DepthChart.php?key=...
+      #   RW_CLOSERS_URL  https://api.rotowire.com/Baseball/MLB/Closers.php?key=...
+      #   RW_ORDERS_URL   the batting-orders proxy URL
+      #   RW_PROSPECTS_URL (optional) defaults to the public top-prospects table
+      RW_DEPTH_URL: ${{ secrets.RW_DEPTH_URL }}
+      RW_CLOSERS_URL: ${{ secrets.RW_CLOSERS_URL }}
+      RW_ORDERS_URL: ${{ secrets.RW_ORDERS_URL }}
+      RW_PROSPECTS_URL: ${{ secrets.RW_PROSPECTS_URL }}
       SHARED_STORE_BUCKET: ${{ secrets.SHARED_STORE_BUCKET }}
       SHARED_STORE_ENDPOINT: ${{ secrets.SHARED_STORE_ENDPOINT }}
       SHARED_STORE_PREFIX: ${{ secrets.SHARED_STORE_PREFIX }}
@@ -112,6 +134,7 @@ jobs:
             echo "|---|---|"
             echo "| ref | \`${{ github.ref_name }}\` (\`${{ github.sha }}\`) |"
             echo "| target year | ${{ inputs.target_year }} |"
+            echo "| fetch feeds | ${{ inputs.fetch_feeds }} |"
             echo "| scrape BIP | ${{ inputs.scrape_bip }} |"
             echo "| commit | ${{ inputs.commit }} |"
             echo "| publish | ${{ inputs.publish }} |"
@@ -139,6 +162,27 @@ jobs:
           # team-context tests here guard the exact bugs this refresh exists to
           # eliminate, so a red suite means the rebuild would bake them back in.
           python -m pytest tests/ -q
+
+      - name: Pull the live RotoWire feeds (roles + team context)
+        if: inputs.fetch_feeds
+        run: |
+          # Validates each download before it replaces the committed copy; a
+          # failed or garbled feed stops the run unless allow_stale is set, so
+          # a rebuild never silently projects on week-old roles.
+          ARGS=""
+          if [ "${{ inputs.allow_stale }}" = "true" ]; then ARGS="--allow-stale"; fi
+          set +e
+          python scripts/fetch_role_feeds.py $ARGS > feeds.txt 2>&1
+          STATUS=$?
+          set -e
+          cat feeds.txt
+          {
+            echo "## RotoWire feeds"
+            echo '```'
+            cat feeds.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $STATUS
 
       - name: Rebuild the per-PA baselines
         run: |
@@ -240,6 +284,8 @@ jobs:
             out/season_*/
             rosters/player_roles_*.xlsx
             bip_inputs/*.csv
+            feeds/*.xml
+            feeds/fetch_log.json
 
       - name: Push the rebuilt files to a branch
         # `always()` matters: a bare `if:` is implicitly ANDed with success(),
@@ -267,7 +313,11 @@ jobs:
           # out/*.xlsx is the exported projections spreadsheet. Explicit, like
           # everything else here — a blanket `-A out` swept debug parquet into
           # the repo the first time this ran.
-          git add out/*.csv out/*.xlsx rosters/player_roles_*.xlsx bip_inputs/*.csv
+          # feeds/*.xml and fetch_log.json are the roles/team-context inputs this
+          # run used, so the branch carries the exact snapshot the projections
+          # were built from.
+          git add out/*.csv out/*.xlsx rosters/player_roles_*.xlsx bip_inputs/*.csv \
+                  feeds/
           if git diff --cached --quiet; then
             echo "::notice title=No changes::the rebuild produced identical files"
             exit 0

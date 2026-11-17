@@ -19,3 +19,6 @@ out/season_*/
 # pipeline debug intermediates (regenerated every run; the refresh workflow's
 # `git add -A out` was sweeping these into the repo)
 out/debug/
+
+# rejected feed payloads (scripts/fetch_role_feeds.py)
+feeds/.rejected/
