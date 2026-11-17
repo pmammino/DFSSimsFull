@@ -85,3 +85,14 @@ def test_missing_key_is_reported_not_fetched(monkeypatch):
     monkeypatch.delenv("RW_DEPTH_URL", raising=False)
     st = fetch.fetch_one("depth", getter=lambda u: (_ for _ in ()).throw(AssertionError))
     assert not st["ok"] and "RW_DEPTH_URL" in st["error"]
+
+
+def test_optional_feed_failure_warns_but_required_failure_stops(monkeypatch, tmp_path):
+    monkeypatch.setattr(fetch, "FEED_DIR", tmp_path)
+    monkeypatch.setattr(fetch, "REJECT_DIR", tmp_path / ".rejected")
+    monkeypatch.setattr(fetch, "LOG_PATH", tmp_path / "log.json")
+    monkeypatch.setenv("RW_PROSPECTS_URL", "http://x.invalid/p")
+    monkeypatch.setattr(fetch, "http_get", lambda u, timeout=60: b'[{"json": 1}]')
+    assert fetch.main(["--only", "prospects"]) == 0          # soft: keep old copy
+    monkeypatch.delenv("RW_DEPTH_URL", raising=False)
+    assert fetch.main(["--only", "depth"]) == 1              # required: stop

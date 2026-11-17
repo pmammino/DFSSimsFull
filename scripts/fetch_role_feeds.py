@@ -158,6 +158,11 @@ def fetch_one(name: str, *, dry_run: bool = False, getter=http_get,
             REJECT_DIR.mkdir(parents=True, exist_ok=True)
             (REJECT_DIR / fname).write_bytes(raw)
             status["rejected_copy"] = str(REJECT_DIR / fname)
+            # Enough to see WHAT came back (an error page, JSON, a login
+            # wall) straight from a CI log. The payload itself never carries
+            # the request URL or key.
+            status["snippet"] = " ".join(
+                raw[:300].decode("utf-8", "replace").split())
         except OSError:
             pass
         return status
@@ -190,6 +195,8 @@ def main(argv=None) -> int:
             print(f"  FAIL  {r['feed']:<10} {r['error']}")
             if r.get("rejected_copy"):
                 print(f"        payload saved to {r['rejected_copy']}")
+            if r.get("snippet"):
+                print(f"        starts: {r['snippet']}")
 
     if not args.dry_run and any(r["ok"] for r in results):
         log = {}
@@ -205,9 +212,17 @@ def main(argv=None) -> int:
                                   "players": r["players"]}
         LOG_PATH.write_text(json.dumps(log, indent=2) + "\n")
 
+    # Depth and closers decide roles and team context, so a failure there
+    # stops the run. Orders and prospects are supporting feeds that change
+    # slowly; a failure keeps the committed copy and warns.
     failed = [r["feed"] for r in results if not r["ok"]]
-    if failed:
-        msg = f"{len(failed)} feed(s) not refreshed: {', '.join(failed)}"
+    fatal = [n for n in failed if FEEDS[n][2]]
+    soft = [n for n in failed if not FEEDS[n][2]]
+    if soft:
+        print(f"  WARNING: {', '.join(soft)} not refreshed; "
+              f"keeping the existing file(s)")
+    if fatal:
+        msg = f"required feed(s) not refreshed: {', '.join(fatal)}"
         if args.allow_stale:
             print(f"  WARNING: {msg}; continuing on the existing files")
             return 0
