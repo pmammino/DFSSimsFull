@@ -21,7 +21,7 @@ API keys stay out of the repo:
 | `RW_DEPTH_URL` | yes | `api.rotowire.com/Baseball/MLB/DepthChart.php?key=...` |
 | `RW_CLOSERS_URL` | yes | `api.rotowire.com/Baseball/MLB/Closers.php?key=...` |
 | `RW_ORDERS_URL` | no | batting-orders proxy (defaults to the slate-feed host) |
-| `RW_PROSPECTS_URL` | no | rotowire.com top-prospects table (public default) |
+| `RW_PROSPECTS_URL` | no | the keyed `api.rotowire.com` prospects XML (has `MLBId` and birth dates). No default: the public `top-prospects.php` table returns 5 rows of JSON without `MLBId`, so unset keeps the committed file |
 
 A download is validated before it replaces the saved file; a failed or garbled
 one leaves the old file alone and stops the run (`--allow-stale` to carry on).
