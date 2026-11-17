@@ -466,27 +466,38 @@ def project_decisions(pitchers: pd.DataFrame, pools: pd.DataFrame, *,
         frac = np.where(is_sp[pos], np.clip(ips[pos] / 9.0, 0.10, 0.85), 0.10)
         pw = _pythag(np.full(len(pos), rs), frac * ra9[pos] + (1 - frac) * ra_team)
         go_long = np.clip(ips / 5.2, 0.5, 1.25)[pos]
-        # A win goes to the pitcher who goes long on a winning day; a loss is
-        # about how often his club loses behind him, so it follows the LOSS
-        # ODDS (a .45 club behind him loses at 1.2:1, a .62 club at 0.6:1) and
-        # is only softly reduced by going short — a starter pulled early while
-        # trailing is still the pitcher of record.
+        # Decisions come from STARTS and from RELIEF INNINGS, by pitcher, not by
+        # whether he is filed as a starter. A club's starts are made by more men
+        # than its rotation (PIT: ~8 of 162 by pitchers classed as relievers), so
+        # splitting the starters' pool over only the classed starters spread it
+        # over ~154 starts instead of 162 and inflated every starter's rate by
+        # ~5% — Skenes read 15.9 wins for it. Each pitcher gets a share of BOTH
+        # pools, a swingman from his starts and from his relief innings.
+        starts = gs[pos]
+        # Relief innings, from appearances: a pure starter (G == GS) has none,
+        # a swingman has his innings in proportion to the games he relieved.
+        # (Subtracting an assumed innings-per-start instead gave a 6.3-inning
+        # starter 45 phantom relief innings and a share of the bullpen's wins.)
+        relief_ip = ip[pos] * np.clip((g[pos] - starts) / np.maximum(g[pos], 1e-9),
+                                      0.0, 1.0)
+        relief_cap = np.maximum(g[pos] - starts, 0.0)
         for decide, long_pow, pool_total, share, dest in (
                 (pw, 1.0, wins, SP_WIN_SHARE, w),
                 ((1.0 - pw) / np.clip(pw, 1e-6, None), 0.5, losses,
                  SP_LOSS_SHARE, l)):
-            sp = is_sp[pos]
-            for mask, part, cap in ((sp, share, gs[pos]),
-                                    (~sp, 1.0 - share, g[pos])):
-                if not mask.any():
-                    continue
-                wt = np.where(mask & can[pos],
-                              np.where(sp, gs[pos] * decide * go_long ** long_pow,
-                                       ip[pos] * decide), 0.0)
+            # A win goes to the pitcher who goes long on a winning day; a loss
+            # is about how often his club loses behind him, so it follows the
+            # LOSS ODDS (a .45 club behind him loses at 1.2:1, a .62 club at
+            # 0.6:1) and is only softly reduced by going short — a starter
+            # pulled early while trailing is still the pitcher of record.
+            for wt, part, cap in (
+                    (starts * decide * go_long ** long_pow, share, starts),
+                    (relief_ip * decide, 1.0 - share, relief_cap)):
+                wt = np.where(can[pos], wt, 0.0)
                 if wt.sum() <= 0:
                     continue
-                dest[pos[mask]] = allocate_opportunity(
-                    wt[mask] / wt[mask].sum(), pool_total * part, cap[mask])
+                dest[pos] += allocate_opportunity(wt / wt.sum(),
+                                                  pool_total * part, cap)
     out["W"], out["L"] = w, l
     qs = np.where(is_sp & can, gs * quality_start_rate(ips, era), 0.0)
     out["QS"] = qs
