@@ -1,0 +1,22 @@
+{
+  "depth": {
+    "fetched_utc": "2026-11-17T19:32:21+00:00",
+    "teams": 30,
+    "players": 2511
+  },
+  "orders": {
+    "fetched_utc": "2026-11-17T19:32:21+00:00",
+    "teams": 24,
+    "players": 766
+  },
+  "closers": {
+    "fetched_utc": "2026-11-17T19:32:21+00:00",
+    "teams": 30,
+    "players": 238
+  },
+  "prospects": {
+    "fetched_utc": "2026-11-17T19:32:21+00:00",
+    "teams": 30,
+    "players": 400
+  }
+}
