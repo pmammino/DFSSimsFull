@@ -45,7 +45,7 @@ from pipeline_config import (
     INPUT_BIP_FILES, INPUT_HISTORICAL,
     SHRINK_K, SHRINK_K_PITCHER,
     RATE_MIN_PA_TRAIN, RATE_MIN_PA_ACTIVE, RATE_ACTIVE_LOOKBACK,
-    BIP_OUTCOMES,
+    BIP_OUTCOMES, IMP_TARGET_N_BATTER, IMP_TARGET_N_PITCHER,
 )
 from data_acquisition import (
     fetch_rate_data, fetch_sprint_speeds, fetch_statcast_season,
@@ -463,11 +463,13 @@ def step7_combine(hit_rates: pd.DataFrame, pit_rates: pd.DataFrame,
     print("STEP 7: Combine rate + BIP projections into PA-level distributions")
     print("═" * 70)
     print("\n  Hitters:")
-    h_final = build_pa_projections(hitters_bip, hit_rates, "batter", "PlayerId")
+    h_final = build_pa_projections(hitters_bip, hit_rates, "batter", "PlayerId",
+                                  no_bip_n_eff=IMP_TARGET_N_BATTER)
     print(f"    {len(h_final)} hitter projections")
 
     print("\n  Pitchers:")
-    p_final = build_pa_projections(pitchers_bip, pit_rates, "pitcher", "PlayerId")
+    p_final = build_pa_projections(pitchers_bip, pit_rates, "pitcher", "PlayerId",
+                                  no_bip_n_eff=IMP_TARGET_N_PITCHER)
     print(f"    {len(p_final)} pitcher projections")
     return h_final, p_final
 
