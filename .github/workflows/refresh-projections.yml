@@ -161,14 +161,7 @@ jobs:
           # broken merge before we spend the time. The blend-weight and
           # team-context tests here guard the exact bugs this refresh exists to
           # eliminate, so a red suite means the rebuild would bake them back in.
-          #
-          # One test is deselected: test_saves_cannot_exceed_what_the_innings_
-          # allow already fails on main (a closer's save share does not drop
-          # when his innings do), independent of any refresh. It is left out so
-          # a known, unrelated failure does not block every rebuild — remove
-          # the --deselect once it is fixed.
-          python -m pytest tests/ -q \
-            --deselect tests/test_playing_time_model.py::test_saves_cannot_exceed_what_the_innings_allow
+          python -m pytest tests/ -q
 
       - name: Pull the live RotoWire feeds (roles + team context)
         if: inputs.fetch_feeds

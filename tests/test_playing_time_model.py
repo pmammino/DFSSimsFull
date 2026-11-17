@@ -68,6 +68,9 @@ def _pitchers(n_per_team=18, teams=(NYY, LAD)):
     return pd.DataFrame(rows)
 
 
+LIVE_VOLUME_FORM = M.PITCHER_VOLUME_DECOMPOSED
+
+
 def _run(df, kind, **kw):
     return M.project_playing_time(df, kind, target_year=2027, **kw)
 
@@ -813,13 +816,14 @@ def test_saves_cannot_exceed_what_the_innings_allow():
     appearance; the share must follow the innings actually thrown."""
     df = _staff()
     out, _, _ = _run(df, "pitcher")
-    closer = out[out.pt_role == "Closer"].iloc[0]
-    full_share = float(closer["Proj_SV_share"])
-
-    # Same club, but the closer is barely available. A pitcher's innings are
-    # APPEARANCES times innings per appearance now, so the lever is how often
-    # he is handed the ball — a season total no longer drives it, which is
-    # the whole of the decomposition.
+    # Same club, but the closer is barely available. A real missed season
+    # leaves a trace in BOTH of a pitcher's records: he is handed the ball
+    # less often (the appearance history, which the decomposed volume form
+    # reads) and so he faces far fewer batters (`evidence_volume`, which the
+    # product form reads). Setting only the first described an injury the live
+    # form could not see — the closer's innings, and so his saves, came out
+    # unchanged — so the fixture sets both and runs under both forms, since
+    # which one is live is a fitted choice that has changed once already.
     fielding = pd.DataFrame([
         {"Season": y, "PlayerId": int(pid), "Pos": "P",
          "G": (6 if name == "rp0" else 60), "GS": 0,
@@ -827,11 +831,23 @@ def test_saves_cannot_exceed_what_the_innings_allow():
         for y in (2024, 2025, 2026)
         for pid, name in zip(df["PlayerId"], df["Name"])
         if str(name).startswith("rp")])
-    out2, _, _ = _run(df, "pitcher", fielding=fielding)
-    c2 = out2[out2.pt_role == "Closer"]
-    if len(c2):
-        assert float(c2.iloc[0]["Proj_SV_share"]) < full_share, (
-            "a closer who throws fewer innings must take fewer saves")
+    hurt = df.copy()
+    hurt.loc[hurt["Name"] == "rp0", "evidence_volume"] *= 6.0 / 60.0
+
+    for flag in (True, False):
+        M.PITCHER_VOLUME_DECOMPOSED = flag
+        try:
+            healthy, _, _ = _run(df, "pitcher")
+            out2, _, _ = _run(hurt, "pitcher", fielding=fielding)
+        finally:
+            M.PITCHER_VOLUME_DECOMPOSED = LIVE_VOLUME_FORM
+        full = float(healthy[healthy.pt_role == "Closer"].iloc[0]
+                     ["Proj_SV_share"])
+        c2 = out2[out2.pt_role == "Closer"]
+        if len(c2):
+            assert float(c2.iloc[0]["Proj_SV_share"]) < full, (
+                f"a closer who throws fewer innings must take fewer saves "
+                f"(decomposed={flag})")
     for o in (out, out2):
         per = o.groupby("Pred_target_team_id")["Proj_SV_share"].sum()
         assert np.allclose(per.to_numpy(), 1.0)
