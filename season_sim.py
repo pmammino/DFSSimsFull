@@ -71,6 +71,7 @@ RUN_LINK = 0.5             # elasticity of R/RBI to simulated production
 RUN_CV = 0.15              # teammates / context noise on R and RBI
 SEQ_CV = 0.12              # sequencing noise on a pitcher's earned runs
 OPP_CV = 0.25              # save / hold opportunity noise
+DEC_LUCK = 0.5             # elasticity of wins/losses/QS to a season's earned-run luck
 # Linear-weight runs of an event over the out it replaces (outs, including
 # strikeouts, are the zero point; TBF is fixed so a hit displaces an out).
 LW = {"1B": 0.74, "2B": 1.04, "3B": 1.31, "HR": 1.67, "BB": 0.58, "HBP": 0.60}
@@ -92,6 +93,7 @@ PITCHER_STATS = {
     "SO": True,
     "ER": False, "R": False,
     "SV": True, "HLD": True,
+    "W": True, "L": False, "QS": True,
     "ERA": False, "WHIP": False,
     "K9": True, "BB9": False, "HR9": False,
 }
@@ -299,7 +301,8 @@ _P_EVENTS = ["K", "BB", "HBP", "HR", "3B", "2B", "1B", "SF", "BIPOut"]
 
 
 def _sim_pitcher_block(rng, d: pd.DataFrame, sv_mean: np.ndarray,
-                       hld_mean: np.ndarray, n: int) -> dict[str, np.ndarray]:
+                       hld_mean: np.ndarray, n: int,
+                       dec_mean: dict | None = None) -> dict[str, np.ndarray]:
     k = len(d)
     proj_ip, proj_g, proj_gs = (_col(d, "Proj_IP"), _col(d, "Proj_G"),
                                 _col(d, "Proj_GS"))
@@ -359,6 +362,27 @@ def _sim_pitcher_block(rng, d: pd.DataFrame, sv_mean: np.ndarray,
     out["SV"] = np.minimum(out["SV"], cap_g)
     out["HLD"] = np.minimum(out["HLD"], np.maximum(cap_g - out["SV"], 0.0))
 
+    # Decisions: the club-pool allocation is the mean, moved by how much he
+    # pitched (volume) and how well (earned runs against what his innings
+    # would have produced). Wins and losses are Poisson around that, capped by
+    # starts (starters) or appearances (relievers); a quality start is a
+    # binomial over the simulated starts.
+    dm = dec_mean or {}
+    er0 = np.maximum(lam0, 1e-6)
+    luck = np.clip(er / er0, 0.2, 3.0)
+    vol_ratio = ip / np.maximum(proj_ip[:, None], 1e-6)
+    cap = np.where(is_sp[:, None], np.floor(np.maximum(gs, 0)), np.floor(g))
+    for stat, sign in (("W", -1.0), ("L", 1.0)):
+        mean = np.nan_to_num(dm.get(stat, np.zeros(k)))
+        lam_d = (mean[:, None] * vol_ratio * np.exp(sign * DEC_LUCK * (luck - 1.0)))
+        out[stat] = np.minimum(rng.poisson(np.clip(lam_d, 0, None)), cap) \
+            .astype(float)
+    qs_mean = np.nan_to_num(dm.get("QS", np.zeros(k)))
+    q = np.where(proj_gs > 0, qs_mean / np.maximum(proj_gs, 1e-6), 0.0)
+    q = np.clip(q[:, None] * np.exp(-DEC_LUCK * (luck - 1.0)), 0.0, 1.0)
+    out["QS"] = rng.binomial(np.maximum(np.floor(gs), 0).astype(int), q) \
+        .astype(float)
+
     with np.errstate(divide="ignore", invalid="ignore"):
         ipn = np.where(ip > 0, ip, np.nan)
         out["ERA"] = 9.0 * er / ipn
@@ -381,9 +405,11 @@ def simulate_pitchers(raw: pd.DataFrame, n_sims: int = N_SIMS_DEFAULT,
     mask = _projected_mask(raw)
     idx = np.flatnonzero(mask)
     sv_map = hld_map = None
+    dec_maps: dict = {}
     if sv_hld is not None and len(sv_hld):
         s = sv_hld.drop_duplicates("PlayerId").set_index("PlayerId")
         sv_map, hld_map = s["SV"], s["HLD"]
+        dec_maps = {c: s[c] for c in ("W", "L", "QS") if c in s.columns}
     ss = np.random.SeedSequence(seed).spawn(max(1, -(-len(idx) // CHUNK)))
     parts = []
     for b, lo in enumerate(range(0, len(idx), CHUNK)):
@@ -393,8 +419,10 @@ def simulate_pitchers(raw: pd.DataFrame, n_sims: int = N_SIMS_DEFAULT,
               else np.zeros(len(d)))
         hl = (ids.map(hld_map).to_numpy(dtype=float) if hld_map is not None
               else np.zeros(len(d)))
+        dec = {c: ids.map(m).to_numpy(dtype=float)
+               for c, m in dec_maps.items()}
         sims = _sim_pitcher_block(np.random.default_rng(ss[b]), d, sv, hl,
-                                  n_sims)
+                                  n_sims, dec)
         parts.append(_frame(ids.to_numpy(),
                             {s: _summ(sims[s], hib)
                              for s, hib in PITCHER_STATS.items()}))
