@@ -195,8 +195,27 @@ def build_pitchers(p: pd.DataFrame, pools: pd.DataFrame) -> pd.DataFrame:
         if impossible:
             print(f"  WARNING: {impossible} pitchers still show more saves + "
                   "holds than appearances")
+    # Wins, losses and quality starts. W and L are the club's record handed out
+    # to its staff (see team_wins.project_decisions), so they close on it.
+    out["W"] = np.nan
+    out["L"] = np.nan
+    out["QS"] = np.nan
+    if pool is not None and "team_id" in p.columns:
+        from team_wins import project_decisions
+        dec = project_decisions(
+            pd.DataFrame({"team_id": p["team_id"].to_numpy(),
+                          "Proj_IP": ip_x.to_numpy(),
+                          "Proj_G": _num(p, "Proj_G").to_numpy(),
+                          "Proj_GS": _num(p, "Proj_GS").to_numpy(),
+                          "ERA": out["r_ERA"].to_numpy(),
+                          "RA9": out["r_RA9"].to_numpy()}, index=out.index),
+            pools,
+            eligible=(out["Tier"].astype(str) != "floor").to_numpy())
+        out["W"], out["L"], out["QS"] = (dec["W"].round(1), dec["L"].round(1),
+                                         dec["QS"].round(1))
     order = ["PlayerId", "Name", "Team", "Age", "Tier", "Role", "RoleSource",
-             "SP_RP", "Origin", "IP", "G", "GS", "TBF", "H", "1B", "2B", "3B",
+             "SP_RP", "Origin", "IP", "G", "GS", "W", "L", "QS", "TBF", "H",
+             "1B", "2B", "3B",
              "HR", "BB", "HBP", "SO", "ER", "R", "SV", "HLD", "ERA", "WHIP",
              "K9", "BB9", "HR9", "TBF_per_IP"] + list(PITCHER_RATES) \
         + ["r_ERA", "r_RA9"]
@@ -228,7 +247,7 @@ def add_brackets(hitters, pitchers, h_raw, p_raw, n_sims, seed):
     print(f"  simulating {n_sims:,} seasons per player ...")
     sim_h = SS.simulate_hitters(h_raw, n_sims, seed)
     sim_p = SS.simulate_pitchers(p_raw, n_sims, seed + 1,
-                                 sv_hld=pitchers[["PlayerId", "SV", "HLD"]])
+                                 sv_hld=pitchers[["PlayerId", "SV", "HLD", "W", "L", "QS"]])
     hitters, rep_h = SS.bracket(hitters, sim_h, SS.HITTER_STATS)
     pitchers, rep_p = SS.bracket(pitchers, sim_p, SS.PITCHER_STATS)
     print(SS.reconcile(hitters, sim_h, ("PA", "H", "HR", "R", "RBI", "SB")))
@@ -332,6 +351,12 @@ def _read_me(ws, meta: dict):
         ("    pitchers   TBF = IP x TBF_per_IP     SO = r_SO x TBF", None),
         ("               ER = r_ERA x IP / 9       WHIP = (H + BB) / IP", None),
         ("               SV = club save pool x that player's share", None),
+        ("               W, L = the club's record handed out to its staff,", None),
+        ("               weighted by starts (or innings) and run prevention;", None),
+        ("               a club's pitchers sum to its wins and losses.", None),
+        ("               The starter/reliever split and the quality-start", None),
+        ("               curve are ASSUMPTIONS (team_wins.py), not fits.", None),
+        ("               QS = starts x P(six innings and <= 3 ER)", None),
         ("", None),
         ("  The r_* columns are the per-PA (or per-TBF) rates. They are the", None),
         ("  model's actual output; the counting stats are arithmetic on top.", None),

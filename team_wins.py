@@ -363,3 +363,133 @@ def wins_report(wins: pd.DataFrame, *, top: int = 10) -> str:
                      f"   holds {wins['hold_opportunities'].sum():.0f}"
                      f"   (levels are PROVISIONAL — see fit_opportunity_rates)")
     return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pitcher decisions — wins, losses, quality starts
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Wins and losses are a TEAM quantity handed out to pitchers, so they are
+# allocated the way saves and holds are: each club's expected wins (and the
+# losses that are the rest of its 162) are a pool, split across its staff by
+# weight, and capped by what a pitcher could physically record. The pools close
+# exactly, so a club's pitchers always sum to the club's record.
+#
+# ASSUMPTIONS, NOT FITS. The repo has no historical decisions to fit against
+# (the pipeline's history carries rates, not W/L), so the three constants below
+# are set from the shape of a modern season and are the first thing to refit
+# when decisions are added to the history:
+#
+#   SP_WIN_SHARE / SP_LOSS_SHARE   starters take roughly two thirds of a club's
+#                                  wins and a little over half of its losses —
+#                                  relievers lose more than they win, because
+#                                  a blown lead is a loss and a win needs one
+#                                  to hold.
+#   QS_IP_MIDPOINT / QS_IP_SCALE   a start reaches six innings half the time at
+#                                  5.3 innings a start.
+#
+# WHO GETS THEM, within the pool, is not assumed: a starter's weight is his
+# starts, times how often a team with his run prevention wins (Pythagorean, his
+# runs allowed against his club's run scoring), times how likely he is to go
+# long enough to be the pitcher of record. A reliever's is his innings times the
+# same win rate, since he pitches the games in proportion to his innings.
+SP_WIN_SHARE = 0.65
+SP_LOSS_SHARE = 0.55
+PYTH_EXPONENT = 1.83
+QS_IP_MIDPOINT = 5.3
+QS_IP_SCALE = 0.9
+QS_RUN_LEVEL = 0.8        # runs allowed in a start that went six are lower than a start's average
+
+
+def _pythag(rs: np.ndarray, ra: np.ndarray) -> np.ndarray:
+    rs = np.clip(rs, 0.5, None) ** PYTH_EXPONENT
+    ra = np.clip(ra, 0.5, None) ** PYTH_EXPONENT
+    return rs / (rs + ra)
+
+
+def quality_start_rate(ip_per_start, era) -> np.ndarray:
+    """P(a start is a quality start): six innings AND no more than three
+    earned runs. Reaching six is logistic in innings per start; the runs are a
+    Poisson with the pitcher's own ERA over those six, a little lower than
+    average because a start that goes six is a start that went well."""
+    ips = np.asarray(ip_per_start, dtype=float)
+    era = np.asarray(era, dtype=float)
+    p6 = 1.0 / (1.0 + np.exp(-(ips - QS_IP_MIDPOINT) / QS_IP_SCALE))
+    lam = np.clip(era, 0.5, None) / 9.0 * 6.3 * QS_RUN_LEVEL
+    cdf3 = np.exp(-lam) * (1 + lam + lam ** 2 / 2 + lam ** 3 / 6)
+    return np.clip(p6 * cdf3, 0.0, 1.0)
+
+
+def project_decisions(pitchers: pd.DataFrame, pools: pd.DataFrame, *,
+                      team_col: str = "team_id",
+                      eligible: np.ndarray | None = None) -> pd.DataFrame:
+    """W, L and QS per pitcher, indexed like `pitchers`.
+
+    `pitchers` needs [team_col, Proj_IP, Proj_G, Proj_GS, ERA, RA9]; `pools`
+    is `project_team_wins` output (team_id, expected_wins, rs_per_game,
+    ra_per_game). A pitcher with no club, or whose club has no pool, is NaN.
+    """
+    from playing_time_model import allocate_opportunity
+
+    def num(col):
+        return pd.to_numeric(pitchers[col], errors="coerce").fillna(0.0) \
+            .to_numpy(float) if col in pitchers.columns \
+            else np.zeros(len(pitchers))
+
+    out = pd.DataFrame(np.nan, index=pitchers.index, columns=["W", "L", "QS"])
+    if pools is None or len(pools) == 0 or team_col not in pitchers.columns:
+        return out
+    pool = pools.set_index("team_id")
+    ip, g, gs, era, ra9 = (num("Proj_IP"), num("Proj_G"), num("Proj_GS"),
+                           num("ERA"), num("RA9"))
+    ra9 = np.where(ra9 > 0, ra9, np.where(era > 0, era * 1.08, 4.4))
+    # Floor-tier pitchers carry a 1-inning placeholder, not a role. Letting them
+    # draw decisions would hand each of ~125 per club a few hundredths of a win
+    # that displays as 0.0 and quietly takes ~4% of the pool with it.
+    can = (np.ones(len(pitchers), dtype=bool) if eligible is None
+           else np.asarray(eligible, dtype=bool))
+    is_sp = gs >= 0.5 * np.maximum(g, 1.0)
+    ips = np.where(gs > 0, ip / np.maximum(gs, 1e-9), 0.0)
+
+    w, l = np.zeros(len(out)), np.zeros(len(out))
+    teams = pitchers[team_col].to_numpy()
+    for tid in pd.unique(teams[~pd.isna(teams)]):
+        if tid not in pool.index:
+            continue
+        pos = np.flatnonzero(teams == tid)
+        rs = float(pool.loc[tid, "rs_per_game"])
+        ra_team = float(pool.loc[tid, "ra_per_game"])
+        wins = float(pool.loc[tid, "expected_wins"])
+        losses = 162.0 - wins
+        # Share of a game he is on the mound: a starter's innings per start,
+        # a reliever's a sliver. The rest of the game is the club's average.
+        frac = np.where(is_sp[pos], np.clip(ips[pos] / 9.0, 0.10, 0.85), 0.10)
+        pw = _pythag(np.full(len(pos), rs), frac * ra9[pos] + (1 - frac) * ra_team)
+        go_long = np.clip(ips / 5.2, 0.5, 1.25)[pos]
+        # A win goes to the pitcher who goes long on a winning day; a loss is
+        # about how often his club loses behind him, so it follows the LOSS
+        # ODDS (a .45 club behind him loses at 1.2:1, a .62 club at 0.6:1) and
+        # is only softly reduced by going short — a starter pulled early while
+        # trailing is still the pitcher of record.
+        for decide, long_pow, pool_total, share, dest in (
+                (pw, 1.0, wins, SP_WIN_SHARE, w),
+                ((1.0 - pw) / np.clip(pw, 1e-6, None), 0.5, losses,
+                 SP_LOSS_SHARE, l)):
+            sp = is_sp[pos]
+            for mask, part, cap in ((sp, share, gs[pos]),
+                                    (~sp, 1.0 - share, g[pos])):
+                if not mask.any():
+                    continue
+                wt = np.where(mask & can[pos],
+                              np.where(sp, gs[pos] * decide * go_long ** long_pow,
+                                       ip[pos] * decide), 0.0)
+                if wt.sum() <= 0:
+                    continue
+                dest[pos[mask]] = allocate_opportunity(
+                    wt[mask] / wt[mask].sum(), pool_total * part, cap[mask])
+    out["W"], out["L"] = w, l
+    qs = np.where(is_sp & can, gs * quality_start_rate(ips, era), 0.0)
+    out["QS"] = qs
+    has_club = pitchers[team_col].isin(pool.index).to_numpy()
+    out.loc[~has_club, ["W", "L", "QS"]] = np.nan
+    return out
