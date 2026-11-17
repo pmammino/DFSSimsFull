@@ -69,3 +69,38 @@ def test_quality_starts_rise_with_innings_and_fall_with_era():
 def test_relievers_have_no_quality_starts():
     r = TW.project_decisions(_staff(), _pools())
     assert (r["QS"].iloc[5:] == 0).all()
+
+
+def test_starts_made_by_relievers_do_not_inflate_the_rotation():
+    """A club's starts are not all made by its rotation. Splitting the starters'
+    pool over only the pitchers FILED as starters spread it over ~154 starts
+    instead of 162 and inflated every starter's rate (Skenes read 15.9)."""
+    s = _staff(n_sp=5, n_rp=8)
+    s.loc[:4, "Proj_GS"] = 28.0                       # 140 starts by the rotation
+    s.loc[5, ["Proj_GS", "Proj_G", "Proj_IP"]] = [22.0, 40.0, 110.0]  # swingman
+    s["Proj_IP"] = np.where(s["Proj_GS"] > 0, s["Proj_GS"] * 5.2, s["Proj_IP"])
+    s["ERA"], s["RA9"] = 4.2, 4.5                     # equal quality: isolate the split
+    r = TW.project_decisions(s, _pools(81.0))
+    per_start = r["W"].iloc[:5].sum() / 140.0
+    expected = TW.SP_WIN_SHARE * 81.0 / 162.0         # the pool, per club start
+    assert abs(per_start - expected) / expected < 0.12
+    assert abs(r["W"].sum() - 81.0) < 1e-6
+
+
+def test_a_pure_starter_takes_nothing_from_the_bullpen_pool():
+    s = _staff()
+    s["Proj_G"] = np.where(s["Proj_GS"] > 0, s["Proj_GS"], s["Proj_G"])
+    r = TW.project_decisions(s, _pools(90.0))
+    rp_total = r["W"].iloc[5:].sum()
+    assert abs(rp_total - (1 - TW.SP_WIN_SHARE) * 90.0) < 1e-6
+
+
+def test_regression_shrinks_the_spread_but_not_the_total(monkeypatch):
+    monkeypatch.setattr(TW, "DECISION_REGRESSION", 0.0)
+    raw = TW.project_decisions(_staff(), _pools(90.0))
+    monkeypatch.setattr(TW, "DECISION_REGRESSION", 0.5)
+    reg = TW.project_decisions(_staff(), _pools(90.0))
+    assert abs(reg["W"].sum() - raw["W"].sum()) < 1e-6
+    assert reg["W"].iloc[0] < raw["W"].iloc[0]              # the ace comes down
+    assert reg["W"].iloc[4] > raw["W"].iloc[4]              # the weak starter comes up
+    assert reg["W"].iloc[0] > reg["W"].iloc[4]              # but the order holds

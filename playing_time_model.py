@@ -226,7 +226,15 @@ PITCHER_BAND = (0.55, 1.05)
 # of 82, which is the right kind of close.
 PT_MAX_PA = 760.0
 PT_MAX_IP = 215.0
-PT_MAX_GS = 34.0
+# ...and then it came down again, on purpose, to 32. 34 is the largest number
+# of starts anybody has made, which is a bound on what is POSSIBLE, not on what
+# a MEDIAN projection should say: it assumes an ace makes every turn of the
+# rotation, and 24 pitchers sat on it at once, all at an identical 34. Starts
+# drive wins, losses and quality starts, so the pile-up at the ceiling
+# overstated the top of every one of those. 32 is a rotation that turns over
+# 32 times, which is what even a healthy ace's expectation looks like once the
+# odd skipped start is counted.
+PT_MAX_GS = 32.0
 PT_MAX_G = 82.0
 
 # Closure is an iterative proportional fit: scale, clip anyone over the
