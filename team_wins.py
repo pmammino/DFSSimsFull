@@ -395,6 +395,13 @@ def wins_report(wins: pd.DataFrame, *, top: int = 10) -> str:
 # same win rate, since he pitches the games in proportion to his innings.
 SP_WIN_SHARE = 0.65
 SP_LOSS_SHARE = 0.55
+# A decision is a noisy outcome of a game result, so its projection is regressed:
+# each pitcher's weight is pulled this fraction of the way to his club's
+# average, which shrinks the spread between aces and the rest WITHOUT moving
+# the club's total (the pools are fixed). Applied to wins and losses alike so
+# a pitcher's record stays coherent. 0.0 = the Pythagorean spread as it falls
+# out; 1.0 = every starter on a club identical. An assumption, like the shares.
+DECISION_REGRESSION = 0.25
 PYTH_EXPONENT = 1.83
 QS_IP_MIDPOINT = 5.3
 QS_IP_SCALE = 0.9
@@ -490,12 +497,21 @@ def project_decisions(pitchers: pd.DataFrame, pools: pd.DataFrame, *,
             # LOSS ODDS (a .45 club behind him loses at 1.2:1, a .62 club at
             # 0.6:1) and is only softly reduced by going short — a starter
             # pulled early while trailing is still the pitcher of record.
-            for wt, part, cap in (
-                    (starts * decide * go_long ** long_pow, share, starts),
-                    (relief_ip * decide, 1.0 - share, relief_cap)):
+            for wt, units, part, cap in (
+                    (starts * decide * go_long ** long_pow, starts, share,
+                     starts),
+                    (relief_ip * decide, relief_ip, 1.0 - share, relief_cap)):
                 wt = np.where(can[pos], wt, 0.0)
-                if wt.sum() <= 0:
+                units = np.where(can[pos], units, 0.0)
+                if wt.sum() <= 0 or units.sum() <= 0:
                     continue
+                # Regress the per-unit RATE (not the total) toward the club's
+                # mean, so a pitcher with more starts still gets more of them.
+                rate = np.divide(wt, units, out=np.zeros_like(wt),
+                                 where=units > 0)
+                mean = wt.sum() / units.sum()
+                wt = units * ((1 - DECISION_REGRESSION) * rate
+                              + DECISION_REGRESSION * mean)
                 dest[pos] += allocate_opportunity(wt / wt.sum(),
                                                   pool_total * part, cap)
     out["W"], out["L"] = w, l

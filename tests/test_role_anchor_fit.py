@@ -192,8 +192,10 @@ def test_nobody_starts_more_games_than_a_rotation_turn_allows():
     f = pd.read_csv(FIELDING, low_memory=False)
     p = f[(f["Pos"] == "P") & (f["Season"] >= 2024)]
     real_max = p.groupby(["Season", "PlayerId"])["GS"].sum().max()
-    assert M.PT_MAX_GS == pytest.approx(34.0)
-    assert M.PT_MAX_GS >= real_max
+    # A projection ceiling, deliberately BELOW the real maximum: 34 is what is
+    # possible, not what a median should assume for an ace (see PT_MAX_GS).
+    assert M.PT_MAX_GS == pytest.approx(32.0)
+    assert M.PT_MAX_GS <= real_max
 
     from fit_role_anchors import _projected
     from team_context import TEAM_OVERRIDE_PATH, load_roster_reserves

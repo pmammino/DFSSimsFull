@@ -93,3 +93,14 @@ def test_a_pure_starter_takes_nothing_from_the_bullpen_pool():
     r = TW.project_decisions(s, _pools(90.0))
     rp_total = r["W"].iloc[5:].sum()
     assert abs(rp_total - (1 - TW.SP_WIN_SHARE) * 90.0) < 1e-6
+
+
+def test_regression_shrinks_the_spread_but_not_the_total(monkeypatch):
+    monkeypatch.setattr(TW, "DECISION_REGRESSION", 0.0)
+    raw = TW.project_decisions(_staff(), _pools(90.0))
+    monkeypatch.setattr(TW, "DECISION_REGRESSION", 0.5)
+    reg = TW.project_decisions(_staff(), _pools(90.0))
+    assert abs(reg["W"].sum() - raw["W"].sum()) < 1e-6
+    assert reg["W"].iloc[0] < raw["W"].iloc[0]              # the ace comes down
+    assert reg["W"].iloc[4] > raw["W"].iloc[4]              # the weak starter comes up
+    assert reg["W"].iloc[0] > reg["W"].iloc[4]              # but the order holds
