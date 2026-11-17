@@ -824,30 +824,37 @@ def test_saves_cannot_exceed_what_the_innings_allow():
     # form could not see — the closer's innings, and so his saves, came out
     # unchanged — so the fixture sets both and runs under both forms, since
     # which one is live is a fitted choice that has changed once already.
-    fielding = pd.DataFrame([
-        {"Season": y, "PlayerId": int(pid), "Pos": "P",
-         "G": (6 if name == "rp0" else 60), "GS": 0,
-         "Innings": (6.0 if name == "rp0" else 60.0)}
-        for y in (2024, 2025, 2026)
-        for pid, name in zip(df["PlayerId"], df["Name"])
-        if str(name).startswith("rp")])
+    def _history(closer_games, closer_innings):
+        return pd.DataFrame([
+            {"Season": y, "PlayerId": int(pid), "Pos": "P",
+             "G": (closer_games if name == "rp0" else 60), "GS": 0,
+             "Innings": (closer_innings if name == "rp0" else 60.0)}
+            for y in (2024, 2025, 2026)
+            for pid, name in zip(df["PlayerId"], df["Name"])
+            if str(name).startswith("rp")])
+
+    # Both arms get a record; only the closer's differs, so the comparison is
+    # between him healthy and him hurt rather than between a staff with and
+    # without appearance history.
+    well, ill = _history(60, 60.0), _history(6, 6.0)
     hurt = df.copy()
     hurt.loc[hurt["Name"] == "rp0", "evidence_volume"] *= 6.0 / 60.0
 
     for flag in (True, False):
         M.PITCHER_VOLUME_DECOMPOSED = flag
         try:
-            healthy, _, _ = _run(df, "pitcher")
-            out2, _, _ = _run(hurt, "pitcher", fielding=fielding)
+            healthy, _, _ = _run(df, "pitcher", fielding=well)
+            out2, _, _ = _run(hurt, "pitcher", fielding=ill)
         finally:
             M.PITCHER_VOLUME_DECOMPOSED = LIVE_VOLUME_FORM
-        full = float(healthy[healthy.pt_role == "Closer"].iloc[0]
-                     ["Proj_SV_share"])
-        c2 = out2[out2.pt_role == "Closer"]
-        if len(c2):
-            assert float(c2.iloc[0]["Proj_SV_share"]) < full, (
-                f"a closer who throws fewer innings must take fewer saves "
-                f"(decomposed={flag})")
+        # HIM, not whoever holds the job afterwards: a closer who has lost
+        # his innings may lose the role outright (the setup man then takes
+        # the saves), and that is the right answer, not a bigger share for him.
+        full = float(healthy[healthy.Name == "rp0"].iloc[0]["Proj_SV_share"])
+        now = float(out2[out2.Name == "rp0"].iloc[0]["Proj_SV_share"])
+        assert now < full, (
+            f"a closer who throws fewer innings must take fewer saves "
+            f"(decomposed={flag})")
     for o in (out, out2):
         per = o.groupby("Pred_target_team_id")["Proj_SV_share"].sum()
         assert np.allclose(per.to_numpy(), 1.0)
