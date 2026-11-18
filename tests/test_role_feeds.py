@@ -788,7 +788,9 @@ def test_an_arrival_competes_for_his_playing_time_like_everyone_else():
         fielding=pd.read_csv(ROOT / "out" / "fielding_history_2027.csv",
                              low_memory=False),
         feed_dir=FEEDS)
-    up = out[out["pt_role_source"].astype(str) == "feed:prospect"]
+    # prefix, not equality: a prospect FanGraphs also has an opinion on is
+    # "feed:prospect+fg", and is still an arrival the table made.
+    up = out[out["pt_role_source"].astype(str).str.startswith("feed:prospect")]
     assert up["pt_depth_rank"].notna().all()
 
     # And the pool stays near the real one: a club carries about 23 position
@@ -817,7 +819,9 @@ def test_the_real_feed_sends_up_about_as_many_as_really_come_up():
         fielding=pd.read_csv(ROOT / "out" / "fielding_history_2027.csv",
                              low_memory=False),
         feed_dir=FEEDS)
-    up = out[out["pt_role_source"].astype(str) == "feed:prospect"]
+    # prefix, not equality: a prospect FanGraphs also has an opinion on is
+    # "feed:prospect+fg", and is still an arrival the table made.
+    up = out[out["pt_role_source"].astype(str).str.startswith("feed:prospect")]
     assert 25 <= len(up) <= 70, len(up)
 
     # Below the real debut median of 92: the table roles 42 of the 114 who
@@ -1088,7 +1092,9 @@ def test_the_real_feed_calls_up_about_as_many_arms_as_really_start():
         fielding=pd.read_csv(ROOT / "out" / "fielding_history_2027.csv",
                              low_memory=False),
         feed_dir=FEEDS)
-    up = out[out["pt_role_source"].astype(str) == "feed:prospect"]
+    # prefix, not equality: a prospect FanGraphs also has an opinion on is
+    # "feed:prospect+fg", and is still an arrival the table made.
+    up = out[out["pt_role_source"].astype(str).str.startswith("feed:prospect")]
     assert 10 <= len(up) <= 40, len(up)
 
     ip = up["Proj_IP"]

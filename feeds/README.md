@@ -10,7 +10,32 @@ Four XML files that decide what a player's job is. `role_feeds.py` reads them;
 | `closers.xml` | bullpen pecking order 1..12, RotoWire's role label, and a Stability rating on each club's top arm | all 30 clubs |
 | `prospects.xml` | the top 400 with a league level; the only feed carrying an MLBAM id, and that for 261 of them | — |
 
-## Refreshing them
+## FanGraphs projected usage (a fifth opinion)
+
+`fg_hitters.csv` and `fg_pitchers.csv` are FanGraphs projection exports, saved by
+hand (FanGraphs → Projections → the leaderboard CSV button). Only these columns
+are read, and they join on **MLBAM id** (`MLBAMID`), so there is no name matching:
+
+| file | columns used |
+|---|---|
+| `fg_hitters.csv` | `MLBAMID`, `PA`, `G` (name/team kept for readability) |
+| `fg_pitchers.csv` | `MLBAMID`, `IP`, `GS`, `G`, `SV`, `HLD` |
+
+`role_feeds.py` turns a projected PA / IP into the role whose anchor it most
+resembles and blends that role into the player's mixture at `FG_WEIGHT` (0.35 for hitters,
+0.20 for pitchers).
+Where the feeds already agree nothing moves; where they disagree the mixture
+**widens**, so the result lands between the two rather than on either. It is the
+only evidence for a player no other feed covers. Set the weights to 0 to switch it
+off, or delete the files. It is *not* copied into a column and the projected
+playing time is not matched: the team closure and depth decay still decide the
+final PA / IP.
+
+The committed copy is a trimmed export from 2026-11-17. FanGraphs projections are
+the user's own export — keep the repository private or remove these files if that
+is a concern.
+
+## Refreshing the RotoWire feeds
 
 Run `python scripts/fetch_role_feeds.py` (also Stage 0 of `refresh_and_run.py`;
 skip with `--skip-feeds`). It reads the URLs from environment variables so the
