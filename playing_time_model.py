@@ -546,7 +546,66 @@ EVERYDAY_ANCHOR_MIN = 450.0
 EVIDENCE_FACTOR_MAX = 1.22
 
 
-def _evidence_factor(players: pd.DataFrame, kind: str) -> pd.Series:
+# A PITCHER RETURNING FROM INJURY IS NOT A WORSE PITCHER. The evidence factor
+# reads his best season inside the tier's two-year window, and the tier itself
+# demands 25 batters faced inside it — so a starter who missed 2025 and most of
+# 2026 reads as a part-timer at best (Justin Steele: 92 batters faced against a
+# 172-inning anchor, clipped to the 0.55 minimum, then ranked 7th on his
+# club's staff on that discounted number and decayed a further 30%: 55 innings,
+# where FanGraphs has 170) and as a non-major-leaguer at worst (Joe Musgrove:
+# no innings in the window, so the 1-inning floor, against FanGraphs' 156).
+# That is the same mistake `_evidence_factor` already refuses to make for
+# hitters — spending an absence as lost talent when it is a health fact — and
+# pitchers had no equivalent because pitcher durability is switched off.
+#
+# Two things follow, and they are separate:
+#
+#   * RETURNING STARTERS LEAVE THE FLOOR. A pitcher with a real record (60+
+#     innings in a season inside the record) whose role is a real job is a major
+#     leaguer coming back, and with no recent batters faced his evidence is read
+#     as UNKNOWN — the role at face value — exactly as a player with no evidence
+#     already is. Musgrove goes from the 1-inning placeholder to 141.
+#
+#   * A PARTIAL CREDIT for the ones who did pitch a little (Steele's 92 batters
+#     faced): RETURN_CREDIT of the best season replaces the clipped 0.55. It
+#     works — Steele 55 -> 115, Burnes 58 -> 137, Snell 74 -> 131 — and it is OFF
+#     (0.0), because the innings come out of a fixed club budget: the median
+#     ace falls from 179 to 166 against a real 181, and the test that guards the
+#     top of the staff fails. Measured on the 2027 refresh:
+#
+#       credit   median ace   180+ IP   MAE vs FG   Musgrove  Steele  Burnes
+#       off        177.9         18        24.4        141       55      58
+#       0.55       173.7         17        24.5         84       55      67
+#       0.70       169.3         16        24.3        105       68      83
+#       0.85       166.4         15        24.1        124       81      99
+#
+#     Turning it on is a decision to trade the top of the staff for the
+#     returners, and the anchors should be refitted (scripts/fit_role_anchors.py)
+#     at the same time. The ranking is always judged WITHOUT the credit, so a
+#     returner never leapfrogs the men who held the rotation while he was out.
+PEAK_YEARS = 5
+RETURN_CREDIT = 0.0
+RETURN_MIN_IP = 60.0      # a "best season" below this is not a record to lean on
+
+
+def peak_innings(fielding: pd.DataFrame | None, target_year: int,
+                 years: int = PEAK_YEARS) -> pd.Series:
+    """{PlayerId -> most innings in any one of the last `years` seasons}."""
+    if fielding is None or len(fielding) == 0 or \
+            not {"Season", "PlayerId", "Pos", "Innings"} <= set(fielding.columns):
+        return pd.Series(dtype=float)
+    f = fielding[(fielding["Pos"] == "P")
+                 & (fielding["Season"] < target_year)
+                 & (fielding["Season"] >= target_year - years)]
+    if f.empty:
+        return pd.Series(dtype=float)
+    per_season = (f.assign(Innings=pd.to_numeric(f["Innings"], errors="coerce"))
+                  .groupby(["PlayerId", "Season"])["Innings"].sum())
+    return per_season.groupby(level=0).max()
+
+
+def _evidence_factor(players: pd.DataFrame, kind: str, *,
+                     credit_record: bool = True) -> pd.Series:
     """Within-role differentiation from the player's own volume history.
 
     Hitter evidence is already PA, directly comparable to a PA anchor. Pitcher
@@ -565,6 +624,15 @@ def _evidence_factor(players: pd.DataFrame, kind: str) -> pd.Series:
         # 4.3 is the league rate; used only where a player has no own value.
         tbf_per_ip = tbf_per_ip.where(tbf_per_ip > 1.0, 4.3)
         ev = ev / tbf_per_ip
+        if "pt_peak_ip" in players.columns:
+            peak = pd.to_numeric(players["pt_peak_ip"], errors="coerce")
+            peak = peak.where(peak >= RETURN_MIN_IP)
+            if credit_record and RETURN_CREDIT > 0:
+                ev = np.maximum(ev.fillna(0.0),
+                                (RETURN_CREDIT * peak).fillna(0.0))
+            # No recent innings but a real record is a man who has been hurt,
+            # not one who is known to throw nothing: unknown, so face value.
+            ev = ev.where(~((ev.fillna(0.0) <= 0) & peak.notna()))
     anchor = pd.to_numeric(players["pt_anchor"], errors="coerce")
 
     # NET OF THE GAMES HE MISSED, where we know how many. `evidence_volume`
@@ -787,7 +855,9 @@ def apply_roster_depth(players: pd.DataFrame, kind: str, *,
     # there anyway because it is a correction rather than a knob.
     timing = (sub["pt_role_start"].map(timing_share).astype(float)
               .fillna(1.0).clip(lower=0.05))
-    sub["_standing"] = sub["pt_raw"] / timing
+    standing = sub["pt_standing_raw"] if "pt_standing_raw" in sub.columns \
+        else sub["pt_raw"]
+    sub["_standing"] = standing / timing
     sub = sub.sort_values(["_order", "_standing"], ascending=[True, False])
     rank = (sub.groupby([sub[team_col], sub["pt_family"]]).cumcount() + 1
             ).reindex(out.loc[eligible].index)
@@ -933,6 +1003,16 @@ def raw_volumes(players: pd.DataFrame, kind: str,
     else:
         out["pt_raw"] = (out["pt_anchor"] * out["pt_season_share"]
                          * out["pt_evidence_factor"])
+        # WHERE a pitcher RANKS on his staff is judged on what he has actually
+        # done lately, not on the credit for his record: a starter coming back
+        # from surgery gets the volume of his job (above) but does not leapfrog
+        # the men who held the rotation while he was out, or the club's real
+        # first five would be displaced by whoever was hurt longest — the
+        # median ace fell from 179 innings to 166 against a real 181 when he
+        # did. The decay below still applies to him from the rank he earns.
+        out["pt_standing_raw"] = (
+            out["pt_anchor"] * out["pt_season_share"]
+            * _evidence_factor(out, kind, credit_record=False))
     out = apply_roster_depth(out, kind, team_col=team_col)
     return out
 
@@ -1369,6 +1449,24 @@ def project_playing_time(players: pd.DataFrame, kind: str, *,
                  if c in ov.columns]
     out, ov_stats = apply_role_overrides(
         out, ov[role_cols] if len(role_cols) > 1 else ov.iloc[0:0], kind=kind)
+    if kind == "pitcher":
+        peak = peak_innings(fielding, target_year)
+        out["pt_peak_ip"] = pd.to_numeric(out["PlayerId"], errors="coerce") \
+            .map(peak)
+    if kind == "pitcher" and "pt_tier" in out.columns \
+            and "pt_role" in out.columns:
+        # A pitcher with a real record whose job is a real job is a major
+        # leaguer coming back, whatever the last two seasons say. Only the
+        # floor tier, only a non-translated player, only a non-depth role.
+        mle = (out["mle_source"].astype(str).str.strip().isin(["MiLB"])
+               if "mle_source" in out.columns
+               else pd.Series(False, index=out.index))
+        real_job = ~out["pt_role"].astype(str).map(is_depth_role)
+        back = (out["pt_tier"].astype(str) == TIER_FLOOR) & ~mle & real_job \
+            & (out["pt_peak_ip"] >= RETURN_MIN_IP)
+        if back.any():
+            out.loc[back, "pt_tier"] = TIER_PROJECTED
+            stats["returning"] = int(back.sum())
     # Durability is measured against others holding the SAME job, so it has
     # to be recomputed once the feeds have settled what the job is. Buxton
     # judged as a 26th man looks more durable than average; judged as the
