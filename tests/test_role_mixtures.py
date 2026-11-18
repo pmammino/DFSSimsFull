@@ -68,13 +68,23 @@ def test_the_modal_role_is_the_heaviest():
     assert RT.modal_role(tie) == RT.modal_role(tie) == "Bench Bat"
 
 
+def _pa(role):
+    """A role's plate-appearance anchor, read from the taxonomy so a refit of the
+    anchors does not require editing the arithmetic below."""
+    return RT.role_anchor(role, "hitter")["pa"]
+
+
+def _ip(role):
+    return RT.role_anchor(role, "pitcher")["ip"]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Blending
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_volume_blends_as_an_expectation():
     a = RT.blend_anchors(RT.parse_role_mix(MIX, "hitter"), "hitter")
-    assert a["pa"] == pytest.approx(0.6 * 630 + 0.3 * 480 + 0.1 * 290)
+    assert a["pa"] == pytest.approx(0.6 * _pa("Full Time") + 0.3 * _pa("Strong Side Platoon") + 0.1 * _pa("Utility IF"))
 
 
 def test_save_shares_blend_as_an_expectation():
@@ -83,7 +93,7 @@ def test_save_shares_blend_as_an_expectation():
         RT.parse_role_mix("Closer:0.5|Late Inning RP (Setup):0.5", "pitcher"),
         "pitcher")
     assert a["sv"] == pytest.approx(0.5 * 0.80 + 0.5 * 0.06)
-    assert a["ip"] == pytest.approx(0.5 * 62 + 0.5 * 65)
+    assert a["ip"] == pytest.approx(0.5 * _ip("Closer") + 0.5 * _ip("Late Inning RP (Setup)"))
 
 
 def test_platoon_exposure_weights_by_plate_appearances_not_probability():
@@ -95,7 +105,8 @@ def test_platoon_exposure_weights_by_plate_appearances_not_probability():
     """
     m = RT.parse_role_mix("Full Time:0.5|Bench Bat:0.5", "hitter")
     a = RT.blend_anchors(m, "hitter")
-    expected = (0.5 * 630 * 0.29 + 0.5 * 150 * 0.36) / (0.5 * 630 + 0.5 * 150)
+    ft, bb = _pa("Full Time"), _pa("Bench Bat")
+    expected = (0.5 * ft * 0.29 + 0.5 * bb * 0.36) / (0.5 * ft + 0.5 * bb)
     assert a["vl_rhb"] == pytest.approx(expected)
     assert a["vl_rhb"] != pytest.approx(0.5 * 0.29 + 0.5 * 0.36)
 
@@ -152,7 +163,7 @@ def test_the_workbooks_own_column_shape_is_read(tmp_path):
         "Strong Side Platoon": 0.3, "Utility IF": 0.1}]))
     row = out[out["PlayerId"] == pid].iloc[0]
     assert stats["overrides"]["mix"] == 1
-    assert row["pt_anchor"] == pytest.approx(0.6 * 630 + 0.3 * 480 + 0.1 * 290)
+    assert row["pt_anchor"] == pytest.approx(0.6 * _pa("Full Time") + 0.3 * _pa("Strong Side Platoon") + 0.1 * _pa("Utility IF"))
     assert RT.parse_role_mix(row["pt_role_mix"], "hitter")["Full Time"] \
         == pytest.approx(0.6)
 
@@ -164,7 +175,7 @@ def test_a_ready_made_mix_string_is_read_too(tmp_path):
                                                "Role Mix": MIX}]))
     assert stats["overrides"]["mix"] == 1
     row = out[out["PlayerId"] == pid].iloc[0]
-    assert row["pt_anchor"] == pytest.approx(0.6 * 630 + 0.3 * 480 + 0.1 * 290)
+    assert row["pt_anchor"] == pytest.approx(0.6 * _pa("Full Time") + 0.3 * _pa("Strong Side Platoon") + 0.1 * _pa("Utility IF"))
 
 
 def test_the_modal_role_is_what_the_roster_sees(tmp_path):

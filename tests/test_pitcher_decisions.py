@@ -131,26 +131,25 @@ def _ev_frame():
                          "pt_peak_ip": [177.0, 177.0, 40.0, 181.0, 20.0]})
 
 
-def test_a_returner_with_no_recent_innings_is_taken_at_face_value():
+def test_a_returner_is_credited_from_his_record_not_clipped(monkeypatch):
     import playing_time_model as M
+    assert M.RETURN_CREDIT == 0.85             # on, with the refit anchors
     f = M._evidence_factor(_ev_frame(), "pitcher")
-    assert f.iloc[3] == 1.0                    # Musgrove: no innings, real record
-    assert f.iloc[4] == M.EVIDENCE_FACTOR_MIN  # no innings, no record: as before
-    assert f.iloc[2] == 1.0                    # no evidence at all
-    # a pitcher who DID throw a little is still read from what he threw
-    assert f.iloc[0] == M.EVIDENCE_FACTOR_MIN
-
-
-def test_the_partial_credit_exists_but_is_off(monkeypatch):
-    import playing_time_model as M
-    assert M.RETURN_CREDIT == 0.0              # off: it compresses the aces
-    monkeypatch.setattr(M, "RETURN_CREDIT", 0.85)
-    f = M._evidence_factor(_ev_frame(), "pitcher")
+    # Musgrove: no innings, a 181-inning season on the record
+    assert f.iloc[3] == pytest.approx(0.85 * 181.0 / 172.5, rel=1e-3)
+    # Steele: 92 batters faced, a 177-inning season: not clipped to the minimum
     assert f.iloc[0] == pytest.approx(0.85 * 177.0 / 172.5, rel=1e-3)
     assert f.iloc[0] > 0.8
-    # the RANKING is always judged without it
+    # no innings and no record: as before; no evidence at all: face value
+    assert f.iloc[4] == M.EVIDENCE_FACTOR_MIN
+    assert f.iloc[2] == 1.0
+    # the RANKING is always judged without the credit
     g = M._evidence_factor(_ev_frame(), "pitcher", credit_record=False)
     assert g.iloc[0] == M.EVIDENCE_FACTOR_MIN
+    # with the credit off, a returner with no recent innings is face value
+    monkeypatch.setattr(M, "RETURN_CREDIT", 0.0)
+    off = M._evidence_factor(_ev_frame(), "pitcher")
+    assert off.iloc[3] == 1.0 and off.iloc[0] == M.EVIDENCE_FACTOR_MIN
 
 
 def test_a_returning_starter_leaves_the_floor_but_a_prospect_does_not():
@@ -173,3 +172,28 @@ def test_a_returning_starter_leaves_the_floor_but_a_prospect_does_not():
     # that a translated prospect and a depth role are never promoted by record
     assert t["prospect"] == "floor"
     assert st.get("returning", 0) <= 1
+
+
+# ── a debut is not a diagnosis ──────────────────────────────────────────────
+
+def test_a_thin_major_league_career_is_not_read_as_a_part_timer():
+    import playing_time_model as M
+    p = pd.DataFrame({"evidence_volume": [40.0, 40.0, 40.0],
+                      "Career_PA": [60.0, 2500.0, np.nan],
+                      "pt_anchor": [222.0, 222.0, 222.0],
+                      "pt_play_rate": [np.nan] * 3, "pt_durability": [1.0] * 3})
+    f = M._evidence_factor(p, "hitter")
+    assert f.iloc[0] == M.ROOKIE_EVIDENCE_FLOOR            # a rookie's callup
+    assert f.iloc[1] == M.EVIDENCE_FACTOR_MIN              # a veteran who barely played
+    assert f.iloc[2] == M.EVIDENCE_FACTOR_MIN              # no career length: as before
+
+
+def test_a_saved_role_lifts_a_translated_prospect_off_the_floor():
+    import playing_time_model as M
+    p = pd.DataFrame({
+        "PlayerId": [1, 2, 3], "pt_tier": ["floor"] * 3,
+        "mle_source": ["MiLB", "MiLB", ""],
+        "pt_role": ["Bench Bat", "Depth (no MLB PA)", "Bench Bat"],
+        "pt_role_source": ["override", "override", "override"]})
+    a = M.arriving(p)
+    assert list(a) == [True, False, False]   # a real job, translated, saved

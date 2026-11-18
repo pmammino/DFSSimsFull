@@ -62,8 +62,12 @@ def test_the_two_sides_decay_at_different_rates():
     # Both move with ROSTER_DEPTH_FLOOR, which decides where the taper ends
     # while they decide how fast it gets there. Fitting either alone finds a
     # compromise that is wrong for both — see the note on the floor.
-    assert M.ROSTER_DEPTH_DECAY_PITCHER == pytest.approx(0.70)
-    assert M.ROSTER_DEPTH_DECAY_HITTER == pytest.approx(0.75)
+    # Refitted 2026-11-18 (bounded search, see role_taxonomy): hitters 0.75 ->
+    # 0.83 with BENCH core slots 4 -> 5, pitchers 0.70 -> 0.66 with the return
+    # credit on. The hitter move is large because the saved role file puts more
+    # real bench and platoon bats on a club than the feeds did.
+    assert M.ROSTER_DEPTH_DECAY_PITCHER == pytest.approx(0.66)
+    assert M.ROSTER_DEPTH_DECAY_HITTER == pytest.approx(0.83)
 
 
 def test_the_innings_ceiling_is_not_above_anything_that_has_happened():
@@ -134,8 +138,15 @@ def test_the_projected_staff_matches_the_real_one_at_the_top():
 
 
 @needs_data
-def test_the_hitter_curve_was_already_right_and_stays_right():
-    """The sweep moved it half a point with the top getting worse."""
+def test_the_hitter_curve_was_already_right_and_stays_right(saved_roles):
+    """The sweep moved it half a point with the top getting worse.
+
+    Run with the saved role files in play (the production configuration): the
+    2026-11-18 refit of the hitter decay and anchors is for that configuration,
+    where the top five ranks come out within 2% of real. Without the saved
+    roles the old decay fits better — the two configurations want different
+    decays, which is why this guard names the one that ships.
+    """
     from fit_role_anchors import _projected, real_rank_curve
     from team_context import TEAM_OVERRIDE_PATH, load_roster_reserves
 

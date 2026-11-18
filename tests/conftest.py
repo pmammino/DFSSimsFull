@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 def _isolate_saved_role_files(monkeypatch):
     import playing_time_model as M
     real = M.role_override_path
+    M._real_role_override_path = real
 
     def isolated(kind, target_year, base="rosters"):
         if str(base) == "rosters":
@@ -31,3 +32,14 @@ def _isolate_saved_role_files(monkeypatch):
         return real(kind, target_year, base)
 
     monkeypatch.setattr(M, "role_override_path", isolated)
+
+
+@pytest.fixture
+def saved_roles(monkeypatch):
+    """Run a test in the PRODUCTION configuration: the saved role files in
+    rosters/ apply. The depth decay and the anchors were refitted (2026-11-18)
+    for that configuration — the saved roles put more real platoon and bench
+    bats on a club than the feeds alone did — so the calibration guards for it
+    must look at it, not at the feeds-only world the autouse isolation gives."""
+    import playing_time_model as M
+    monkeypatch.setattr(M, "role_override_path", M._real_role_override_path)

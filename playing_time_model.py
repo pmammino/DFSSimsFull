@@ -566,12 +566,13 @@ EVIDENCE_FACTOR_MAX = 1.22
 #     as UNKNOWN — the role at face value — exactly as a player with no evidence
 #     already is. Musgrove goes from the 1-inning placeholder to 141.
 #
-#   * A PARTIAL CREDIT for the ones who did pitch a little (Steele's 92 batters
-#     faced): RETURN_CREDIT of the best season replaces the clipped 0.55. It
-#     works — Steele 55 -> 115, Burnes 58 -> 137, Snell 74 -> 131 — and it is OFF
-#     (0.0), because the innings come out of a fixed club budget: the median
-#     ace falls from 179 to 166 against a real 181, and the test that guards the
-#     top of the staff fails. Measured on the 2027 refresh:
+#   * THE CREDIT: RETURN_CREDIT (0.85) of a pitcher's best season replaces the
+#     clipped 0.55 when he threw little or nothing recently — Steele (92 batters
+#     faced) and Burnes among them. It is ON, and it was switched on TOGETHER
+#     WITH a refit of the pitcher anchors and depth decay (see role_taxonomy),
+#     because on its own it compresses the aces: the innings come out of a fixed
+#     club budget and the median ace fell from 179 to 166 against a real 181.
+#     Unrefitted, measured on the 2027 refresh:
 #
 #       credit   median ace   180+ IP   MAE vs FG   Musgrove  Steele  Burnes
 #       off        177.9         18        24.4        141       55      58
@@ -579,12 +580,16 @@ EVIDENCE_FACTOR_MAX = 1.22
 #       0.70       169.3         16        24.3        105       68      83
 #       0.85       166.4         15        24.1        124       81      99
 #
-#     Turning it on is a decision to trade the top of the staff for the
-#     returners, and the anchors should be refitted (scripts/fit_role_anchors.py)
-#     at the same time. The ranking is always judged WITHOUT the credit, so a
-#     returner never leapfrogs the men who held the rotation while he was out.
+#     The ranking is always judged WITHOUT the credit, so a returner never
+#     leapfrogs the men who held the rotation while he was out. With credit 0 a
+#     returner with no recent innings at all is read as unknown (face value).
+# Hitters: the career length below which a season total is a debut, not a record,
+# and the least evidence factor such a hitter is given. 0.0 turns it off.
+ROOKIE_CAREER_PA = 700.0
+ROOKIE_EVIDENCE_FLOOR = 0.85
+
 PEAK_YEARS = 5
-RETURN_CREDIT = 0.0
+RETURN_CREDIT = 0.85
 RETURN_MIN_IP = 60.0      # a "best season" below this is not a record to lean on
 
 
@@ -628,8 +633,11 @@ def _evidence_factor(players: pd.DataFrame, kind: str, *,
             peak = pd.to_numeric(players["pt_peak_ip"], errors="coerce")
             peak = peak.where(peak >= RETURN_MIN_IP)
             if credit_record and RETURN_CREDIT > 0:
-                ev = np.maximum(ev.fillna(0.0),
-                                (RETURN_CREDIT * peak).fillna(0.0))
+                # Only where there IS a record: a pitcher with no evidence at
+                # all stays "no evidence" (face value), not a zero.
+                has = peak.notna()
+                ev = ev.where(~has, np.maximum(
+                    ev.fillna(0.0), (RETURN_CREDIT * peak).fillna(0.0)))
             # No recent innings but a real record is a man who has been hurt,
             # not one who is known to throw nothing: unknown, so face value.
             ev = ev.where(~((ev.fillna(0.0) <= 0) & peak.notna()))
@@ -671,6 +679,20 @@ def _evidence_factor(players: pd.DataFrame, kind: str, *,
         factor = np.maximum(factor.fillna(-np.inf), implied.fillna(-np.inf))
         factor = pd.Series(factor, index=players.index).replace(
             -np.inf, np.nan)
+    # A DEBUT IS NOT A DIAGNOSIS, FOR ANY ROLE. The rate-based floor above only
+    # protects everyday-sized roles; a young hitter whose job is a platoon or a
+    # bench spot still reads a 40-PA callup as "a part-timer at best" and takes
+    # the 0.55 minimum — 28 of the 37 young hitters still 100+ PA under
+    # FanGraphs sat on it (Spence, Arroyo, Montes, Salas, Jorge...). For a
+    # hitter with a thin MAJOR-LEAGUE career (under ROOKIE_CAREER_PA) the
+    # factor is floored at ROOKIE_EVIDENCE_FLOOR: his role is taken close to
+    # face value because there is not yet a record that says otherwise.
+    if kind == "hitter" and ROOKIE_EVIDENCE_FLOOR > 0 \
+            and "Career_PA" in players.columns:
+        career = pd.to_numeric(players["Career_PA"], errors="coerce")
+        rookie = (career < ROOKIE_CAREER_PA).fillna(False)
+        factor = factor.where(~(rookie & (factor < ROOKIE_EVIDENCE_FLOOR)),
+                              ROOKIE_EVIDENCE_FLOOR)
     # No evidence -> 1.0, i.e. take the role at face value.
     return factor.fillna(1.0).clip(EVIDENCE_FACTOR_MIN, EVIDENCE_FACTOR_MAX)
 
@@ -733,7 +755,10 @@ ROSTER_DEPTH_CORE = {"hitter": 13, "pitcher": 13}   # deprecated
 # of 23). At 0.75 the rank curve comes to 0.0228, BETTER than the 0.0278 it
 # managed with no arrivals at all — the arriving prospect displaces a club's
 # last men rather than joining them, and the real curve prefers him there.
-ROSTER_DEPTH_DECAY_HITTER = 0.75
+# 2026-11-18: 0.75 -> 0.83 in the bounded refit (with BENCH core slots 4 -> 5): the
+# saved role file puts more real bench and platoon bats on a club than the feeds
+# did, so the taper has to start later and run slower or it buries them.
+ROSTER_DEPTH_DECAY_HITTER = 0.83
 # Refitted from 0.66 to 0.70 alongside the floor, and the two had to move
 # together: the floor decides where the taper ends and the decay how fast it
 # gets there, so fitting either alone found a compromise that was wrong for
@@ -741,7 +766,8 @@ ROSTER_DEPTH_DECAY_HITTER = 0.75
 # the single largest gain the pitcher side has had — because the innings the
 # old decay buried past rank 18 were coming off ranks 12 to 16, which ran 3
 # to 10% above the real curve to absorb them.
-ROSTER_DEPTH_DECAY_PITCHER = 0.70
+# 2026-11-18: 0.70 -> 0.66, refitted with RETURN_CREDIT on (see role_taxonomy).
+ROSTER_DEPTH_DECAY_PITCHER = 0.66
 ROSTER_DEPTH_DECAY = ROSTER_DEPTH_DECAY_HITTER   # back-compat alias
 # The least a player past his club's core may keep, as a share of his own
 # anchor. It was 0.04, and at that value the decay ran off a cliff rather
@@ -787,7 +813,21 @@ def arriving(players: pd.DataFrame) -> pd.Series:
         return pd.Series(False, index=players.index)
     # A prefix, not equality: a prospect another feed ALSO has an opinion on is
     # "feed:prospect+fg", and is still an arrival the table made.
-    return players["pt_role_source"].astype(str).str.startswith(ARRIVAL_SOURCE)
+    src = players["pt_role_source"].astype(str)
+    arrival = src.str.startswith(ARRIVAL_SOURCE)
+    # A translated minor leaguer a person (or a saved role file) has put in a
+    # real job is an arrival too. The floor is the right default for a
+    # translation nobody has an opinion about; once somebody has said "he is a
+    # bench bat" or "he is the weak side of a platoon" the floor would make that
+    # statement inert — 47 of the 66 translated hitters FanGraphs projects at
+    # 50+ plate appearances had a saved role and sat at one.
+    if {"pt_tier", "pt_role", "mle_source"} <= set(players.columns):
+        saved = ((src == "override")
+                 & (players["pt_tier"].astype(str) == TIER_FLOOR)
+                 & players["mle_source"].astype(str).str.strip().eq("MiLB")
+                 & ~players["pt_role"].astype(str).map(is_depth_role))
+        arrival = arrival | saved
+    return arrival
 
 
 def apply_roster_depth(players: pd.DataFrame, kind: str, *,
