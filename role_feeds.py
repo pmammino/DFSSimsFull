@@ -1491,10 +1491,188 @@ def repair_ages(players: pd.DataFrame, ev: dict[int, dict], *,
     return out, fixed
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FanGraphs projected usage — a fifth opinion, joined on MLBAM id
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The four RotoWire feeds say what a CLUB intends. A published projection says
+# what a player is EXPECTED to be used for, which sees things a depth chart
+# does not: a rookie the club is about to hand a job (Lawlar, De Paula, Walker
+# Jenkins project 380-440 PA and read as bench bats here), a starter parked in
+# the bullpen group while he returns from injury (Chase Burns, Cabrera,
+# Severino, Steele), a "starter" the club has quietly moved on from (Casas,
+# Wagaman). Measured against it the roles were wrong in two directions at once,
+# and the depth chart alone could not tell which was which.
+#
+# It is used the way every other feed here is: as EVIDENCE that moves a role
+# mixture, never as a number copied into a column. The projected PA or IP is
+# turned into the role whose anchor it most resembles, and that role is blended
+# in at FG_WEIGHT. Where the feeds already agree nothing moves; where they
+# disagree the mixture WIDENS, which is the mechanism this module is built on —
+# so the result lands between the two rather than on either. FG_WEIGHT is the
+# one knob, and 0 turns the feed off.
+#
+# It joins on MLBAM id directly (no name matching), and it is a file the user
+# saves, like the rest of feeds/:  feeds/fg_hitters.csv  and  feeds/fg_pitchers.csv.
+# Only the columns named below are read.
+FG_FILES = {"hitter": "fg_hitters.csv", "pitcher": "fg_pitchers.csv"}
+# How far a disagreeing FG role pulls the mixture, by kind. OFF (0) — see below.
+#
+# THIS FEED WAS USED ONCE, ON PURPOSE. On 2026-11-18 it was run at 0.80 on both
+# sides to generate `rosters/player_roles_{hitters,pitchers}_2027.csv`, which are
+# the saved result (1,082 hitters, 1,143 pitchers; they reproduce that run to
+# 0.000 plate appearances / innings, with or without the RotoWire feeds). From
+# then on the roles come from those files, which beat every feed, and this
+# weighting is switched off so nothing else leans on a FanGraphs export. The
+# machinery stays so it can be used the same way again: put new
+# `feeds/fg_hitters.csv` / `fg_pitchers.csv` in place, set the weights, run,
+# save the roles, set them back to 0.
+#
+# What the weights did, measured on the 2027 refresh (distance to the FG line |
+# distance to the real 2024-26 within-club rank curve the anchors were fitted
+# to). The cost to that curve is the price of moving toward a forecast:
+#
+#   hitters   w=0 89.0 | .217   w=.15 78.2 | .232   w=.35 74.8 | .236   w=.5 76.1 | .269
+#   pitchers  w=0 30.4 | .170   w=.15 26.6 | .194   w=.25 26.0 | .215   w=.35 25.2 | .231
+#   (at 0.80: hitters corr .933, MAE 76.8; pitchers corr .870, MAE 24.7)
+FG_WEIGHT = {"hitter": 0.0, "pitcher": 0.0}
+FG_ALONE = 0.70           # confidence in a role when FG is the ONLY evidence
+
+# PA / IP below which FG is not describing a job. Under this a hitter is an
+# injury-replacement bat at most and a pitcher is not in a bullpen.
+FG_MIN_PA = 25.0
+FG_MIN_IP = 15.0
+
+
+def read_fg_usage(path: str | Path, kind: str) -> dict[int, dict]:
+    """{MLBAM id -> projected usage} from a FanGraphs projections export.
+
+    Hitters need MLBAMID, PA (and G); pitchers MLBAMID, IP, GS, G, SV, HLD. A
+    file that is missing or lacks those columns returns {} and the role logic
+    behaves exactly as it did before there was one.
+    """
+    p = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        df = pd.read_csv(p, encoding="utf-8-sig")
+    except Exception as e:
+        print(f"  role feeds: {p.name} unreadable ({type(e).__name__}); ignored")
+        return {}
+    need = {"MLBAMID", "PA"} if kind == "hitter" else {"MLBAMID", "IP"}
+    if not need <= set(df.columns):
+        print(f"  role feeds: {p.name} needs columns {sorted(need)}; ignored")
+        return {}
+    df = df.copy()
+    df["_id"] = pd.to_numeric(df["MLBAMID"], errors="coerce")
+    df = df[df["_id"].notna()]
+
+    def col(name):
+        return (pd.to_numeric(df[name], errors="coerce").fillna(0.0)
+                if name in df.columns else pd.Series(0.0, index=df.index))
+
+    if kind == "hitter":
+        df = df.assign(fg_pa=col("PA"), fg_g=col("G"))
+        df = df.sort_values("fg_pa", ascending=False)
+        keep = ["fg_pa", "fg_g"]
+    else:
+        df = df.assign(fg_ip=col("IP"), fg_gs=col("GS"), fg_g=col("G"),
+                       fg_sv=col("SV"), fg_hld=col("HLD"))
+        df = df.sort_values("fg_ip", ascending=False)
+        keep = ["fg_ip", "fg_gs", "fg_g", "fg_sv", "fg_hld"]
+    df = df.drop_duplicates("_id")
+    return {int(i): {k: float(v) for k, v in zip(keep, row)}
+            for i, row in zip(df["_id"], df[keep].to_numpy())}
+
+
+def fg_hitter_role(usage: dict | None, position: str = "") -> str | None:
+    """The role whose anchor a projected plate-appearance total most resembles.
+
+    Cut at the midpoints between neighbouring anchors (630 / 480 / 230 / 150 /
+    90), nudged down a little because the role's own anchor is a full season
+    at full health and a projection already has the health haircut in it.
+    """
+    if not usage:
+        return None
+    pa = usage.get("fg_pa", 0.0)
+    if pa < FG_MIN_PA:
+        return None
+    pos = position.upper() if isinstance(position, str) else ""
+    if pos == "C":
+        if pa >= 430:
+            return "Catcher - Primary"
+        if pa >= 260:
+            return "Catcher - Tandem"
+        if pa >= 130:
+            return "Catcher - Backup"
+    if pa >= 555:
+        return "Everyday DH / 1B-DH" if pos == "DH" else "Full Time"
+    if pa >= 355:
+        return "Strong Side Platoon"
+    if pa >= 190:
+        return "Weak Side Platoon"
+    if pa >= 120:
+        return "Bench Bat"
+    return "Injury Replacement / 26th Man"
+
+
+def fg_pitcher_role(usage: dict | None) -> str | None:
+    """The pitching role a projected line most resembles.
+
+    Starters are cut on innings (the rotation's anchors are 195 / 170 / 110);
+    relievers on leverage first (saves, holds) and innings second, because
+    bullpen innings are nearly flat and the jobs differ in context.
+    """
+    if not usage:
+        return None
+    ip, gs, g = usage.get("fg_ip", 0.0), usage.get("fg_gs", 0.0), usage.get("fg_g", 0.0)
+    sv, hld = usage.get("fg_sv", 0.0), usage.get("fg_hld", 0.0)
+    if ip < FG_MIN_IP:
+        return None
+    if g > 0 and gs >= 0.5 * g and gs >= 8:
+        if ip >= 180:
+            return "Ace (SP1)"
+        if ip >= 140:
+            return "Mid-Rotation Starter (SP2-3)"
+        if ip >= 90:
+            return "End-of-Rotation Starter (SP4-5)"
+        return "Innings-Limited Starter"
+    if gs >= 5 and ip >= 55:
+        return "Swing Arm / Long Relief"
+    if sv >= 14:
+        return "Closer"
+    if sv >= 5 or hld >= 15:
+        return "Late Inning RP (Setup)"
+    if ip >= 45:
+        return "Middle Relief"
+    return "Bullpen Depth Arm"
+
+
+def blend_fg(mix: dict[str, float] | None, fg_role: str | None, kind: str,
+             weight: float | None = None) -> tuple[dict[str, float] | None, str]:
+    """Fold the FG role into a role mixture. Returns (mixture, how).
+
+    `how` is "" (FG silent), "alone" (it was the only evidence), "agree" (its
+    role is already the mixture's heaviest — nothing moves) or "blend".
+    """
+    if not fg_role:
+        return mix, ""
+    if not mix:
+        return _mix(fg_role, FG_ALONE, kind), "alone"
+    if max(mix, key=mix.get) == fg_role:
+        return mix, "agree"
+    w = float(np.clip(FG_WEIGHT[kind] if weight is None else weight, 0.0, 1.0))
+    out = {r: p * (1.0 - w) for r, p in mix.items()}
+    out[fg_role] = out.get(fg_role, 0.0) + w
+    return out, "blend"
+
+
 def apply_feed_roles(players: pd.DataFrame, kind: str, *,
                      feed_dir: str | Path = FEED_DIR,
                      alias_path: str | Path | None = None,
                      feeds: dict[str, pd.DataFrame] | None = None,
+                     fg: dict[int, dict] | None = None,
                      team_col: str = "Pred_target_team_id",
                      ) -> tuple[pd.DataFrame, dict]:
     """Replace heuristic roles with what the usage feeds say, as MIXTURES.
@@ -1512,7 +1690,15 @@ def apply_feed_roles(players: pd.DataFrame, kind: str, *,
     out = players.copy()
     if feeds is None:
         feeds = read_feeds(feed_dir)
-    if all(df is None or df.empty for df in feeds.values()):
+        # FanGraphs usage rides along only when the feeds came off disk; a
+        # caller that hands in its own `feeds` gets exactly what it handed in.
+        # ...and only while the weighting is on. At 0 the feed is off: a file
+        # left in feeds/ is ignored rather than quietly acting as the ONLY
+        # evidence for the players no other feed covers.
+        if fg is None and FG_WEIGHT.get(kind, 0.0) > 0:
+            fg = read_fg_usage(Path(feed_dir) / FG_FILES[kind], kind)
+    fg = fg or {}
+    if all(df is None or df.empty for df in feeds.values()) and not fg:
         stats["note"] = f"no feeds found in {feed_dir}"
         return out, stats
 
@@ -1534,9 +1720,46 @@ def apply_feed_roles(players: pd.DataFrame, kind: str, *,
     # already placed him outside the majors. See the guard below.
     was_depth = out["pt_role"].astype(str).map(is_depth_role).to_numpy()
     mixes, roles, starts, sources = [], [], [], []
+    pos_col = out["pt_position"].astype(str) if "pt_position" in out.columns \
+        else pd.Series("", index=out.index)
+    fg_stats = {"rows": len(fg), "matched": 0, "alone": 0, "agree": 0,
+                "blend": 0}
     for i, pid in enumerate(pd.to_numeric(out["PlayerId"], errors="coerce")):
         e = ev.get(int(pid)) if pd.notna(pid) else None
         got = reader(e) if e else None
+        # What a published projection of his usage says his job is. Never
+        # decisive: blended below, and alone only where nothing else spoke.
+        fg_how, fg_tag = "", ""
+        usage = fg.get(int(pid)) if pd.notna(pid) else None
+        if usage:
+            fg_stats["matched"] += 1
+            if kind == "hitter":
+                where = ((e or {}).get("depth_pos") or (e or {}).get(
+                    "feed_position") or pos_col.iloc[i])
+                fg_role = fg_hitter_role(usage, where)
+            else:
+                fg_role = fg_pitcher_role(usage)
+            # A line near zero is not "no opinion" for a man we are treating as
+            # a real major leaguer: FanGraphs has Eric Wagaman at 17 PA while
+            # the heuristic default has him at 430. It is only evidence there —
+            # for a player already at the depth floor a 1-PA projection just
+            # agrees with him, and blending a bench job in would hand the
+            # thousand-odd placeholders plate appearances they do not have.
+            if not fg_role and not was_depth[i]:
+                low = (usage.get("fg_pa", FG_MIN_PA) < FG_MIN_PA
+                       if kind == "hitter"
+                       else usage.get("fg_ip", FG_MIN_IP) < FG_MIN_IP)
+                if low:
+                    fg_role = ("Injury Replacement / 26th Man"
+                               if kind == "hitter" else "Bullpen Depth Arm")
+            if fg_role:
+                base_mix = got[0] if got else None
+                new_mix, fg_how = blend_fg(base_mix, fg_role, kind)
+                if fg_how:
+                    fg_stats[fg_how] += 1
+                    fg_tag = "+fg" if got else ""
+                    got = (new_mix, got[1] if got else "feed:fg")
+                    e = e or {}
         if not got:
             mixes.append(out["pt_role_mix"].iloc[i])
             roles.append(out["pt_role"].iloc[i])
@@ -1591,9 +1814,10 @@ def apply_feed_roles(players: pd.DataFrame, kind: str, *,
         roles.append(max(mix, key=mix.get))
         starts.append(_timing(e, mix, kind, source)
                       or out["pt_role_start"].iloc[i])
-        sources.append(source)
+        label = source + fg_tag if fg_how in ("blend", "agree") else source
+        sources.append(label)
         stats["applied"] += 1
-        stats["sources"][source] = stats["sources"].get(source, 0) + 1
+        stats["sources"][label] = stats["sources"].get(label, 0) + 1
         # Named, not just counted. These are the players whose own usage
         # overruled a depth chart that had them buried, and the one reading
         # this cannot distinguish — a club that has moved on rather than one
@@ -1606,6 +1830,7 @@ def apply_feed_roles(players: pd.DataFrame, kind: str, *,
     out["pt_role"] = roles
     out["pt_role_start"] = starts
     out["pt_role_source"] = sources
+    stats["fg"] = fg_stats
     return out, stats
 
 
@@ -1633,6 +1858,12 @@ def feed_report(stats: dict) -> str:
         if s.get("missed_names"):
             lines.append(f"      unmatched e.g. "
                          f"{', '.join(s['missed_names'][:6])}")
+    fgs = stats.get("fg") or {}
+    if fgs.get("rows"):
+        lines.append(f"    fanGraphs  {fgs['matched']:5d}/{fgs['rows']:<5d} "
+                     f"joined on MLBAM id: {fgs['agree']} agreed, "
+                     f"{fgs['blend']} blended (weight {FG_WEIGHT[stats.get('kind', 'hitter')]:.2f}), "
+                     f"{fgs['alone']} the only evidence")
     if stats.get("sources"):
         lines.append("    by evidence: " + ", ".join(
             f"{k} {v}" for k, v in sorted(stats["sources"].items(),

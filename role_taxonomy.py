@@ -64,33 +64,50 @@ import pandas as pd
 # vL_share from a player's PAST usage (splits_model.py), so a hitter moving
 # into a platoon job keeps a stale league-average share.
 
+# REFIT 2026-11-18 (scripts/fit_role_anchors.py's idea, run as a bounded search
+# because that script chases role LABELS and the labels now come from a saved
+# role file). Each anchor was allowed to move +/-15% from the value below it,
+# against the real 2024-26 within-club rank curve and with the staff-top
+# guards of tests/test_role_anchor_fit.py as constraints, plus (hitters) the
+# distance to FanGraphs on players 25 and under, which is what the prospect
+# work was for. Moved:
+#   hitters   Strong Side 480->518  Weak Side 230->222  C Tandem 340->313
+#             C Backup 180->153  Utility IF 290->275  Utility OF 300->334
+#             Bench 150->158  Injury Repl 90->100   (BENCH core slots 4->5,
+#             hitter depth decay 0.75->0.83 in playing_time_model)
+#   pitchers  Innings-Limited 110->98  Swing 95->85  Closer 62->55
+#             Setup 65->58  Middle 60->54  Depth Arm 40->36  (pitcher depth
+#             decay 0.70->0.66)   Ace, Mid-Rotation, End-of-Rotation unchanged.
+# Pitcher change was made WITH `RETURN_CREDIT` on (playing_time_model): the
+# credit puts returning starters back into the innings and, unrefitted, it
+# compresses the aces (median 179 -> 166 against a real 181).
 HITTER_ROLES: list[dict] = [
     dict(role="Full Time", pa=630, vl_lhb=0.26, vl_rhb=0.29,
          note="Everyday regular, ~150 games. Sees the league handedness mix."),
     dict(role="Everyday DH / 1B-DH", pa=600, vl_lhb=0.26, vl_rhb=0.29,
          note="Rarely rested, no defensive injury exposure."),
-    dict(role="Strong Side Platoon", pa=480, vl_lhb=0.12, vl_rhb=0.45,
+    dict(role="Strong Side Platoon", pa=518, vl_lhb=0.12, vl_rhb=0.45,
          note="The high-volume half of a platoon — usually a LHB who sits "
               "against LHP. Plays the majority of games."),
-    dict(role="Weak Side Platoon", pa=230, vl_lhb=0.08, vl_rhb=0.68,
+    dict(role="Weak Side Platoon", pa=222, vl_lhb=0.08, vl_rhb=0.68,
          note="The low-volume half — usually a RHB who plays mostly against "
               "LHP. Only ~28% of league PA are vs LHP, which caps his volume."),
     dict(role="Catcher - Primary", pa=500, vl_lhb=0.26, vl_rhb=0.29,
          note="CATCHERS HAVE THEIR OWN LADDER. A full-time catcher is ~500 PA, "
               "not 630 — applying the Full Time anchor over-projects every "
               "catcher in baseball by ~120 PA."),
-    dict(role="Catcher - Tandem", pa=340, vl_lhb=0.22, vl_rhb=0.38,
+    dict(role="Catcher - Tandem", pa=313, vl_lhb=0.22, vl_rhb=0.38,
          note="Roughly even split with a partner; often matchup-managed."),
-    dict(role="Catcher - Backup", pa=180, vl_lhb=0.24, vl_rhb=0.33,
+    dict(role="Catcher - Backup", pa=153, vl_lhb=0.24, vl_rhb=0.33,
          note="Clear #2, starts ~45-55 games."),
-    dict(role="Utility IF", pa=290, vl_lhb=0.26, vl_rhb=0.31,
+    dict(role="Utility IF", pa=275, vl_lhb=0.26, vl_rhb=0.31,
          note="Covers multiple infield spots; volume depends on incumbents' "
               "health."),
-    dict(role="Utility OF / 4th OF", pa=300, vl_lhb=0.24, vl_rhb=0.33,
+    dict(role="Utility OF / 4th OF", pa=334, vl_lhb=0.24, vl_rhb=0.33,
          note="Distinct from Utility IF — different volume and platoon usage."),
-    dict(role="Bench Bat", pa=150, vl_lhb=0.22, vl_rhb=0.36,
+    dict(role="Bench Bat", pa=158, vl_lhb=0.22, vl_rhb=0.36,
          note="Pinch-hits and spot starts."),
-    dict(role="Injury Replacement / 26th Man", pa=90, vl_lhb=0.26, vl_rhb=0.29,
+    dict(role="Injury Replacement / 26th Man", pa=100, vl_lhb=0.26, vl_rhb=0.29,
          note="Plays only when someone ahead of him is hurt. His volume is "
               "conditional on OTHER players' injuries — a team-level coupling "
               "that ultimately needs simulating, not a point estimate."),
@@ -150,27 +167,27 @@ PITCHER_ROLES: list[dict] = [
          note="Shorter leash; occasional bullpen appearance. The hold weight "
               "is tiny because a club carries 5+ of these and 0.01 each came "
               "to more hold weight than its closer."),
-    dict(role="Innings-Limited Starter", ip=110, gs=22, g=22,
+    dict(role="Innings-Limited Starter", ip=98, gs=22, g=22,
          sv=0.00, hld=0.00,
          note="Young arm on a workload cap, or a post-surgery ramp. Common "
               "now and materially different from End-of-Rotation."),
-    dict(role="Swing Arm / Long Relief", ip=95, gs=8, g=30,
+    dict(role="Swing Arm / Long Relief", ip=85, gs=8, g=30,
          sv=0.005, hld=0.02, note="Moves between rotation and bullpen."),
     dict(role="Opener", ip=55, gs=18, g=45, sv=0.00, hld=0.01,
          note="Already modelled on the daily side (OPENER_BF_MEAN = 4.6 in "
               "slate_config), so it belongs here for consistency. Takes the "
               "start but faces ~4-5 batters."),
-    dict(role="Closer", ip=62, gs=0, g=60, sv=0.80, hld=0.02,
+    dict(role="Closer", ip=55, gs=0, g=60, sv=0.80, hld=0.02,
          note="Takes ~80% of his club's saves — one arm, one job, and the "
               "reason this role exists. Note IP is NEARLY FLAT across bullpen "
               "roles (62 / 65 / 60): what separates them is save and hold "
               "context, which is why they are worth distinguishing at all."),
-    dict(role="Late Inning RP (Setup)", ip=65, gs=0, g=65, sv=0.06, hld=0.29,
+    dict(role="Late Inning RP (Setup)", ip=58, gs=0, g=65, sv=0.06, hld=0.29,
          note="Primary hold earner — two of them take ~59% of the hold pool "
               "between them. Fills in for the closer, hence the save share."),
-    dict(role="Middle Relief", ip=60, gs=0, g=58, sv=0.017, hld=0.09,
+    dict(role="Middle Relief", ip=54, gs=0, g=58, sv=0.017, hld=0.09,
          note="Bridge innings, lower leverage."),
-    dict(role="Bullpen Depth Arm", ip=40, gs=0, g=35, sv=0.004, hld=0.006,
+    dict(role="Bullpen Depth Arm", ip=36, gs=0, g=35, sv=0.004, hld=0.006,
          note="Up and down from AAA; mop-up and spot duty. These weights are "
               "SMALL ON PURPOSE: a club carries ~15 of them, so anything "
               "larger swamps the roles that actually finish games."),
@@ -258,7 +275,7 @@ ROLE_FAMILY: dict[str, str] = {
 # Pitchers: six starters (five plus the sixth who covers doubleheaders and
 # injuries) and eight relievers. 13 + 13 = the 26-man roster.
 FAMILY_CORE_SLOTS: dict[str, int] = {
-    "LINEUP": 9, "BENCH": 4, "SP": 6, "RP": 8, "DEPTH": 0,
+    "LINEUP": 9, "BENCH": 5, "SP": 6, "RP": 8, "DEPTH": 0,
 }
 
 

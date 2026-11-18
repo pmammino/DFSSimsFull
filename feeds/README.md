@@ -10,7 +10,25 @@ Four XML files that decide what a player's job is. `role_feeds.py` reads them;
 | `closers.xml` | bullpen pecking order 1..12, RotoWire's role label, and a Stability rating on each club's top arm | all 30 clubs |
 | `prospects.xml` | the top 400 with a league level; the only feed carrying an MLBAM id, and that for 261 of them | — |
 
-## Refreshing them
+## FanGraphs projected usage — used once, now OFF
+
+On 2026-11-18 a FanGraphs projection export was used as a fifth role feed, at
+weight 0.80 on both sides, to generate the saved role files
+`rosters/player_roles_hitters_2027.csv` and `rosters/player_roles_pitchers_2027.csv`
+(1,082 hitters and 1,143 pitchers; columns `Role`, `Role Mix`, `Role Start`).
+**Those files are now what sets those players' roles** — the playing-time model
+applies them after the RotoWire feeds, so they win — and they reproduce that run
+exactly, with or without the RotoWire feeds. Edit a row to change a role; delete
+the file to go back to the RotoWire feeds alone.
+
+The FanGraphs weighting itself is switched off (`role_feeds.FG_WEIGHT = 0`) and
+the export files are not kept in the repo. To use it again: save
+`fg_hitters.csv` (`MLBAMID`, `PA`, `G`) and `fg_pitchers.csv` (`MLBAMID`, `IP`,
+`GS`, `G`, `SV`, `HLD`) here, set the weights, run the pipeline, save the result
+as the role files, and set the weights back to 0. See the comment above
+`FG_WEIGHT` in `role_feeds.py` for what the weights traded off.
+
+## Refreshing the RotoWire feeds
 
 Run `python scripts/fetch_role_feeds.py` (also Stage 0 of `refresh_and_run.py`;
 skip with `--skip-feeds`). It reads the URLs from environment variables so the
