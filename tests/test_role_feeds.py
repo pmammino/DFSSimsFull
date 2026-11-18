@@ -1188,7 +1188,9 @@ def test_the_real_feeds_fit_the_real_rank_curve_better():
     # real curve. Feeds-only roles are no longer the production path, so what is
     # pinned is that they remain sane, and the shipped configuration has its own
     # guard (test_role_anchor_fit::test_the_hitter_curve_was_already_right...).
-    assert with_feeds < 0.30, (with_feeds, without)
+    # 0.30 -> 0.35 with the gentler prospect decay (0.6), which loosens the
+    # feeds-only fit further (0.22 -> 0.31) while improving the shipped one.
+    assert with_feeds < 0.35, (with_feeds, without)
 
     # Roles the heuristic could not identify at all, which is what a feed is
     # for: it can see a platoon, and last season's plate-appearance count

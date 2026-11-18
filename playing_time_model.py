@@ -830,6 +830,30 @@ def arriving(players: pd.DataFrame) -> pd.Series:
     return arrival
 
 
+PROSPECT_CAREER_PA = 700.0     # a major-league career shorter than this is a debut
+PROSPECT_MAX_AGE = 25
+# 0.6: measured against FanGraphs on the 2027 refresh (prospects bias | MAE, history
+# rank error): 1.0 -58 | 65, .233   0.7 -54 | 60, .224   0.5 -50 | 55, .255
+# 0.35 -46 | 52, .298. The history error is best near 0.7 and the prospect fit keeps
+# improving below it, so 0.6 takes most of the gain before the curve gives it back.
+PROSPECT_DECAY_EXPONENT = 0.6
+
+
+def _prospect_mask(players: pd.DataFrame) -> pd.Series:
+    """Hitters who are prospects: translated minor leaguers, and players 25 and
+    under with a thin major-league career."""
+    idx = players.index
+    mle = (players["mle_source"].astype(str).str.strip().eq("MiLB")
+           if "mle_source" in players.columns else pd.Series(False, index=idx))
+    young = pd.Series(False, index=idx)
+    if {"Age", "Career_PA"} <= set(players.columns):
+        young = ((pd.to_numeric(players["Age"], errors="coerce")
+                  <= PROSPECT_MAX_AGE)
+                 & (pd.to_numeric(players["Career_PA"], errors="coerce")
+                    < PROSPECT_CAREER_PA)).fillna(False)
+    return mle | young
+
+
 def apply_roster_depth(players: pd.DataFrame, kind: str, *,
                        team_col: str = "Pred_target_team_id") -> pd.DataFrame:
     """Discount players ranked beyond their club's core roster.
@@ -908,7 +932,21 @@ def apply_roster_depth(players: pd.DataFrame, kind: str, *,
     if len(beyond):
         decay = (ROSTER_DEPTH_DECAY_PITCHER if kind == "pitcher"
                  else ROSTER_DEPTH_DECAY_HITTER)
-        factor = np.maximum(decay ** beyond, ROSTER_DEPTH_FLOOR)
+        # A hitter who is a PROSPECT — a translated minor leaguer, or a young man
+        # with a thin major-league career — runs down the queue more slowly than
+        # a veteran does. He is not "up and down from Triple-A"; he is the club's
+        # next regular being given a job, and the depth ranking puts him last in
+        # the queue simply because he has no record yet. Measured: the role
+        # anchor for the 170 prospects FanGraphs projects at 50+ PA averages 239
+        # plate appearances against its 218, and the depth factor (mean 0.62)
+        # took them to 160; the 67 on an injury-replacement role came out at 13
+        # against FanGraphs' 75. PROSPECT_DECAY_EXPONENT scales the number of
+        # ranks he is counted as being past the core (1 = as everyone).
+        expo = pd.Series(1.0, index=beyond.index)
+        if kind == "hitter" and PROSPECT_DECAY_EXPONENT != 1.0:
+            expo = expo.where(~_prospect_mask(out).reindex(beyond.index)
+                              .fillna(False), PROSPECT_DECAY_EXPONENT)
+        factor = np.maximum(decay ** (beyond * expo), ROSTER_DEPTH_FLOOR)
         out.loc[beyond.index, "pt_depth_factor"] = factor.to_numpy()
     out["pt_raw"] = out["pt_raw"] * out["pt_depth_factor"]
     return out

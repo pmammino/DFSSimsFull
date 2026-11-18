@@ -162,3 +162,28 @@ def test_the_saved_role_files_are_well_formed():
         for mix in ov["Role Mix"]:
             parsed = parse_role_mix(mix, kind)
             assert parsed and abs(sum(parsed.values()) - 1.0) < 1e-6, mix
+
+
+def test_prospects_run_down_the_depth_queue_more_slowly():
+    import playing_time_model as M
+    rows = []
+    for i in range(1, 15):                       # one club's bench family
+        rows.append(dict(PlayerId=i, Pred_target_team_id=147, pt_tier="projected",
+                         pt_role="Bench Bat", pt_role_source="default",
+                         pt_role_start="Opening Day", pt_raw=200.0 - i,
+                         mle_source="MiLB" if i == 14 else "", Age=24 if i >= 13 else 31,
+                         Career_PA=50.0 if i >= 13 else 2000.0))
+    df = pd.DataFrame(rows)
+    out = M.apply_roster_depth(df, "hitter")
+    mask = M._prospect_mask(out)
+    assert list(mask[out.PlayerId.isin([13, 14])]) == [True, True]
+    assert not mask[out.PlayerId == 1].iloc[0]
+    # same rank, same distance past the core: the prospect keeps more
+    a = out.loc[out.PlayerId == 13, "pt_depth_factor"].iloc[0]
+    M.PROSPECT_DECAY_EXPONENT = 1.0
+    try:
+        b = M.apply_roster_depth(df, "hitter").loc[lambda d: d.PlayerId == 13,
+                                                   "pt_depth_factor"].iloc[0]
+    finally:
+        M.PROSPECT_DECAY_EXPONENT = 0.6
+    assert a > b
