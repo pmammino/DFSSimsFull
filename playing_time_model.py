@@ -375,7 +375,12 @@ def apply_role_overrides(players: pd.DataFrame, overrides: pd.DataFrame, *,
                 lambda v: modal_role(parse_role_mix(v, kind) or {}))
             keep = modal.notna()
             out.loc[modal[keep].index, "pt_role"] = modal[keep].to_numpy()
-            out.loc[mask, "pt_role_source"] = "override"
+            # An override changes WHAT job he has, not WHETHER he is an
+            # arrival: a prospect the table brings up stays one, or the
+            # floor and the depth ranking would stop seeing him as the
+            # roster member he is.
+            arrival = arriving(out)
+            out.loc[mask & ~arrival, "pt_role_source"] = "override"
             stats["mix"] = int(mask.sum())
 
     for col, dest, key in (("Role", "pt_role", "role"),
@@ -389,7 +394,7 @@ def apply_role_overrides(players: pd.DataFrame, overrides: pd.DataFrame, *,
         idx = out["PlayerId"].map(vals)
         mask = idx.notna()
         out.loc[mask, dest] = idx[mask].to_numpy()
-        out.loc[mask, "pt_role_source"] = "override"
+        out.loc[mask & ~arriving(out), "pt_role_source"] = "override"
         stats[key] = int(mask.sum())
     return out, stats
 
@@ -712,7 +717,9 @@ def arriving(players: pd.DataFrame) -> pd.Series:
     """
     if "pt_role_source" not in players.columns:
         return pd.Series(False, index=players.index)
-    return players["pt_role_source"].astype(str) == ARRIVAL_SOURCE
+    # A prefix, not equality: a prospect another feed ALSO has an opinion on is
+    # "feed:prospect+fg", and is still an arrival the table made.
+    return players["pt_role_source"].astype(str).str.startswith(ARRIVAL_SOURCE)
 
 
 def apply_roster_depth(players: pd.DataFrame, kind: str, *,
@@ -1350,6 +1357,18 @@ def project_playing_time(players: pd.DataFrame, kind: str, *,
                                            f"{target_year}.csv")
     ov = load_role_overrides(role_override_path(kind, target_year, roster_path),
                              kind)
+    # A role that a person (or a saved file) has settled is settled BEFORE the
+    # things measured against a role cohort are computed, exactly like a feed's.
+    # Applying overrides last left durability and the expected innings per
+    # appearance judged against the feed's role: the same file produced
+    # different volumes depending on whether the role had come from a feed or
+    # from the override, by up to 190 plate appearances. Availability is the
+    # one override that is NOT about the job, and it still goes on after the
+    # default is reset below.
+    role_cols = [c for c in ("PlayerId", "Role", "Role Mix", "Role Start")
+                 if c in ov.columns]
+    out, ov_stats = apply_role_overrides(
+        out, ov[role_cols] if len(role_cols) > 1 else ov.iloc[0:0], kind=kind)
     # Durability is measured against others holding the SAME job, so it has
     # to be recomputed once the feeds have settled what the job is. Buxton
     # judged as a 26th man looks more durable than average; judged as the
@@ -1365,7 +1384,15 @@ def project_playing_time(players: pd.DataFrame, kind: str, *,
     if kind == "pitcher":
         out["pt_ip_per_app"] = innings_per_appearance(out, fielding)
         out["pt_ip_per_app_exp"] = expected_ipa(out, out["pt_ip_per_app"])
-    out, stats["overrides"] = apply_role_overrides(out, ov, kind=kind)
+    avail_cols = [c for c in ("PlayerId", "Availability") if c in ov.columns]
+    out, av_stats = apply_role_overrides(
+        out, ov[avail_cols] if len(avail_cols) > 1 else ov.iloc[0:0], kind=kind)
+    stats["overrides"] = {k: ov_stats.get(k, 0) + av_stats.get(k, 0)
+                          for k in set(ov_stats) | set(av_stats)}
+    stats["overrides"]["matched"] = max(ov_stats.get("matched", 0),
+                                        av_stats.get("matched", 0))
+    stats["overrides"]["unmatched"] = max(ov_stats.get("unmatched", 0),
+                                          av_stats.get("unmatched", 0))
     out = raw_volumes(out, kind, team_col=team_col)
     out, team_diag = allocate_playing_time(out, kind, team_col=team_col,
                                            reserves=reserves)

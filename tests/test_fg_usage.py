@@ -116,3 +116,49 @@ def test_a_near_zero_line_is_evidence_for_a_real_role_but_not_for_the_floor():
                                   fg={1: {"fg_pa": 1.0, "fg_g": 1.0}})
     assert st["fg"]["alone"] == 0                            # left at the floor
     assert out["pt_role"].iloc[0] == "Depth (no MLB PA)"
+
+
+def test_the_weighting_is_off_and_files_on_disk_are_ignored(tmp_path):
+    assert RF.FG_WEIGHT == {"hitter": 0.0, "pitcher": 0.0}
+    (tmp_path / "fg_hitters.csv").write_text("MLBAMID,PA,G\n1,640,150\n")
+    for name in ("depth", "orders", "closers", "prospects"):
+        (tmp_path / f"{name}.xml").write_text("<x/>")
+    out, st = RF.apply_feed_roles(_players(1), "hitter", feed_dir=tmp_path)
+    assert out["pt_role"].iloc[0] == "Bench Bat"            # FG did not speak
+    assert not st.get("fg", {}).get("rows")
+
+
+def test_a_saved_role_file_reproduces_the_run_it_was_made_from():
+    """The saved files are the product of the FanGraphs run. Applying one must
+    put a player in the same role, mixture and timing, and must not change
+    whether a prospect is an arrival."""
+    import playing_time_model as M
+    p = _players(1)
+    p["pt_role_source"] = "feed:prospect"
+    ov = pd.DataFrame({"PlayerId": [1], "Role": ["Full Time"],
+                       "Role Mix": ["Full Time:0.6|Bench Bat:0.4"],
+                       "Role Start": ["Mid Season (~July)"]})
+    out, st = M.apply_role_overrides(p, ov, kind="hitter")
+    assert out["pt_role"].iloc[0] == "Full Time"
+    assert out["pt_role_start"].iloc[0] == "Mid Season (~July)"
+    assert out["pt_role_mix"].iloc[0] == "Full Time:0.6|Bench Bat:0.4"
+    assert bool(M.arriving(out).iloc[0])                     # still an arrival
+
+
+def test_the_saved_role_files_are_well_formed():
+    """The two files in rosters/ are what sets those players' roles now."""
+    import playing_time_model as M
+    from role_taxonomy import parse_role_mix, role_names
+    for kind, plural in (("hitter", "hitters"), ("pitcher", "pitchers")):
+        path = ROOT / "rosters" / f"player_roles_{plural}_2027.csv"
+        assert path.exists(), path
+        raw = pd.read_csv(path)
+        ov = M.load_role_overrides(path, kind)
+        assert len(raw) > 500
+        assert raw["PlayerId"].is_unique
+        assert len(ov) == len(raw)                       # nothing dropped as unreadable
+        assert ov["Role"].notna().all() and ov["Role Mix"].notna().all()
+        assert set(raw["Role"]) <= set(role_names(kind))  # no typos
+        for mix in ov["Role Mix"]:
+            parsed = parse_role_mix(mix, kind)
+            assert parsed and abs(sum(parsed.values()) - 1.0) < 1e-6, mix

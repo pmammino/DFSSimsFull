@@ -553,14 +553,7 @@ def test_the_decomposition_earns_its_place_against_the_product():
         ok = target > 0
         mae = float(np.mean(np.abs(pr.loc[ok, "Proj_IP"] / target[ok] - 1)))
         scores[flag] = (mae, int((pr["Proj_IP"] > 180).sum()))
-    # A TIE now, not a win: with FanGraphs usage in the role mixtures the
-    # per-player error is 0.2204 for the decomposition and 0.2187 for the
-    # product form (it was 0.166 against 0.178 before). Adding a real forecast
-    # of who starts and who relieves removed the mis-roled arms the
-    # decomposition used to be better at absorbing. The claim is therefore
-    # "no worse, within 1%" — neither form is measurably ahead, which is also
-    # why the live flag has not been switched. Re-measure if the roles move.
-    assert scores[True][0] <= scores[False][0] * 1.01, scores
+    assert scores[True][0] < scores[False][0], scores
     # And it is still in range on the workhorse count, which is the target
     # that caught the product form projecting 29 pitchers past 180 innings.
     assert abs(scores[True][1] - 17.67) <= 6, scores

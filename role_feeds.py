@@ -1517,19 +1517,26 @@ def repair_ages(players: pd.DataFrame, ev: dict[int, dict], *,
 # saves, like the rest of feeds/:  feeds/fg_hitters.csv  and  feeds/fg_pitchers.csv.
 # Only the columns named below are read.
 FG_FILES = {"hitter": "fg_hitters.csv", "pitcher": "fg_pitchers.csv"}
-# How far a disagreeing FG role pulls the mixture, by kind. Measured both ways
-# on the 2027 refresh (distance to the FG line | distance to the real 2024-26
-# within-club rank curve the anchors were fitted to):
+# How far a disagreeing FG role pulls the mixture, by kind. OFF (0) — see below.
+#
+# THIS FEED WAS USED ONCE, ON PURPOSE. On 2026-11-18 it was run at 0.80 on both
+# sides to generate `rosters/player_roles_{hitters,pitchers}_2027.csv`, which are
+# the saved result (1,082 hitters, 1,143 pitchers; they reproduce that run to
+# 0.000 plate appearances / innings, with or without the RotoWire feeds). From
+# then on the roles come from those files, which beat every feed, and this
+# weighting is switched off so nothing else leans on a FanGraphs export. The
+# machinery stays so it can be used the same way again: put new
+# `feeds/fg_hitters.csv` / `fg_pitchers.csv` in place, set the weights, run,
+# save the roles, set them back to 0.
+#
+# What the weights did, measured on the 2027 refresh (distance to the FG line |
+# distance to the real 2024-26 within-club rank curve the anchors were fitted
+# to). The cost to that curve is the price of moving toward a forecast:
 #
 #   hitters   w=0 89.0 | .217   w=.15 78.2 | .232   w=.35 74.8 | .236   w=.5 76.1 | .269
 #   pitchers  w=0 30.4 | .170   w=.15 26.6 | .194   w=.25 26.0 | .215   w=.35 25.2 | .231
-#
-# Most of the gain arrives by .15 and the cost keeps growing, so the pull is
-# kept moderate. Hitters can take .35 — their rank-curve cost is flat out to it
-# and 0.5 is where it turns — while pitchers stop at .20, where the gain is
-# ~80% in and the history curve has given up about half of what it gives up at
-# .35. Neither is meant to match FanGraphs: the result is meant to land between.
-FG_WEIGHT = {"hitter": 0.35, "pitcher": 0.20}
+#   (at 0.80: hitters corr .933, MAE 76.8; pitchers corr .870, MAE 24.7)
+FG_WEIGHT = {"hitter": 0.0, "pitcher": 0.0}
 FG_ALONE = 0.70           # confidence in a role when FG is the ONLY evidence
 
 # PA / IP below which FG is not describing a job. Under this a hitter is an
@@ -1685,7 +1692,10 @@ def apply_feed_roles(players: pd.DataFrame, kind: str, *,
         feeds = read_feeds(feed_dir)
         # FanGraphs usage rides along only when the feeds came off disk; a
         # caller that hands in its own `feeds` gets exactly what it handed in.
-        if fg is None:
+        # ...and only while the weighting is on. At 0 the feed is off: a file
+        # left in feeds/ is ignored rather than quietly acting as the ONLY
+        # evidence for the players no other feed covers.
+        if fg is None and FG_WEIGHT.get(kind, 0.0) > 0:
             fg = read_fg_usage(Path(feed_dir) / FG_FILES[kind], kind)
     fg = fg or {}
     if all(df is None or df.empty for df in feeds.values()) and not fg:
